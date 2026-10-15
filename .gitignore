@@ -1,0 +1,19 @@
+# 构建产物是要提交的（单文件 HTML 就是交付物本身），不要忽略它。
+
+# 系统垃圾
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 编辑器 / IDE
+.vscode/
+.idea/
+*.swp
+
+# 开发过程中的临时自测脚本（曾用命名约定）
+_*.tmp.*
+_*.cjs
+_*.tmp.log
+
+# 本项目零依赖；仅防御性忽略
+node_modules/

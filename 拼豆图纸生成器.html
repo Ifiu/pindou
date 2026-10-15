@@ -1,0 +1,4012 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>拼豆图纸生成器</title>
+</head>
+<body>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#101216; --bg2:#15181e; --panel:#181b22; --panel2:#1f232b; --line:#2a2f39;
+    --text:#e8eaf0; --muted:#98a1b0; --accent:#5b9bf3; --accent-soft:rgba(91,155,243,.14);
+    --ok:#4ec38a; --warn:#d9a441; --err:#e8695f; --radius:10px;
+  }
+  [hidden]{display:none!important}
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB",sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  #app{max-width:1800px;margin:0 auto;padding:14px 16px 22px;min-height:100vh;display:flex;flex-direction:column;gap:12px}
+
+  .app-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:10px}
+  .app-head h1{margin:0 0 2px;font-size:18px;letter-spacing:.4px}
+  .app-sub{margin:0;color:var(--muted);font-size:12.5px}
+  .head-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .drop-hint{color:var(--muted);font-size:12.5px;padding:5px 9px;border:1px dashed var(--line);border-radius:8px;transition:color .15s,border-color .15s,background .15s}
+  .drop-hint.drag-active{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+  .file-input{display:none}
+
+  .notice{border-radius:var(--radius);padding:9px 12px;font-size:12.8px}
+  .notice-warn{background:rgba(217,164,65,.10);border:1px solid rgba(217,164,65,.35);color:#efd9a7}
+  .notice-soft{background:var(--panel);border:1px solid var(--line);color:var(--muted)}
+
+  .layout{display:grid;grid-template-columns:310px minmax(0,1fr) 320px;gap:12px;align-items:start}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
+  .panel h2{margin:0;font-size:13px;font-weight:600;color:var(--text)}
+  .group{border-bottom:1px solid var(--line);padding:10px 0}
+  .group:first-child{padding-top:0}
+  .group:last-child{border-bottom:0;padding-bottom:0}
+  .group h2{margin-bottom:8px;color:var(--accent)}
+  .controls{display:flex;flex-direction:column;gap:2px;max-height:calc(100vh - 150px);overflow:auto}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.8px;color:var(--muted);margin:6px 0 2px}
+  .row output{color:var(--accent);font-variant-numeric:tabular-nums}
+  .check{display:flex;align-items:flex-start;gap:7px;font-size:12.8px;margin:6px 0;cursor:pointer;color:var(--text)}
+  .check input{margin:2px 0 0;accent-color:var(--accent);flex:none}
+  .radios{display:flex;flex-direction:column;gap:2px;margin:2px 0}
+  .field{display:flex;flex-direction:column;gap:3px;font-size:12.4px;color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0}
+  .hint{margin:6px 0 0;font-size:11.8px;line-height:1.5;color:var(--muted)}
+  .muted{color:var(--muted)}
+  input[type="range"]{width:100%;accent-color:var(--accent);margin:2px 0 4px}
+  input[type="number"],select{
+    width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);
+    border-radius:6px;padding:5px 7px;font-size:12.8px;font-family:inherit
+  }
+  input[type="number"]:disabled,select:disabled{opacity:.45;cursor:not-allowed}
+  button{font-family:inherit}
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;
+    padding:7px 12px;font-size:12.8px;cursor:pointer;transition:border-color .15s,background .15s
+  }
+  .btn:hover{border-color:var(--accent);background:#232936}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
+  .btn-primary:hover{background:#79b0f7;border-color:#79b0f7}
+  .btn-ghost{background:transparent}
+  .group-actions .btn{width:100%;margin-top:8px}
+  .group-actions .btn:first-of-type{margin-top:2px}
+
+  .canvas-panel{position:relative;min-width:0}
+  .canvas-panel.drag-active{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-soft),0 0 0 3px var(--accent-soft)}
+  .panel-head{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+  .status-line{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-size:12.4px}
+  .status{color:var(--muted)}
+  .status.ok{color:var(--ok)}
+  .status.warn{color:var(--warn)}
+  .status.err{color:var(--err)}
+  .elapsed{color:var(--muted);font-variant-numeric:tabular-nums}
+  .progress{height:3px;border-radius:2px;background:var(--panel2);overflow:hidden}
+  .progress-bar{height:100%;width:35%;background:var(--accent);animation:pindou-slide 1s ease-in-out infinite}
+  @keyframes pindou-slide{0%{margin-left:-35%}100%{margin-left:100%}}
+  .canvas-scroll{position:relative;overflow:auto;max-height:72vh;padding:8px;background:var(--bg2);border:1px solid var(--line);border-radius:8px}
+  .pattern-canvas{display:block;max-width:100%;height:auto;background:#0c0e12;border-radius:6px;image-rendering:pixelated;cursor:default}
+  .pattern-canvas.editing{cursor:crosshair}
+  .canvas-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;pointer-events:none;padding:16px}
+  .canvas-hint{margin:0;text-align:center;color:var(--muted);font-size:12.8px;line-height:1.6;background:rgba(16,18,22,.82);border:1px dashed var(--line);border-radius:10px;padding:12px 16px;max-width:80%}
+  .canvas-hint.small{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:11.5px;padding:7px 10px;max-width:88%}
+  .empty-cta{pointer-events:auto}
+
+  .side{display:flex;flex-direction:column;gap:12px}
+  .block h2{margin-bottom:8px;color:var(--accent)}
+  .source-wrap{position:relative}
+  .source-canvas{display:block;width:100%;max-width:100%;height:auto;background:#0c0e12;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated}
+  .summary{display:flex;flex-direction:column;gap:5px}
+  .summary-row{display:flex;justify-content:space-between;gap:10px;font-size:12.6px;border-bottom:1px dotted var(--line);padding-bottom:4px}
+  .summary-k{color:var(--muted)}
+  .summary-v{color:var(--text);font-variant-numeric:tabular-nums;text-align:right}
+  .legend{max-height:340px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+  .legend-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .legend-row{display:flex;align-items:center;gap:7px;font-size:12.2px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:5px 7px}
+  .legend-code{font-weight:600;min-width:34px;font-variant-numeric:tabular-nums}
+  .legend-sw{width:18px;height:18px;border-radius:4px;border:1px solid rgba(255,255,255,.25);flex:none}
+  .legend-hex{color:var(--muted);font-size:11.4px}
+  .legend-count{margin-left:auto;color:var(--text);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  .disclaimer{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:var(--radius);padding:9px 12px;font-size:12.6px;color:#e4d9c1}
+  .disclaimer-tag{display:inline-block;color:var(--warn);font-weight:600;margin-right:6px}
+
+  @media (max-width:1180px){
+    .layout{grid-template-columns:1fr}
+    .controls{max-height:none;overflow:visible}
+    .canvas-scroll{max-height:60vh}
+  }
+  @media (max-width:640px){
+    #app{padding:10px 10px 18px}
+    .legend-grid{grid-template-columns:1fr}
+  }
+</style>
+
+<div id="app">
+  <header class="app-head">
+    <div class="head-title">
+      <h1>拼豆图纸生成器</h1>
+      <p class="app-sub">纯本地运行 · 上传图片 → MARD 色卡网格图纸 + 色号用量清单</p>
+    </div>
+    <div class="head-actions">
+      <button id="btnPickFile" class="btn btn-primary" type="button">选择图片…</button>
+      <input id="fileInput" class="file-input" type="file" accept="image/*" />
+      <span id="dropHint" class="drop-hint">也可拖拽图片到窗口，或按 Ctrl+V 粘贴</span>
+    </div>
+  </header>
+
+  <div id="moduleNotice" class="notice notice-warn" hidden></div>
+
+  <div class="layout">
+    <aside class="panel controls" aria-label="参数面板">
+      <section class="group">
+        <h2>1 · 图片输入</h2>
+        <p class="hint">三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。图片只在本地处理，不会上传到任何服务器。</p>
+      </section>
+
+      <section class="group">
+        <h2>2 · 预处理</h2>
+        <label class="row" for="brightness"><span>亮度</span><output id="brightnessVal">0</output></label>
+        <input id="brightness" type="range" min="-100" max="100" step="1" value="0" />
+        <label class="row" for="contrast"><span>对比度</span><output id="contrastVal">0</output></label>
+        <input id="contrast" type="range" min="-100" max="100" step="1" value="0" />
+        <label class="row" for="saturation"><span>饱和度</span><output id="saturationVal">0</output></label>
+        <input id="saturation" type="range" min="-100" max="100" step="1" value="0" />
+        <label class="check"><input id="autoWB" type="checkbox" /> 自动白平衡</label>
+        <label class="check"><input id="autoLevels" type="checkbox" /> 自动色阶</label>
+      </section>
+
+      <section class="group">
+        <h2>3 · 取色方式</h2>
+        <div class="radios" role="radiogroup" aria-label="取色方式">
+          <label class="check"><input id="methodNearest" type="radio" name="method" value="nearest" checked /> 最近邻（色块最干净）</label>
+          <label class="check"><input id="methodFS" type="radio" name="method" value="fs" /> 误差扩散（Floyd–Steinberg）</label>
+          <label class="check"><input id="methodBayer" type="radio" name="method" value="bayer" /> 有序抖动（Bayer）</label>
+        </div>
+        <label class="row" for="bayerN"><span>Bayer 尺寸</span></label>
+        <select id="bayerN">
+          <option value="4">4 × 4</option>
+          <option value="8">8 × 8</option>
+        </select>
+        <label class="row" for="ditherStrength"><span>抖动强度</span><output id="ditherStrengthVal">30%</output></label>
+        <input id="ditherStrength" type="range" min="0" max="100" step="1" value="30" />
+      </section>
+
+      <section class="group">
+        <h2>4 · 减色</h2>
+        <label class="check"><input id="quantizeEnabled" type="checkbox" checked /> 启用减色（限制最大色数）</label>
+        <label class="row" for="maxColors"><span>最大色数</span></label>
+        <input id="maxColors" type="number" min="2" max="221" step="1" value="24" />
+      </section>
+
+      <section class="group">
+        <h2>5 · 图纸尺寸</h2>
+        <label class="row" for="boardsSelect"><span>拼板规格</span></label>
+        <select id="boardsSelect">
+          <option value="1" selected>1 × 1 板（上限 29 格）</option>
+          <option value="2">2 × 2 板（上限 58 格）</option>
+          <option value="3">3 × 3 板（上限 87 格）</option>
+          <option value="custom">自定义格数</option>
+        </select>
+        <div class="grid2">
+          <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="87" step="1" value="29" /></label>
+          <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="87" step="1" value="29" /></label>
+        </div>
+        <label class="check"><input id="lockAspect" type="checkbox" checked /> 保持原图宽高比</label>
+        <p class="hint">单边上限硬限制 87 格（3 × 3 板），超出会被自动压回。</p>
+      </section>
+
+      <section class="group">
+        <h2>6 · 色卡版本</h2>
+        <select id="paletteSelect"></select>
+        <p id="paletteMeta" class="hint">色卡数据未加载</p>
+      </section>
+
+      <section class="group">
+        <h2>7 · 图纸显示</h2>
+        <label class="check"><input id="showNumbers" type="checkbox" checked /> 显示数字编号（色号）</label>
+        <label class="check"><input id="showRuler" type="checkbox" /> 显示坐标刻度</label>
+        <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">12px</output></label>
+        <input id="cellSize" type="range" min="4" max="28" step="1" value="12" />
+      </section>
+
+      <section class="group">
+        <h2>8 · 改色模式</h2>
+        <label class="check"><input id="recolorMode" type="checkbox" /> 开启改色模式（点击图纸格子改色）</label>
+        <label class="row" for="recolorColor"><span>目标色号</span></label>
+        <select id="recolorColor"></select>
+        <label class="check"><input id="lockToggle" type="checkbox" checked /> 改色时锁定该格（重算时不被覆盖）</label>
+        <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
+        <p id="lockInfo" class="hint">已锁定 0 格</p>
+        <p class="hint">提示：按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格。</p>
+      </section>
+
+      <section class="group group-actions">
+        <h2>9 · 操作</h2>
+        <button id="btnRegenerate" class="btn btn-primary" type="button">重新生成</button>
+        <button id="btnResetAdjust" class="btn" type="button">重置微调</button>
+        <button id="btnExportPng" class="btn" type="button">导出图纸 PNG</button>
+        <button id="btnExportCompare" class="btn" type="button">导出对照图 PNG</button>
+        <button id="btnExportCsv" class="btn" type="button">导出用量清单 CSV</button>
+      </section>
+    </aside>
+
+    <main id="dropZone" class="panel canvas-panel">
+      <div class="panel-head">
+        <h2>图纸预览</h2>
+        <div class="status-line">
+          <span id="statusText" class="status">就绪</span>
+          <span id="elapsedText" class="elapsed"></span>
+        </div>
+        <div id="progressWrap" class="progress" hidden><div id="progressBar" class="progress-bar"></div></div>
+      </div>
+      <div class="canvas-scroll">
+        <canvas id="patternCanvas" class="pattern-canvas" width="640" height="420"></canvas>
+        <div class="canvas-overlay">
+          <p id="patternHint" class="canvas-hint">尚未载入图片<br /><span class="muted">点击上方「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴</span></p>
+          <button id="emptyState" class="btn btn-primary" type="button">选择本地图片…</button>
+        </div>
+      </div>
+      <p class="hint">参数调整会自动重算（防抖 200ms）。开启第 8 组「改色模式」后，点击图纸格子即可把它改成目标色号。</p>
+    </main>
+
+    <aside class="panel side">
+      <section class="block">
+        <h2>原图对照</h2>
+        <div class="source-wrap">
+          <canvas id="sourceCanvas" class="source-canvas" width="240" height="180"></canvas>
+          <p id="sourceHint" class="canvas-hint small">尚未载入图片</p>
+        </div>
+      </section>
+      <section class="block">
+        <h2>用量汇总</h2>
+        <div id="summaryBox" class="summary"></div>
+      </section>
+      <section class="block">
+        <h2>色号图例</h2>
+        <div id="legendBox" class="legend"></div>
+      </section>
+    </aside>
+  </div>
+
+  <footer class="disclaimer">
+    <span class="disclaimer-tag">声明</span>RGB 为屏幕参考值，非品牌官方色值；严谨对色请以实物色卡为准。
+  </footer>
+</div>
+<script>
+/* ===== src/palette.js ===== */
+/*!
+ * MARD 221 拼豆色表 · 两个公开谱系版本（内联数据）
+ *
+ * 数据来源（均为公开数据仓库，抓取于 https://github.com/HansBug/pindou-color-data，main 分支）：
+ *   主流谱系：https://raw.githubusercontent.com/HansBug/pindou-color-data/main/mard-221-github/colors.json
+ *   备用谱系：https://raw.githubusercontent.com/HansBug/pindou-color-data/main/mard-221-alfonse-doudou/colors.json
+ *
+ * 许可：MIT（随数据来源仓库；原始 color 数据来自其 README 所述的公开工具站/源码库）。
+ * 免责声明：本表为第三方公开数据整理，非品牌官方标准；RGB 为屏幕参考值，
+ *   不等同于实物颜色，严谨对色请以实物色卡为准。
+ *
+ * 说明：rgb 字段由 hex 反解生成，hex 统一为大写 #RRGGBB；
+ *   排序为 group A,B,C,D,E,F,G,H,M，组内按色号数字自然序升序。
+ */
+
+window.PINDOU_PALETTES = {
+  "mard-221-getcolors": {
+    id: "mard-221-getcolors",
+    label: "MARD 221 · 主流谱系",
+    count: 221,
+    source: "https://raw.githubusercontent.com/HansBug/pindou-color-data/main/mard-221-github/colors.json",
+    license: "MIT",
+    disclaimer: "RGB 为屏幕参考值，非品牌官方色值；严谨对色请以实物色卡为准。",
+    colors: [
+    { code: "A1", hex: "#FAF5CD", rgb: [250,245,205], group: "A" },
+    { code: "A2", hex: "#FCFED6", rgb: [252,254,214], group: "A" },
+    { code: "A3", hex: "#FCFF92", rgb: [252,255,146], group: "A" },
+    { code: "A4", hex: "#F7EC5C", rgb: [247,236,92], group: "A" },
+    { code: "A5", hex: "#FFE44B", rgb: [255,228,75], group: "A" },
+    { code: "A6", hex: "#FDA951", rgb: [253,169,81], group: "A" },
+    { code: "A7", hex: "#FA8C4F", rgb: [250,140,79], group: "A" },
+    { code: "A8", hex: "#F9E045", rgb: [249,224,69], group: "A" },
+    { code: "A9", hex: "#F99C5F", rgb: [249,156,95], group: "A" },
+    { code: "A10", hex: "#F47E36", rgb: [244,126,54], group: "A" },
+    { code: "A11", hex: "#FEDB99", rgb: [254,219,153], group: "A" },
+    { code: "A12", hex: "#FDA276", rgb: [253,162,118], group: "A" },
+    { code: "A13", hex: "#FEC667", rgb: [254,198,103], group: "A" },
+    { code: "A14", hex: "#F85842", rgb: [248,88,66], group: "A" },
+    { code: "A15", hex: "#FBF65E", rgb: [251,246,94], group: "A" },
+    { code: "A16", hex: "#FEFF97", rgb: [254,255,151], group: "A" },
+    { code: "A17", hex: "#FDE173", rgb: [253,225,115], group: "A" },
+    { code: "A18", hex: "#FCBF80", rgb: [252,191,128], group: "A" },
+    { code: "A19", hex: "#FD7E77", rgb: [253,126,119], group: "A" },
+    { code: "A20", hex: "#F9D66E", rgb: [249,214,110], group: "A" },
+    { code: "A21", hex: "#FAE393", rgb: [250,227,147], group: "A" },
+    { code: "A22", hex: "#EDF878", rgb: [237,248,120], group: "A" },
+    { code: "A23", hex: "#E1C9BD", rgb: [225,201,189], group: "A" },
+    { code: "A24", hex: "#F3F6A9", rgb: [243,246,169], group: "A" },
+    { code: "A25", hex: "#FFD785", rgb: [255,215,133], group: "A" },
+    { code: "A26", hex: "#FEC832", rgb: [254,200,50], group: "A" },
+    { code: "B1", hex: "#DFF139", rgb: [223,241,57], group: "B" },
+    { code: "B2", hex: "#64F343", rgb: [100,243,67], group: "B" },
+    { code: "B3", hex: "#9FF685", rgb: [159,246,133], group: "B" },
+    { code: "B4", hex: "#5FDF34", rgb: [95,223,52], group: "B" },
+    { code: "B5", hex: "#39E158", rgb: [57,225,88], group: "B" },
+    { code: "B6", hex: "#64E0A4", rgb: [100,224,164], group: "B" },
+    { code: "B7", hex: "#3FAE7C", rgb: [63,174,124], group: "B" },
+    { code: "B8", hex: "#1D9E54", rgb: [29,158,84], group: "B" },
+    { code: "B9", hex: "#2A5037", rgb: [42,80,55], group: "B" },
+    { code: "B10", hex: "#9AD1BA", rgb: [154,209,186], group: "B" },
+    { code: "B11", hex: "#627032", rgb: [98,112,50], group: "B" },
+    { code: "B12", hex: "#1A6E3D", rgb: [26,110,61], group: "B" },
+    { code: "B13", hex: "#C8E87D", rgb: [200,232,125], group: "B" },
+    { code: "B14", hex: "#ACE84C", rgb: [172,232,76], group: "B" },
+    { code: "B15", hex: "#305335", rgb: [48,83,53], group: "B" },
+    { code: "B16", hex: "#C0ED9C", rgb: [192,237,156], group: "B" },
+    { code: "B17", hex: "#9EB33E", rgb: [158,179,62], group: "B" },
+    { code: "B18", hex: "#E6ED4F", rgb: [230,237,79], group: "B" },
+    { code: "B19", hex: "#26B78E", rgb: [38,183,142], group: "B" },
+    { code: "B20", hex: "#CAEDCF", rgb: [202,237,207], group: "B" },
+    { code: "B21", hex: "#176268", rgb: [23,98,104], group: "B" },
+    { code: "B22", hex: "#0A4241", rgb: [10,66,65], group: "B" },
+    { code: "B23", hex: "#343B1A", rgb: [52,59,26], group: "B" },
+    { code: "B24", hex: "#E8FAA6", rgb: [232,250,166], group: "B" },
+    { code: "B25", hex: "#4E846D", rgb: [78,132,109], group: "B" },
+    { code: "B26", hex: "#907C35", rgb: [144,124,53], group: "B" },
+    { code: "B27", hex: "#D0E0AF", rgb: [208,224,175], group: "B" },
+    { code: "B28", hex: "#9EE5BB", rgb: [158,229,187], group: "B" },
+    { code: "B29", hex: "#C6DF5F", rgb: [198,223,95], group: "B" },
+    { code: "B30", hex: "#E3FBB1", rgb: [227,251,177], group: "B" },
+    { code: "B31", hex: "#B2E694", rgb: [178,230,148], group: "B" },
+    { code: "B32", hex: "#92AD60", rgb: [146,173,96], group: "B" },
+    { code: "C1", hex: "#E8FFE7", rgb: [232,255,231], group: "C" },
+    { code: "C2", hex: "#ABF8FE", rgb: [171,248,254], group: "C" },
+    { code: "C3", hex: "#9EE0F8", rgb: [158,224,248], group: "C" },
+    { code: "C4", hex: "#44CDFB", rgb: [68,205,251], group: "C" },
+    { code: "C5", hex: "#06ABE3", rgb: [6,171,227], group: "C" },
+    { code: "C6", hex: "#54A7E9", rgb: [84,167,233], group: "C" },
+    { code: "C7", hex: "#3977CC", rgb: [57,119,204], group: "C" },
+    { code: "C8", hex: "#0F52BD", rgb: [15,82,189], group: "C" },
+    { code: "C9", hex: "#3349C3", rgb: [51,73,195], group: "C" },
+    { code: "C10", hex: "#3DBBE3", rgb: [61,187,227], group: "C" },
+    { code: "C11", hex: "#2ADED3", rgb: [42,222,211], group: "C" },
+    { code: "C12", hex: "#1E334E", rgb: [30,51,78], group: "C" },
+    { code: "C13", hex: "#CDE7FE", rgb: [205,231,254], group: "C" },
+    { code: "C14", hex: "#D6FDFC", rgb: [214,253,252], group: "C" },
+    { code: "C15", hex: "#21C5C4", rgb: [33,197,196], group: "C" },
+    { code: "C16", hex: "#1858A2", rgb: [24,88,162], group: "C" },
+    { code: "C17", hex: "#02D1F3", rgb: [2,209,243], group: "C" },
+    { code: "C18", hex: "#213244", rgb: [33,50,68], group: "C" },
+    { code: "C19", hex: "#188690", rgb: [24,134,144], group: "C" },
+    { code: "C20", hex: "#1A70A9", rgb: [26,112,169], group: "C" },
+    { code: "C21", hex: "#BEDDFC", rgb: [190,221,252], group: "C" },
+    { code: "C22", hex: "#6BB1BB", rgb: [107,177,187], group: "C" },
+    { code: "C23", hex: "#C8E2F9", rgb: [200,226,249], group: "C" },
+    { code: "C24", hex: "#7EC5F9", rgb: [126,197,249], group: "C" },
+    { code: "C25", hex: "#A9E8E0", rgb: [169,232,224], group: "C" },
+    { code: "C26", hex: "#42ADD1", rgb: [66,173,209], group: "C" },
+    { code: "C27", hex: "#D0DEEF", rgb: [208,222,239], group: "C" },
+    { code: "C28", hex: "#BDCEED", rgb: [189,206,237], group: "C" },
+    { code: "C29", hex: "#364A89", rgb: [54,74,137], group: "C" },
+    { code: "D1", hex: "#ACB7EF", rgb: [172,183,239], group: "D" },
+    { code: "D2", hex: "#868DD3", rgb: [134,141,211], group: "D" },
+    { code: "D3", hex: "#3653AF", rgb: [54,83,175], group: "D" },
+    { code: "D4", hex: "#162C7E", rgb: [22,44,126], group: "D" },
+    { code: "D5", hex: "#B34EC6", rgb: [179,78,198], group: "D" },
+    { code: "D6", hex: "#B37BDC", rgb: [179,123,220], group: "D" },
+    { code: "D7", hex: "#8758A9", rgb: [135,88,169], group: "D" },
+    { code: "D8", hex: "#E3D2FE", rgb: [227,210,254], group: "D" },
+    { code: "D9", hex: "#D6BAF5", rgb: [214,186,245], group: "D" },
+    { code: "D10", hex: "#301A49", rgb: [48,26,73], group: "D" },
+    { code: "D11", hex: "#BCBAE2", rgb: [188,186,226], group: "D" },
+    { code: "D12", hex: "#DC99CE", rgb: [220,153,206], group: "D" },
+    { code: "D13", hex: "#B5038F", rgb: [181,3,143], group: "D" },
+    { code: "D14", hex: "#882893", rgb: [136,40,147], group: "D" },
+    { code: "D15", hex: "#2F1E8E", rgb: [47,30,142], group: "D" },
+    { code: "D16", hex: "#E2E4F0", rgb: [226,228,240], group: "D" },
+    { code: "D17", hex: "#C7D3F9", rgb: [199,211,249], group: "D" },
+    { code: "D18", hex: "#9A64B8", rgb: [154,100,184], group: "D" },
+    { code: "D19", hex: "#D8C2D9", rgb: [216,194,217], group: "D" },
+    { code: "D20", hex: "#9C34AD", rgb: [156,52,173], group: "D" },
+    { code: "D21", hex: "#940595", rgb: [148,5,149], group: "D" },
+    { code: "D22", hex: "#383995", rgb: [56,57,149], group: "D" },
+    { code: "D23", hex: "#FADBF8", rgb: [250,219,248], group: "D" },
+    { code: "D24", hex: "#768AE1", rgb: [118,138,225], group: "D" },
+    { code: "D25", hex: "#4950C2", rgb: [73,80,194], group: "D" },
+    { code: "D26", hex: "#D6C6EB", rgb: [214,198,235], group: "D" },
+    { code: "E1", hex: "#F6D4CB", rgb: [246,212,203], group: "E" },
+    { code: "E2", hex: "#FCC1DD", rgb: [252,193,221], group: "E" },
+    { code: "E3", hex: "#F6BDE8", rgb: [246,189,232], group: "E" },
+    { code: "E4", hex: "#E9639E", rgb: [233,99,158], group: "E" },
+    { code: "E5", hex: "#F1559F", rgb: [241,85,159], group: "E" },
+    { code: "E6", hex: "#EC4072", rgb: [236,64,114], group: "E" },
+    { code: "E7", hex: "#C63674", rgb: [198,54,116], group: "E" },
+    { code: "E8", hex: "#FDDBE9", rgb: [253,219,233], group: "E" },
+    { code: "E9", hex: "#E575C7", rgb: [229,117,199], group: "E" },
+    { code: "E10", hex: "#D33997", rgb: [211,57,151], group: "E" },
+    { code: "E11", hex: "#F7DAD4", rgb: [247,218,212], group: "E" },
+    { code: "E12", hex: "#F893BF", rgb: [248,147,191], group: "E" },
+    { code: "E13", hex: "#B5026A", rgb: [181,2,106], group: "E" },
+    { code: "E14", hex: "#FAD4BF", rgb: [250,212,191], group: "E" },
+    { code: "E15", hex: "#F5C9CA", rgb: [245,201,202], group: "E" },
+    { code: "E16", hex: "#FBF4EC", rgb: [251,244,236], group: "E" },
+    { code: "E17", hex: "#F7E3EC", rgb: [247,227,236], group: "E" },
+    { code: "E18", hex: "#FBCBDB", rgb: [251,203,219], group: "E" },
+    { code: "E19", hex: "#F6BBD1", rgb: [246,187,209], group: "E" },
+    { code: "E20", hex: "#D7C6CE", rgb: [215,198,206], group: "E" },
+    { code: "E21", hex: "#C09DA4", rgb: [192,157,164], group: "E" },
+    { code: "E22", hex: "#B58B9F", rgb: [181,139,159], group: "E" },
+    { code: "E23", hex: "#937D8A", rgb: [147,125,138], group: "E" },
+    { code: "E24", hex: "#DEBEE5", rgb: [222,190,229], group: "E" },
+    { code: "F1", hex: "#FF9280", rgb: [255,146,128], group: "F" },
+    { code: "F2", hex: "#F73D48", rgb: [247,61,72], group: "F" },
+    { code: "F3", hex: "#EF4D3E", rgb: [239,77,62], group: "F" },
+    { code: "F4", hex: "#F92B40", rgb: [249,43,64], group: "F" },
+    { code: "F5", hex: "#E30328", rgb: [227,3,40], group: "F" },
+    { code: "F6", hex: "#913635", rgb: [145,54,53], group: "F" },
+    { code: "F7", hex: "#911932", rgb: [145,25,50], group: "F" },
+    { code: "F8", hex: "#BB0126", rgb: [187,1,38], group: "F" },
+    { code: "F9", hex: "#E0677A", rgb: [224,103,122], group: "F" },
+    { code: "F10", hex: "#874628", rgb: [135,70,40], group: "F" },
+    { code: "F11", hex: "#6F321D", rgb: [111,50,29], group: "F" },
+    { code: "F12", hex: "#F8516D", rgb: [248,81,109], group: "F" },
+    { code: "F13", hex: "#F45C45", rgb: [244,92,69], group: "F" },
+    { code: "F14", hex: "#FCADB2", rgb: [252,173,178], group: "F" },
+    { code: "F15", hex: "#D50527", rgb: [213,5,39], group: "F" },
+    { code: "F16", hex: "#F8C0A9", rgb: [248,192,169], group: "F" },
+    { code: "F17", hex: "#E89B7D", rgb: [232,155,125], group: "F" },
+    { code: "F18", hex: "#D07E4A", rgb: [208,126,74], group: "F" },
+    { code: "F19", hex: "#BE454A", rgb: [190,69,74], group: "F" },
+    { code: "F20", hex: "#C69495", rgb: [198,148,149], group: "F" },
+    { code: "F21", hex: "#F2BBC6", rgb: [242,187,198], group: "F" },
+    { code: "F22", hex: "#F7C3D0", rgb: [247,195,208], group: "F" },
+    { code: "F23", hex: "#EC806D", rgb: [236,128,109], group: "F" },
+    { code: "F24", hex: "#E09DAF", rgb: [224,157,175], group: "F" },
+    { code: "F25", hex: "#E84854", rgb: [232,72,84], group: "F" },
+    { code: "G1", hex: "#FFE4D3", rgb: [255,228,211], group: "G" },
+    { code: "G2", hex: "#FCC6AC", rgb: [252,198,172], group: "G" },
+    { code: "G3", hex: "#F1C4A5", rgb: [241,196,165], group: "G" },
+    { code: "G4", hex: "#DCB387", rgb: [220,179,135], group: "G" },
+    { code: "G5", hex: "#E7B34E", rgb: [231,179,78], group: "G" },
+    { code: "G6", hex: "#F3A014", rgb: [243,160,20], group: "G" },
+    { code: "G7", hex: "#98503A", rgb: [152,80,58], group: "G" },
+    { code: "G8", hex: "#4B2B1C", rgb: [75,43,28], group: "G" },
+    { code: "G9", hex: "#E4B685", rgb: [228,182,133], group: "G" },
+    { code: "G10", hex: "#DA8C42", rgb: [218,140,66], group: "G" },
+    { code: "G11", hex: "#DAC898", rgb: [218,200,152], group: "G" },
+    { code: "G12", hex: "#FEC993", rgb: [254,201,147], group: "G" },
+    { code: "G13", hex: "#B2714B", rgb: [178,113,75], group: "G" },
+    { code: "G14", hex: "#8B684C", rgb: [139,104,76], group: "G" },
+    { code: "G15", hex: "#FCF9E0", rgb: [252,249,224], group: "G" },
+    { code: "G16", hex: "#F2D8C1", rgb: [242,216,193], group: "G" },
+    { code: "G17", hex: "#79544E", rgb: [121,84,78], group: "G" },
+    { code: "G18", hex: "#FFE4D6", rgb: [255,228,214], group: "G" },
+    { code: "G19", hex: "#DD7D41", rgb: [221,125,65], group: "G" },
+    { code: "G20", hex: "#A5452F", rgb: [165,69,47], group: "G" },
+    { code: "G21", hex: "#B38561", rgb: [179,133,97], group: "G" },
+    { code: "H1", hex: "#FBFBFB", rgb: [251,251,251], group: "H" },
+    { code: "H2", hex: "#FFFFFF", rgb: [255,255,255], group: "H" },
+    { code: "H3", hex: "#B4B4B4", rgb: [180,180,180], group: "H" },
+    { code: "H4", hex: "#878787", rgb: [135,135,135], group: "H" },
+    { code: "H5", hex: "#464648", rgb: [70,70,72], group: "H" },
+    { code: "H6", hex: "#2C2C2C", rgb: [44,44,44], group: "H" },
+    { code: "H7", hex: "#010101", rgb: [1,1,1], group: "H" },
+    { code: "H8", hex: "#E7D6DC", rgb: [231,214,220], group: "H" },
+    { code: "H9", hex: "#EFEDEE", rgb: [239,237,238], group: "H" },
+    { code: "H10", hex: "#ECEAEB", rgb: [236,234,235], group: "H" },
+    { code: "H11", hex: "#CDCDCD", rgb: [205,205,205], group: "H" },
+    { code: "H12", hex: "#FDF6EE", rgb: [253,246,238], group: "H" },
+    { code: "H13", hex: "#F4EFD1", rgb: [244,239,209], group: "H" },
+    { code: "H14", hex: "#CED7D4", rgb: [206,215,212], group: "H" },
+    { code: "H15", hex: "#98A6A6", rgb: [152,166,166], group: "H" },
+    { code: "H16", hex: "#1B1213", rgb: [27,18,19], group: "H" },
+    { code: "H17", hex: "#F0EEEF", rgb: [240,238,239], group: "H" },
+    { code: "H18", hex: "#FCFFF8", rgb: [252,255,248], group: "H" },
+    { code: "H19", hex: "#F2EEE5", rgb: [242,238,229], group: "H" },
+    { code: "H20", hex: "#96A09F", rgb: [150,160,159], group: "H" },
+    { code: "H21", hex: "#FFFBE1", rgb: [255,251,225], group: "H" },
+    { code: "H22", hex: "#CACADA", rgb: [202,202,218], group: "H" },
+    { code: "H23", hex: "#9B9C94", rgb: [155,156,148], group: "H" },
+    { code: "M1", hex: "#BBC6B6", rgb: [187,198,182], group: "M" },
+    { code: "M2", hex: "#909994", rgb: [144,153,148], group: "M" },
+    { code: "M3", hex: "#697E80", rgb: [105,126,128], group: "M" },
+    { code: "M4", hex: "#E0D4BC", rgb: [224,212,188], group: "M" },
+    { code: "M5", hex: "#D0CBAE", rgb: [208,203,174], group: "M" },
+    { code: "M6", hex: "#B0AA86", rgb: [176,170,134], group: "M" },
+    { code: "M7", hex: "#B0A796", rgb: [176,167,150], group: "M" },
+    { code: "M8", hex: "#AE8082", rgb: [174,128,130], group: "M" },
+    { code: "M9", hex: "#A88764", rgb: [168,135,100], group: "M" },
+    { code: "M10", hex: "#C6B2BB", rgb: [198,178,187], group: "M" },
+    { code: "M11", hex: "#9D7693", rgb: [157,118,147], group: "M" },
+    { code: "M12", hex: "#644B51", rgb: [100,75,81], group: "M" },
+    { code: "M13", hex: "#C79266", rgb: [199,146,102], group: "M" },
+    { code: "M14", hex: "#C37463", rgb: [195,116,99], group: "M" },
+    { code: "M15", hex: "#747D7A", rgb: [116,125,122], group: "M" },
+    ]
+  },
+  "mard-221-alfonse": {
+    id: "mard-221-alfonse",
+    label: "MARD 221 · 备用谱系",
+    count: 221,
+    source: "https://raw.githubusercontent.com/HansBug/pindou-color-data/main/mard-221-alfonse-doudou/colors.json",
+    license: "MIT",
+    disclaimer: "RGB 为屏幕参考值，非品牌官方色值；严谨对色请以实物色卡为准。",
+    colors: [
+    { code: "A1", hex: "#FAF5CD", rgb: [250,245,205], group: "A" },
+    { code: "A2", hex: "#FCFED6", rgb: [252,254,214], group: "A" },
+    { code: "A3", hex: "#FCFF92", rgb: [252,255,146], group: "A" },
+    { code: "A4", hex: "#F7EC5C", rgb: [247,236,92], group: "A" },
+    { code: "A5", hex: "#F0D83A", rgb: [240,216,58], group: "A" },
+    { code: "A6", hex: "#FDA951", rgb: [253,169,81], group: "A" },
+    { code: "A7", hex: "#FA8C4F", rgb: [250,140,79], group: "A" },
+    { code: "A8", hex: "#FBDA4D", rgb: [251,218,77], group: "A" },
+    { code: "A9", hex: "#F79D5F", rgb: [247,157,95], group: "A" },
+    { code: "A10", hex: "#F47E38", rgb: [244,126,56], group: "A" },
+    { code: "A11", hex: "#FEDB99", rgb: [254,219,153], group: "A" },
+    { code: "A12", hex: "#FDA276", rgb: [253,162,118], group: "A" },
+    { code: "A13", hex: "#FEC667", rgb: [254,198,103], group: "A" },
+    { code: "A14", hex: "#F75842", rgb: [247,88,66], group: "A" },
+    { code: "A15", hex: "#FBF65E", rgb: [251,246,94], group: "A" },
+    { code: "A16", hex: "#FEFF97", rgb: [254,255,151], group: "A" },
+    { code: "A17", hex: "#FDE173", rgb: [253,225,115], group: "A" },
+    { code: "A18", hex: "#FCBF80", rgb: [252,191,128], group: "A" },
+    { code: "A19", hex: "#FD7E77", rgb: [253,126,119], group: "A" },
+    { code: "A20", hex: "#F9D666", rgb: [249,214,102], group: "A" },
+    { code: "A21", hex: "#FAE393", rgb: [250,227,147], group: "A" },
+    { code: "A22", hex: "#EDF878", rgb: [237,248,120], group: "A" },
+    { code: "A23", hex: "#E4C8BA", rgb: [228,200,186], group: "A" },
+    { code: "A24", hex: "#F3F6A9", rgb: [243,246,169], group: "A" },
+    { code: "A25", hex: "#FDF785", rgb: [253,247,133], group: "A" },
+    { code: "A26", hex: "#FFC734", rgb: [255,199,52], group: "A" },
+    { code: "B1", hex: "#DFF13B", rgb: [223,241,59], group: "B" },
+    { code: "B2", hex: "#64F343", rgb: [100,243,67], group: "B" },
+    { code: "B3", hex: "#A1F586", rgb: [161,245,134], group: "B" },
+    { code: "B4", hex: "#5FDF34", rgb: [95,223,52], group: "B" },
+    { code: "B5", hex: "#39E158", rgb: [57,225,88], group: "B" },
+    { code: "B6", hex: "#64E0A4", rgb: [100,224,164], group: "B" },
+    { code: "B7", hex: "#3EAE7C", rgb: [62,174,124], group: "B" },
+    { code: "B8", hex: "#1D9B54", rgb: [29,155,84], group: "B" },
+    { code: "B9", hex: "#2A5037", rgb: [42,80,55], group: "B" },
+    { code: "B10", hex: "#9AD1BA", rgb: [154,209,186], group: "B" },
+    { code: "B11", hex: "#627032", rgb: [98,112,50], group: "B" },
+    { code: "B12", hex: "#1A6E3D", rgb: [26,110,61], group: "B" },
+    { code: "B13", hex: "#C8E87D", rgb: [200,232,125], group: "B" },
+    { code: "B14", hex: "#ABE84F", rgb: [171,232,79], group: "B" },
+    { code: "B15", hex: "#305335", rgb: [48,83,53], group: "B" },
+    { code: "B16", hex: "#C0ED9C", rgb: [192,237,156], group: "B" },
+    { code: "B17", hex: "#9EB33E", rgb: [158,179,62], group: "B" },
+    { code: "B18", hex: "#E6ED4F", rgb: [230,237,79], group: "B" },
+    { code: "B19", hex: "#26B78E", rgb: [38,183,142], group: "B" },
+    { code: "B20", hex: "#CBECCF", rgb: [203,236,207], group: "B" },
+    { code: "B21", hex: "#18616A", rgb: [24,97,106], group: "B" },
+    { code: "B22", hex: "#0A4241", rgb: [10,66,65], group: "B" },
+    { code: "B23", hex: "#343B1A", rgb: [52,59,26], group: "B" },
+    { code: "B24", hex: "#E8FAA6", rgb: [232,250,166], group: "B" },
+    { code: "B25", hex: "#4E846D", rgb: [78,132,109], group: "B" },
+    { code: "B26", hex: "#907C35", rgb: [144,124,53], group: "B" },
+    { code: "B27", hex: "#D0E0AF", rgb: [208,224,175], group: "B" },
+    { code: "B28", hex: "#9EE5BB", rgb: [158,229,187], group: "B" },
+    { code: "B29", hex: "#C6DF5F", rgb: [198,223,95], group: "B" },
+    { code: "B30", hex: "#E3FBB1", rgb: [227,251,177], group: "B" },
+    { code: "B31", hex: "#B4E691", rgb: [180,230,145], group: "B" },
+    { code: "B32", hex: "#92AD60", rgb: [146,173,96], group: "B" },
+    { code: "C1", hex: "#F0FEE4", rgb: [240,254,228], group: "C" },
+    { code: "C2", hex: "#ABF8FE", rgb: [171,248,254], group: "C" },
+    { code: "C3", hex: "#A2E0F7", rgb: [162,224,247], group: "C" },
+    { code: "C4", hex: "#44CDFB", rgb: [68,205,251], group: "C" },
+    { code: "C5", hex: "#06AADF", rgb: [6,170,223], group: "C" },
+    { code: "C6", hex: "#54A7E9", rgb: [84,167,233], group: "C" },
+    { code: "C7", hex: "#3977CA", rgb: [57,119,202], group: "C" },
+    { code: "C8", hex: "#0F52BD", rgb: [15,82,189], group: "C" },
+    { code: "C9", hex: "#3349C3", rgb: [51,73,195], group: "C" },
+    { code: "C10", hex: "#3CBCE3", rgb: [60,188,227], group: "C" },
+    { code: "C11", hex: "#2ADED3", rgb: [42,222,211], group: "C" },
+    { code: "C12", hex: "#1E334E", rgb: [30,51,78], group: "C" },
+    { code: "C13", hex: "#CDE7FE", rgb: [205,231,254], group: "C" },
+    { code: "C14", hex: "#D5FCF7", rgb: [213,252,247], group: "C" },
+    { code: "C15", hex: "#21C5C4", rgb: [33,197,196], group: "C" },
+    { code: "C16", hex: "#1858A2", rgb: [24,88,162], group: "C" },
+    { code: "C17", hex: "#02D1F3", rgb: [2,209,243], group: "C" },
+    { code: "C18", hex: "#213244", rgb: [33,50,68], group: "C" },
+    { code: "C19", hex: "#18869D", rgb: [24,134,157], group: "C" },
+    { code: "C20", hex: "#1A70A9", rgb: [26,112,169], group: "C" },
+    { code: "C21", hex: "#BCDDFC", rgb: [188,221,252], group: "C" },
+    { code: "C22", hex: "#6BB1BB", rgb: [107,177,187], group: "C" },
+    { code: "C23", hex: "#C8E2FD", rgb: [200,226,253], group: "C" },
+    { code: "C24", hex: "#7EC5F9", rgb: [126,197,249], group: "C" },
+    { code: "C25", hex: "#A9E8E0", rgb: [169,232,224], group: "C" },
+    { code: "C26", hex: "#42ADCF", rgb: [66,173,207], group: "C" },
+    { code: "C27", hex: "#D0DEF9", rgb: [208,222,249], group: "C" },
+    { code: "C28", hex: "#BDCEE8", rgb: [189,206,232], group: "C" },
+    { code: "C29", hex: "#364A89", rgb: [54,74,137], group: "C" },
+    { code: "D1", hex: "#ACB7EF", rgb: [172,183,239], group: "D" },
+    { code: "D2", hex: "#868DD3", rgb: [134,141,211], group: "D" },
+    { code: "D3", hex: "#3554AF", rgb: [53,84,175], group: "D" },
+    { code: "D4", hex: "#162D7B", rgb: [22,45,123], group: "D" },
+    { code: "D5", hex: "#B34EC6", rgb: [179,78,198], group: "D" },
+    { code: "D6", hex: "#B37BDC", rgb: [179,123,220], group: "D" },
+    { code: "D7", hex: "#8758A9", rgb: [135,88,169], group: "D" },
+    { code: "D8", hex: "#E3D2FE", rgb: [227,210,254], group: "D" },
+    { code: "D9", hex: "#D5B9F4", rgb: [213,185,244], group: "D" },
+    { code: "D10", hex: "#301A49", rgb: [48,26,73], group: "D" },
+    { code: "D11", hex: "#BEB9E2", rgb: [190,185,226], group: "D" },
+    { code: "D12", hex: "#DC99CE", rgb: [220,153,206], group: "D" },
+    { code: "D13", hex: "#B5038D", rgb: [181,3,141], group: "D" },
+    { code: "D14", hex: "#862993", rgb: [134,41,147], group: "D" },
+    { code: "D15", hex: "#2F1F8C", rgb: [47,31,140], group: "D" },
+    { code: "D16", hex: "#E2E4F0", rgb: [226,228,240], group: "D" },
+    { code: "D17", hex: "#C7D3F9", rgb: [199,211,249], group: "D" },
+    { code: "D18", hex: "#9A64B8", rgb: [154,100,184], group: "D" },
+    { code: "D19", hex: "#D8C2D9", rgb: [216,194,217], group: "D" },
+    { code: "D20", hex: "#9A35AD", rgb: [154,53,173], group: "D" },
+    { code: "D21", hex: "#940595", rgb: [148,5,149], group: "D" },
+    { code: "D22", hex: "#38389A", rgb: [56,56,154], group: "D" },
+    { code: "D23", hex: "#EADBF8", rgb: [234,219,248], group: "D" },
+    { code: "D24", hex: "#768AE1", rgb: [118,138,225], group: "D" },
+    { code: "D25", hex: "#4950C2", rgb: [73,80,194], group: "D" },
+    { code: "D26", hex: "#D6C6EB", rgb: [214,198,235], group: "D" },
+    { code: "E1", hex: "#F6D4CB", rgb: [246,212,203], group: "E" },
+    { code: "E2", hex: "#FCC1DD", rgb: [252,193,221], group: "E" },
+    { code: "E3", hex: "#F6BDE8", rgb: [246,189,232], group: "E" },
+    { code: "E4", hex: "#E8649E", rgb: [232,100,158], group: "E" },
+    { code: "E5", hex: "#F0569F", rgb: [240,86,159], group: "E" },
+    { code: "E6", hex: "#EB4172", rgb: [235,65,114], group: "E" },
+    { code: "E7", hex: "#C53674", rgb: [197,54,116], group: "E" },
+    { code: "E8", hex: "#FDDBE9", rgb: [253,219,233], group: "E" },
+    { code: "E9", hex: "#E376C7", rgb: [227,118,199], group: "E" },
+    { code: "E10", hex: "#D13B95", rgb: [209,59,149], group: "E" },
+    { code: "E11", hex: "#F7DAD4", rgb: [247,218,212], group: "E" },
+    { code: "E12", hex: "#F693BF", rgb: [246,147,191], group: "E" },
+    { code: "E13", hex: "#B5026A", rgb: [181,2,106], group: "E" },
+    { code: "E14", hex: "#FAD4BF", rgb: [250,212,191], group: "E" },
+    { code: "E15", hex: "#F5C9CA", rgb: [245,201,202], group: "E" },
+    { code: "E16", hex: "#FBF4EC", rgb: [251,244,236], group: "E" },
+    { code: "E17", hex: "#F7E3EC", rgb: [247,227,236], group: "E" },
+    { code: "E18", hex: "#F9C8DB", rgb: [249,200,219], group: "E" },
+    { code: "E19", hex: "#F6BBD1", rgb: [246,187,209], group: "E" },
+    { code: "E20", hex: "#D7C6CE", rgb: [215,198,206], group: "E" },
+    { code: "E21", hex: "#C09DA4", rgb: [192,157,164], group: "E" },
+    { code: "E22", hex: "#B38C9F", rgb: [179,140,159], group: "E" },
+    { code: "E23", hex: "#937D8A", rgb: [147,125,138], group: "E" },
+    { code: "E24", hex: "#DEBEE5", rgb: [222,190,229], group: "E" },
+    { code: "F1", hex: "#FE9381", rgb: [254,147,129], group: "F" },
+    { code: "F2", hex: "#F63D4B", rgb: [246,61,75], group: "F" },
+    { code: "F3", hex: "#EE4E3E", rgb: [238,78,62], group: "F" },
+    { code: "F4", hex: "#FB2A40", rgb: [251,42,64], group: "F" },
+    { code: "F5", hex: "#E10328", rgb: [225,3,40], group: "F" },
+    { code: "F6", hex: "#913635", rgb: [145,54,53], group: "F" },
+    { code: "F7", hex: "#911932", rgb: [145,25,50], group: "F" },
+    { code: "F8", hex: "#BB0126", rgb: [187,1,38], group: "F" },
+    { code: "F9", hex: "#E0677A", rgb: [224,103,122], group: "F" },
+    { code: "F10", hex: "#874628", rgb: [135,70,40], group: "F" },
+    { code: "F11", hex: "#592323", rgb: [89,35,35], group: "F" },
+    { code: "F12", hex: "#F3536B", rgb: [243,83,107], group: "F" },
+    { code: "F13", hex: "#F45C45", rgb: [244,92,69], group: "F" },
+    { code: "F14", hex: "#FCADB2", rgb: [252,173,178], group: "F" },
+    { code: "F15", hex: "#D50527", rgb: [213,5,39], group: "F" },
+    { code: "F16", hex: "#F8C0A9", rgb: [248,192,169], group: "F" },
+    { code: "F17", hex: "#E89B7D", rgb: [232,155,125], group: "F" },
+    { code: "F18", hex: "#D07F4A", rgb: [208,127,74], group: "F" },
+    { code: "F19", hex: "#BE454A", rgb: [190,69,74], group: "F" },
+    { code: "F20", hex: "#C69495", rgb: [198,148,149], group: "F" },
+    { code: "F21", hex: "#F2B8C6", rgb: [242,184,198], group: "F" },
+    { code: "F22", hex: "#F7C3D0", rgb: [247,195,208], group: "F" },
+    { code: "F23", hex: "#ED806C", rgb: [237,128,108], group: "F" },
+    { code: "F24", hex: "#E09DAF", rgb: [224,157,175], group: "F" },
+    { code: "F25", hex: "#E84854", rgb: [232,72,84], group: "F" },
+    { code: "G1", hex: "#FFE4D3", rgb: [255,228,211], group: "G" },
+    { code: "G2", hex: "#FCC6AC", rgb: [252,198,172], group: "G" },
+    { code: "G3", hex: "#F1C4A5", rgb: [241,196,165], group: "G" },
+    { code: "G4", hex: "#DCB387", rgb: [220,179,135], group: "G" },
+    { code: "G5", hex: "#E7B34E", rgb: [231,179,78], group: "G" },
+    { code: "G6", hex: "#E3A014", rgb: [227,160,20], group: "G" },
+    { code: "G7", hex: "#985C3A", rgb: [152,92,58], group: "G" },
+    { code: "G8", hex: "#713D2F", rgb: [113,61,47], group: "G" },
+    { code: "G9", hex: "#E4B685", rgb: [228,182,133], group: "G" },
+    { code: "G10", hex: "#DA8C42", rgb: [218,140,66], group: "G" },
+    { code: "G11", hex: "#DAC898", rgb: [218,200,152], group: "G" },
+    { code: "G12", hex: "#FEC993", rgb: [254,201,147], group: "G" },
+    { code: "G13", hex: "#B2714B", rgb: [178,113,75], group: "G" },
+    { code: "G14", hex: "#8B684C", rgb: [139,104,76], group: "G" },
+    { code: "G15", hex: "#F6F8E3", rgb: [246,248,227], group: "G" },
+    { code: "G16", hex: "#F2D8C1", rgb: [242,216,193], group: "G" },
+    { code: "G17", hex: "#77544E", rgb: [119,84,78], group: "G" },
+    { code: "G18", hex: "#FFE3D5", rgb: [255,227,213], group: "G" },
+    { code: "G19", hex: "#DD7D41", rgb: [221,125,65], group: "G" },
+    { code: "G20", hex: "#A5452F", rgb: [165,69,47], group: "G" },
+    { code: "G21", hex: "#B38561", rgb: [179,133,97], group: "G" },
+    { code: "H1", hex: "#FFFFFF", rgb: [255,255,255], group: "H" },
+    { code: "H2", hex: "#FBFBFB", rgb: [251,251,251], group: "H" },
+    { code: "H3", hex: "#B4B4B4", rgb: [180,180,180], group: "H" },
+    { code: "H4", hex: "#878787", rgb: [135,135,135], group: "H" },
+    { code: "H5", hex: "#464648", rgb: [70,70,72], group: "H" },
+    { code: "H6", hex: "#2C2C2C", rgb: [44,44,44], group: "H" },
+    { code: "H7", hex: "#010101", rgb: [1,1,1], group: "H" },
+    { code: "H8", hex: "#E7D6DC", rgb: [231,214,220], group: "H" },
+    { code: "H9", hex: "#EFEDEE", rgb: [239,237,238], group: "H" },
+    { code: "H10", hex: "#EBEBEB", rgb: [235,235,235], group: "H" },
+    { code: "H11", hex: "#CDCDCD", rgb: [205,205,205], group: "H" },
+    { code: "H12", hex: "#FDF6EE", rgb: [253,246,238], group: "H" },
+    { code: "H13", hex: "#F4EDF1", rgb: [244,237,241], group: "H" },
+    { code: "H14", hex: "#CED7D4", rgb: [206,215,212], group: "H" },
+    { code: "H15", hex: "#9AA6A6", rgb: [154,166,166], group: "H" },
+    { code: "H16", hex: "#1B1213", rgb: [27,18,19], group: "H" },
+    { code: "H17", hex: "#F0EEEF", rgb: [240,238,239], group: "H" },
+    { code: "H18", hex: "#FCFFF6", rgb: [252,255,246], group: "H" },
+    { code: "H19", hex: "#F2EEE5", rgb: [242,238,229], group: "H" },
+    { code: "H20", hex: "#96A09F", rgb: [150,160,159], group: "H" },
+    { code: "H21", hex: "#F8FBE6", rgb: [248,251,230], group: "H" },
+    { code: "H22", hex: "#CACAD2", rgb: [202,202,210], group: "H" },
+    { code: "H23", hex: "#9B9C94", rgb: [155,156,148], group: "H" },
+    { code: "M1", hex: "#BBC6B6", rgb: [187,198,182], group: "M" },
+    { code: "M2", hex: "#909994", rgb: [144,153,148], group: "M" },
+    { code: "M3", hex: "#697E81", rgb: [105,126,129], group: "M" },
+    { code: "M4", hex: "#E0D4BC", rgb: [224,212,188], group: "M" },
+    { code: "M5", hex: "#D1CCAF", rgb: [209,204,175], group: "M" },
+    { code: "M6", hex: "#B0AA86", rgb: [176,170,134], group: "M" },
+    { code: "M7", hex: "#B0A796", rgb: [176,167,150], group: "M" },
+    { code: "M8", hex: "#AE8082", rgb: [174,128,130], group: "M" },
+    { code: "M9", hex: "#A68862", rgb: [166,136,98], group: "M" },
+    { code: "M10", hex: "#C4B3BB", rgb: [196,179,187], group: "M" },
+    { code: "M11", hex: "#9D7693", rgb: [157,118,147], group: "M" },
+    { code: "M12", hex: "#644B51", rgb: [100,75,81], group: "M" },
+    { code: "M13", hex: "#C79266", rgb: [199,146,102], group: "M" },
+    { code: "M14", hex: "#C27563", rgb: [194,117,99], group: "M" },
+    { code: "M15", hex: "#747D7A", rgb: [116,125,122], group: "M" },
+    ]
+  },
+};
+</script>
+<script>
+/* ===== src/color.js ===== */
+/**
+ * ColorKit —— 拼豆色卡映射用的纯函数色彩引擎（零依赖、无 DOM、无模块语法）
+ * 挂载点：window.ColorKit（Node 自测环境自动挂到 globalThis，方便直接跑断言）
+ *
+ * ── 默认匹配空间为什么是 CIE Lab（CIE76 欧氏距离）而不是 Oklab ──────────────
+ * 1) 与色卡数据对齐：拼豆色卡（包括 221 色卡）的公开资料与既有换算工具几乎都以
+ *    CIE Lab / ΔE(CIE76) 给出色值。默认用 Lab 匹配，色卡坐标与匹配坐标是同一套，
+ *    不必在色卡侧和匹配侧各做一次空间转换，也省掉“哪套空间才是准的”的争论成本。
+ * 2) 抖动 / 减色的量纲统一：Lab 的 L 分量近似感知明度、值域 0–100。Floyd–Steinberg
+ *    的误差扩散与 Bayer 阈值都作用在 L 上时量纲一致，“抖动幅度相当于多少明度”
+ *    可以用一个常量直接表述（见 BAYER_L_SCALE）。
+ * 3) Oklab 感知均匀性更好，但它的优势在“生成新配色”这类任务；本模块的任务是
+ *    “把像素吸附到既有色卡”，换成 Oklab 不会让吸附结果更贴近色卡本身。故默认仍用
+ *    Lab，同时以 srgbToOklab / deltaEOklab 暴露 Oklab，调用方若要换匹配空间可自行
+ *    替换（makeMatcher 内部只依赖 Lab，换空间需要自建匹配器）。
+ *
+ * ── quantize 为什么用 Lab 空间 k-means 而不是 median-cut ────────────────────
+ * 1) 与吸附目标一致：减色最后一步是“每个簇心再吸附到色卡”。k-means 直接最小化像素
+ *    Lab 与簇心 Lab 的平方误差，簇心越贴近图像真实色，吸附到色卡后的偏差越小。
+ *    median-cut 在 RGB 箱体上沿坐标轴递归二分，切分点不好与 Lab 感知误差挂钩，
+ *    容易切出细长簇，吸附后偏色更明显。
+ * 2) 规模合适：目标色数 ≤ 色表大小（最多 221），87×87=7569 像素，k-means 在该规模下
+ *    毫秒级收敛；median-cut 还要额外维护箱体统计与分裂顺序，收益不成比例。
+ * 3) 确定性好实现：初始化用“出现次数最多的颜色 + 最远点补种”，遍历顺序固定、无随机，
+ *    同一输入两次调用逐字节一致。
+ * 健壮性：迭代上限 KMEANS_MAX_ITER = 12；空簇会被重新播种到“离自己所属簇心最远”的
+ * 颜色上，无点可搬时保持原簇心不动；maxColors 会被夹到 [1, min(实际色数, 色表大小)]。
+ *
+ * ── 其它实现约定 ───────────────────────────────────────────────────────────
+ * - 输入 rgb 为扁平数组（Uint8ClampedArray / Float32Array / 普通数组均可），长度 w*h*3，
+ *   通道顺序 R,G,B，取值 0–255；浮点值也能处理（线性化前夹紧到 [0,1]）。
+ * - 输出为 Uint16Array，值域是色表下标；65535 约定表示“空格 / 不使用”，本模块不产出该值。
+ * - strength ∈ [0,1]，缺省 1；strength = 0 时误差权重与阈值偏移全为 0，严格退化为逐像素
+ *   最近邻（与 matcher.nearest 逐格完全一致）。
+ * - Bayer 阈值矩阵归一化到 [-0.5, 0.5)；因 L 通道值域是 0–100，直接叠加 ±0.5 的偏移等于
+ *   没有抖动，故乘常量 BAYER_L_SCALE = 12.5 映射回 L 的量纲（strength=1 时偏移量落在
+ *   ±6.25 个明度单位内）。这是本模块唯一的量纲约定，需更强 / 更弱的抖动就调这个常量。
+ * - 中间量一律 Float64 计算，色表 Lab 预计算缓存在 Float32Array（matcher.labs）中；
+ *   无随机数、无时间依赖、无 DOM 调用、不含任何模块加载或模块导出语法。
+ */
+;(function (root) {
+  'use strict';
+
+  var KMEANS_MAX_ITER = 12;
+  var BAYER_L_SCALE = 12.5;
+
+  // D65 白点
+  var D65_Xn = 0.95047;
+  var D65_Yn = 1.0;
+  var D65_Zn = 1.08883;
+  // CIE Lab 的 ε = (6/29)^3、κ = (29/3)^3
+  var LAB_EPS = 216 / 24389;
+  var LAB_KAPPA = 24389 / 27;
+
+  // 标准 Bayer 阈值矩阵（原始序号）
+  var BAYER_RAW_4 = [
+    0, 8, 2, 10,
+    12, 4, 14, 6,
+    3, 11, 1, 9,
+    15, 7, 13, 5
+  ];
+  var BAYER_RAW_8 = [
+    0, 32, 8, 40, 2, 34, 10, 42,
+    48, 16, 56, 24, 50, 18, 58, 26,
+    12, 44, 4, 36, 14, 46, 6, 38,
+    60, 28, 52, 20, 62, 30, 54, 22,
+    3, 35, 11, 43, 1, 33, 9, 41,
+    51, 19, 59, 27, 49, 17, 57, 25,
+    15, 47, 7, 39, 13, 45, 5, 37,
+    63, 31, 55, 23, 61, 29, 53, 21
+  ];
+
+  function normalizeBayer(raw, size) {
+    var out = new Float64Array(raw.length);
+    var total = size * size;
+    for (var i = 0; i < raw.length; i++) out[i] = (raw[i] + 0.5) / total - 0.5;
+    return out;
+  }
+
+  var BAYER_N4 = normalizeBayer(BAYER_RAW_4, 4);
+  var BAYER_N8 = normalizeBayer(BAYER_RAW_8, 8);
+
+  function clamp01(v) {
+    if (!(v > 0)) return 0;
+    return v > 1 ? 1 : v;
+  }
+
+  function clampByte(v) {
+    if (typeof v !== 'number' || v !== v) return 0;
+    var x = Math.round(v);
+    return x < 0 ? 0 : (x > 255 ? 255 : x);
+  }
+
+  // sRGB 通道（0–255）→ 线性光，含正确 gamma 解码
+  function channelToLinear(c) {
+    var v = c / 255;
+    if (!(v > 0)) return 0;
+    if (v >= 1) return 1;
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  }
+
+  function labF(t) {
+    return t > LAB_EPS ? Math.cbrt(t) : (LAB_KAPPA * t + 16) / 116;
+  }
+
+  // sRGB(0–255) → CIE Lab(D65)，写入 out[off..off+2]
+  function labInto(r, g, b, out, off) {
+    var lr = channelToLinear(r);
+    var lg = channelToLinear(g);
+    var lb = channelToLinear(b);
+    var X = 0.4124564 * lr + 0.3575761 * lg + 0.1804375 * lb;
+    var Y = 0.2126729 * lr + 0.7151522 * lg + 0.0721750 * lb;
+    var Z = 0.0193339 * lr + 0.1191920 * lg + 0.9503041 * lb;
+    var fx = labF(X / D65_Xn);
+    var fy = labF(Y / D65_Yn);
+    var fz = labF(Z / D65_Zn);
+    out[off] = 116 * fy - 16;
+    out[off + 1] = 500 * (fx - fy);
+    out[off + 2] = 200 * (fy - fz);
+  }
+
+  function srgbToLab(rgb) {
+    var out = [0, 0, 0];
+    labInto(rgb[0], rgb[1], rgb[2], out, 0);
+    return out;
+  }
+
+  function srgbToOklab(rgb) {
+    var r = channelToLinear(rgb[0]);
+    var g = channelToLinear(rgb[1]);
+    var b = channelToLinear(rgb[2]);
+    var l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+    var m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+    var s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+    var l_ = Math.cbrt(l);
+    var m_ = Math.cbrt(m);
+    var s_ = Math.cbrt(s);
+    return [
+      0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+      1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+      0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+    ];
+  }
+
+  function euclid3(a1, a2, a3, b1, b2, b3) {
+    var d1 = a1 - b1, d2 = a2 - b2, d3 = a3 - b3;
+    return Math.sqrt(d1 * d1 + d2 * d2 + d3 * d3);
+  }
+
+  // CIE76：Lab 空间欧氏距离
+  function deltaE(labA, labB) {
+    return euclid3(labA[0], labA[1], labA[2], labB[0], labB[1], labB[2]);
+  }
+
+  // Oklab 欧氏距离（Oklab 本身已是感知均匀空间，直接取欧氏距离）
+  function deltaEOklab(a, b) {
+    return euclid3(a[0], a[1], a[2], b[0], b[1], b[2]);
+  }
+
+  var HEX_RE = /^[0-9a-fA-F]+$/;
+
+  function hexToRgb(hex) {
+    if (typeof hex !== 'string') return null;
+    var s = hex.trim();
+    if (s.charAt(0) === '#') s = s.slice(1);
+    if (!HEX_RE.test(s)) return null;
+    if (s.length === 3) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2];
+    if (s.length !== 6) return null;
+    var v = parseInt(s, 16);
+    return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+  }
+
+  function byteToHex(v) {
+    return (v < 16 ? '0' : '') + v.toString(16).toUpperCase();
+  }
+
+  function rgbToHex(rgb) {
+    return '#' + byteToHex(clampByte(rgb[0])) + byteToHex(clampByte(rgb[1])) + byteToHex(clampByte(rgb[2]));
+  }
+
+  // 取匹配函数：优先用 makeMatcher 暴露的无分配内部版本，退化为通用版本
+  function resolveNearest(matcher) {
+    if (matcher && typeof matcher._nearestL === 'function') return matcher._nearestL;
+    if (matcher && typeof matcher.nearestLab === 'function') {
+      return function (L, A, B) { return matcher.nearestLab([L, A, B]); };
+    }
+    throw new Error('ColorKit: 无效的 matcher，请用 makeMatcher() 创建');
+  }
+
+  /**
+   * colors: [{code, hex, rgb, group}, ...]，hex 与 rgb 至少有一个（都没有按黑色处理）。
+   * 返回 { nearest(rgb), nearestLab(lab), size, labs: Float32Array, ... }
+   * labs 是预计算的色表 Lab 缓存，逐像素匹配只做线性扫描，绝不重算色表 Lab。
+   */
+  function makeMatcher(colors) {
+    if (!colors || typeof colors.length !== 'number') {
+      throw new Error('ColorKit.makeMatcher: colors 必须是数组');
+    }
+    var size = colors.length;
+    if (size === 0) throw new Error('ColorKit.makeMatcher: 色表不能为空');
+
+    var labs = new Float32Array(size * 3);
+    var rgbs = new Array(size);
+    var hexes = new Array(size);
+    var codes = new Array(size);
+    var groups = new Array(size);
+
+    for (var i = 0; i < size; i++) {
+      var c = colors[i] || {};
+      var rgb = null;
+      if (c.rgb && typeof c.rgb.length === 'number' && c.rgb.length >= 3) {
+        rgb = [clampByte(c.rgb[0]), clampByte(c.rgb[1]), clampByte(c.rgb[2])];
+      } else if (typeof c.hex === 'string') {
+        rgb = hexToRgb(c.hex);
+      }
+      if (!rgb) rgb = [0, 0, 0];
+      labInto(rgb[0], rgb[1], rgb[2], labs, i * 3);
+      rgbs[i] = rgb;
+      hexes[i] = typeof c.hex === 'string' ? c.hex : rgbToHex(rgb);
+      codes[i] = c.code !== undefined ? c.code : String(i);
+      groups[i] = c.group !== undefined ? c.group : null;
+    }
+
+    function nearestL(L, A, B) {
+      var best = 0;
+      var bestD = Infinity;
+      var p = 0;
+      for (var i2 = 0; i2 < size; i2++) {
+        var dl = L - labs[p];
+        var da = A - labs[p + 1];
+        var db = B - labs[p + 2];
+        var d = dl * dl + da * da + db * db;
+        if (d < bestD) { bestD = d; best = i2; }
+        p += 3;
+      }
+      return best;
+    }
+
+    return {
+      nearest: function (rgb) {
+        var lab = srgbToLab(rgb);
+        return nearestL(lab[0], lab[1], lab[2]);
+      },
+      nearestLab: function (lab) {
+        return nearestL(lab[0], lab[1], lab[2]);
+      },
+      size: size,
+      labs: labs,
+      colors: colors,
+      rgbs: rgbs,
+      hexes: hexes,
+      codes: codes,
+      groups: groups,
+      _nearestL: nearestL
+    };
+  }
+
+  /** Floyd–Steinberg 抖动，蛇形扫描，误差在 Lab 空间扩散。返回 Uint16Array 下标。 */
+  function ditherFS(rgb, w, h, matcher, strength) {
+    w = w | 0;
+    h = h | 0;
+    var n = (w > 0 && h > 0) ? w * h : 0;
+    var out = new Uint16Array(n);
+    if (n === 0) return out;
+    var s = (strength === undefined || strength === null) ? 1 : clamp01(strength);
+    var nearestL = resolveNearest(matcher);
+    var pl = matcher.labs;
+
+    // 工作缓冲：像素 Lab（Float64，保证与 srgbToLab 的逐位一致）
+    var labs = new Float64Array(n * 3);
+    for (var i = 0; i < n; i++) {
+      var j = i * 3;
+      labInto(rgb[j], rgb[j + 1], rgb[j + 2], labs, j);
+    }
+
+    // strength 直接缩放扩散权重：strength=0 时权重全为 0，退化为逐像素最近邻
+    var W7 = (7 / 16) * s, W3 = (3 / 16) * s, W5 = (5 / 16) * s, W1 = (1 / 16) * s;
+    var rowBytes = w * 3;
+
+    for (var y = 0; y < h; y++) {
+      var ltr = (y & 1) === 0;      // 偶数行左→右，奇数行右→左
+      var d = ltr ? 1 : -1;
+      for (var step = 0; step < w; step++) {
+        var x = ltr ? step : w - 1 - step;
+        var p = (y * w + x) * 3;
+        var L = labs[p], A = labs[p + 1], B = labs[p + 2];
+        var idx = nearestL(L, A, B);
+        out[y * w + x] = idx;
+        var q = idx * 3;
+        var eL = L - pl[q], eA = A - pl[q + 1], eB = B - pl[q + 2];
+        var t;
+        if (x + d >= 0 && x + d < w) {            // 本行前进方向 7/16
+          t = p + d * 3;
+          labs[t] += eL * W7; labs[t + 1] += eA * W7; labs[t + 2] += eB * W7;
+        }
+        if (y + 1 < h) {
+          var nrow = p + rowBytes;
+          if (x - d >= 0 && x - d < w) {          // 下一行后侧 3/16
+            t = nrow - d * 3;
+            labs[t] += eL * W3; labs[t + 1] += eA * W3; labs[t + 2] += eB * W3;
+          }
+          t = nrow;                               // 下一行正下 5/16
+          labs[t] += eL * W5; labs[t + 1] += eA * W5; labs[t + 2] += eB * W5;
+          if (x + d >= 0 && x + d < w) {          // 下一行前侧 1/16
+            t = nrow + d * 3;
+            labs[t] += eL * W1; labs[t + 1] += eA * W1; labs[t + 2] += eB * W1;
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /** 有序抖动（Bayer 4×4 / 8×8）：阈值加到 L 通道后取最近邻。 */
+  function ditherBayer(rgb, w, h, matcher, n, strength) {
+    w = w | 0;
+    h = h | 0;
+    var count = (w > 0 && h > 0) ? w * h : 0;
+    var out = new Uint16Array(count);
+    if (count === 0) return out;
+    var size = n === 8 ? 8 : 4;
+    var thr = size === 8 ? BAYER_N8 : BAYER_N4;
+    var s = (strength === undefined || strength === null) ? 1 : clamp01(strength);
+    var amp = s * BAYER_L_SCALE;
+    var nearestL = resolveNearest(matcher);
+    var tmp = new Float64Array(3);
+    for (var y = 0; y < h; y++) {
+      var row = (y % size) * size;
+      var base = y * w;
+      for (var x = 0; x < w; x++) {
+        var j = (base + x) * 3;
+        labInto(rgb[j], rgb[j + 1], rgb[j + 2], tmp, 0);
+        out[base + x] = nearestL(tmp[0] + thr[row + (x % size)] * amp, tmp[1], tmp[2]);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Lab 空间 k-means 减色 + 簇心吸附色卡。返回 { indices: Uint16Array, used: number[] }。
+   * used 为升序去重的色表下标列表，长度必然 ≤ 实际簇数 ≤ maxColors。
+   */
+  function quantize(rgb, w, h, maxColors, matcher) {
+    w = w | 0;
+    h = h | 0;
+    var n = (w > 0 && h > 0) ? w * h : 0;
+    var indices = new Uint16Array(n);
+    var used = [];
+    if (n === 0) return { indices: indices, used: used };
+    var nearestL = resolveNearest(matcher);
+    var palSize = matcher.size;
+
+    // 1) 统计独立颜色（按四舍五入后的 RGB 去重）及其 Lab 均值、出现次数
+    var pxLab = new Float64Array(n * 3);
+    var pxKey = new Int32Array(n);
+    var keyToEntry = new Map();
+    var accL = [], accA = [], accB = [], accN = [];
+    for (var i = 0; i < n; i++) {
+      var j = i * 3;
+      labInto(rgb[j], rgb[j + 1], rgb[j + 2], pxLab, j);
+      var key = (clampByte(rgb[j]) << 16) | (clampByte(rgb[j + 1]) << 8) | clampByte(rgb[j + 2]);
+      var e = keyToEntry.get(key);
+      if (e === undefined) {
+        e = accL.length;
+        keyToEntry.set(key, e);
+        accL.push(0); accA.push(0); accB.push(0); accN.push(0);
+      }
+      accL[e] += pxLab[j]; accA[e] += pxLab[j + 1]; accB[e] += pxLab[j + 2]; accN[e]++;
+      pxKey[i] = e;
+    }
+    var uniq = accL.length;
+    var eL = new Float64Array(uniq), eA = new Float64Array(uniq), eB = new Float64Array(uniq), eW = new Float64Array(uniq);
+    for (var q = 0; q < uniq; q++) {
+      var cnt0 = accN[q];
+      eL[q] = accL[q] / cnt0; eA[q] = accA[q] / cnt0; eB[q] = accB[q] / cnt0; eW[q] = cnt0;
+    }
+
+    // 2) 目标簇数：夹到 [1, min(实际色数, 色表大小)]
+    var k = Math.floor(maxColors);
+    if (!(k >= 1)) k = 1;
+    if (k > uniq) k = uniq;
+    if (k > palSize) k = palSize;
+    if (k < 1) k = 1;
+
+    var cx = new Float64Array(k), cy = new Float64Array(k), cz = new Float64Array(k);
+
+    // 3) 确定性初始化：最多出现的颜色 + 最远点补种
+    var seed = 0;
+    for (var q1 = 1; q1 < uniq; q1++) if (eW[q1] > eW[seed]) seed = q1;
+    cx[0] = eL[seed]; cy[0] = eA[seed]; cz[0] = eB[seed];
+    var minD = new Float64Array(uniq);
+    for (q1 = 0; q1 < uniq; q1++) {
+      var dl0 = eL[q1] - cx[0], da0 = eA[q1] - cy[0], db0 = eB[q1] - cz[0];
+      minD[q1] = dl0 * dl0 + da0 * da0 + db0 * db0;
+    }
+    minD[seed] = -1;
+    var kk = 1;
+    for (var c1 = 1; c1 < k; c1++) {
+      var pick = -1, pickD = -1;
+      for (q1 = 0; q1 < uniq; q1++) if (minD[q1] > pickD) { pickD = minD[q1]; pick = q1; }
+      if (pick < 0) break;
+      cx[c1] = eL[pick]; cy[c1] = eA[pick]; cz[c1] = eB[pick];
+      minD[pick] = -1;
+      kk = c1 + 1;
+      for (q1 = 0; q1 < uniq; q1++) {
+        var dl1 = eL[q1] - cx[c1], da1 = eA[q1] - cy[c1], db1 = eB[q1] - cz[c1];
+        var d1 = dl1 * dl1 + da1 * da1 + db1 * db1;
+        if (d1 < minD[q1]) minD[q1] = d1;
+      }
+    }
+
+    // 4) 迭代（上限 KMEANS_MAX_ITER，空簇重新播种）
+    var assign = new Int32Array(uniq);
+    var sumL = new Float64Array(kk), sumA = new Float64Array(kk), sumB = new Float64Array(kk), sumW = new Float64Array(kk);
+    var iter = 0, changed = true;
+    while (iter < KMEANS_MAX_ITER && changed) {
+      iter++;
+      changed = false;
+      sumL.fill(0); sumA.fill(0); sumB.fill(0); sumW.fill(0);
+      for (q1 = 0; q1 < uniq; q1++) {
+        var l3 = eL[q1], a3 = eA[q1], b3 = eB[q1];
+        var best = 0, bestD = Infinity;
+        for (var c2 = 0; c2 < kk; c2++) {
+          var dl2 = l3 - cx[c2], da2 = a3 - cy[c2], db2 = b3 - cz[c2];
+          var d2 = dl2 * dl2 + da2 * da2 + db2 * db2;
+          if (d2 < bestD) { bestD = d2; best = c2; }
+        }
+        if (assign[q1] !== best) { assign[q1] = best; changed = true; }
+        var wgt = eW[q1];
+        sumL[best] += l3 * wgt; sumA[best] += a3 * wgt; sumB[best] += b3 * wgt; sumW[best] += wgt;
+      }
+      for (var c3 = 0; c3 < kk; c3++) {
+        if (sumW[c3] > 0) {
+          cx[c3] = sumL[c3] / sumW[c3]; cy[c3] = sumA[c3] / sumW[c3]; cz[c3] = sumB[c3] / sumW[c3];
+        } else {
+          var far = -1, farD = 0;
+          for (q1 = 0; q1 < uniq; q1++) {
+            var ac = assign[q1];
+            var dl3 = eL[q1] - cx[ac], da3 = eA[q1] - cy[ac], db3 = eB[q1] - cz[ac];
+            var d3 = dl3 * dl3 + da3 * da3 + db3 * db3;
+            if (d3 > farD) { farD = d3; far = q1; }
+          }
+          if (far >= 0) {
+            cx[c3] = eL[far]; cy[c3] = eA[far]; cz[c3] = eB[far];
+            assign[far] = c3;
+            changed = true;
+          }
+        }
+      }
+    }
+
+    // 5) 用最终簇心重算归属，再吸附到色卡
+    for (q1 = 0; q1 < uniq; q1++) {
+      var lf = eL[q1], af = eA[q1], bf = eB[q1];
+      var b2 = 0, bd2 = Infinity;
+      for (var c4 = 0; c4 < kk; c4++) {
+        var dlf = lf - cx[c4], daf = af - cy[c4], dbf = bf - cz[c4];
+        var df = dlf * dlf + daf * daf + dbf * dbf;
+        if (df < bd2) { bd2 = df; b2 = c4; }
+      }
+      assign[q1] = b2;
+    }
+    var palOf = new Int32Array(kk);
+    for (var c5 = 0; c5 < kk; c5++) palOf[c5] = nearestL(cx[c5], cy[c5], cz[c5]);
+
+    var seen = new Uint8Array(palSize);
+    for (var i2 = 0; i2 < n; i2++) {
+      var pi = palOf[assign[pxKey[i2]]];
+      indices[i2] = pi;
+      seen[pi] = 1;
+    }
+    for (var s2 = 0; s2 < palSize; s2++) if (seen[s2]) used.push(s2);
+    return { indices: indices, used: used };
+  }
+
+  var ColorKit = {
+    hexToRgb: hexToRgb,
+    rgbToHex: rgbToHex,
+    srgbToLab: srgbToLab,
+    srgbToOklab: srgbToOklab,
+    deltaE: deltaE,
+    deltaEOklab: deltaEOklab,
+    makeMatcher: makeMatcher,
+    ditherFS: ditherFS,
+    ditherBayer: ditherBayer,
+    quantize: quantize
+  };
+
+  if (typeof window !== 'undefined') window.ColorKit = ColorKit;
+  else root.ColorKit = ColorKit;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+</script>
+<script>
+/* ===== src/pipeline.js ===== */
+/**
+ * Pipeline —— 拼豆图纸生成管线（零依赖、核心为纯函数、无模块语法）
+ * 挂载点：window.Pipeline
+ * 依赖（同页全局，均已冻结）：window.PINDOU_PALETTES（src/palette.js）、window.ColorKit（src/color.js）
+ *
+ * 对外契约：
+ *   Pipeline.generateFromRGBA(rgba, srcW, srcH, opts) -> Pattern   // 纯函数，无 DOM，Node 可测
+ *   Pipeline.generate(imageLike, opts) -> Pattern                  // DOM 包装（img/canvas/ImageBitmap/ImageData）
+ *   Pipeline.DEFAULT_OPTS
+ *
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 【核心决策 1】降采样在【线性光空间】做区域平均，不是 sRGB 空间。理由原文：
+ * ───────────────────────────────────────────────────────────────────────────────
+ * 1) 物理正确性（主要依据）：一格拼豆在远处看是「一片面积混合后的光」。人眼与相机对
+ *    光量的积分是线性的，而 sRGB 只是显示器的非线性编码。在 sRGB 数值上直接求平均，
+ *    得到的既不是该区域的平均光量，也不是平均感知亮度。实测（本文件自测用例「黑白棋盘」）：
+ *      等量黑白像素降采样到 1 格 —— 线性光平均 = #BCBCBC（188，约 50% 光量）；
+ *      sRGB 空间平均 = #808080（128，只对应约 21% 光量）。
+ *    也就是说 sRGB 平均会把高对比细节（细线、纹理、边缘）系统性地压暗发灰，而这正是
+ *    降采样最典型的伪影；拼豆图纸上表现为「白底黑线上的细线变成一片脏灰」。
+ * 2) 与下游一致：ColorKit 的 Lab 内部先把 sRGB 线性化再算 L/a/b，匹配与抖动都在
+ *    「线性光导出的量」上工作。若在上游用 sRGB 平均、下游再线性化，同一份数据被非线性
+ *    混合两次，Lab 的 L 不再等价于「这格反射多少光」，抖动强度的量纲也随之失真。
+ *    在线性光上平均后，降采样 → 预处理 → 匹配 → 抖动的「光量」语义全程一致。
+ * 3) 抖动均值保真：FS/Bayer 保的是区域均值。线性光基底上抖动，区域平均光量与源区域一致；
+ *    sRGB 基底上抖动保的是均值编码值，展开成光量后整体偏暗。
+ * 已知代价（接受）：高细节区域的成品会比「浏览器缩略图」的观感略亮一点。这是正确方向；
+ *    用户仍可用 brightness / contrast 自行补偿。
+ *
+ * 【与 app.js 的锁定约定】
+ * app.js 通过 opts.prevPattern 把上一张 Pattern 传进来（已对接，见其 doGenerate），
+ * 锁定语义由本模块独家负责：锁定色号即使被减色丢掉也会并入 colors、colors 按自然序重排、
+ * cells 下标全量重映射，并继承 locked 标记；尺寸与上一张不一致时忽略锁定并把原因写进 warnings。
+ * 约定外的 opts.locks / keepLocks 本模块一律忽略，不做任何处理。
+ *
+ * 【已知边界】锁定无法表达「空格」：上一张图里 cells[i] === 65535 且 locked[i] === 1 时，
+ * snapshotLockedCode 因下标越界返回 null（见其第 3 行守卫），该格会按新参数正常参与填充，
+ * 而不会保留为空格。app.js 的点击改色总是先给该格赋一个色号，所以 UI 路径走不到这个边界。
+ *
+ * 【核心决策 2】编号与排序规则（冻结，最易崩的地方）
+ * Pattern.colors 恒按「色号自然序」排列：组序固定 A,B,C,D,E,F,G,H,M，组内按数字升序
+ *   （A9 在 A10 之前）。不是按颗数排、不是按首次出现顺序排。
+ * cells[i] 是 colors 的下标；图纸上的编号 = cells[i] + 1。编号因此与「参数怎么调」无关，
+ * 用户微调参数后重新生成的图纸可以逐格对照。
+ * counts 是另一个数组，按颗数降序，colors.length === counts.length（保证每个色号都有用量）。
+ *
+ * 【核心决策 3】管线的固定顺序
+ *   RGBA → 区域平均降采样(线性光) → alpha 判定空格 → 预处理 → 减色(可选) → 抖动/最近邻 → 统计 → Pattern
+ * 减色必须在抖动之前：quantize 的角色是「先把调色板收窄」，像素本身不被替换；随后抖动/
+ * 最近邻都跑在收窄后的调色板上，因此 Pattern.colors ⊆ 减色子集。若先抖动再减色，
+ * 抖动辛苦铺开的中间色会被减色抹掉，两种方法的对比也就失去意义。
+ *
+ * 【预处理固定顺序】autoWB → autoLevels → brightness → contrast → saturation
+ *   autoWB     灰度世界假设：整图（非空格）通道均值缩放到中性灰。
+ *   autoLevels 直方图拉伸，每通道各裁 0.5% 分位抗噪点。
+ *   brightness v += b*2.55                （b ∈ [-100,100]，0 = 不变）
+ *   contrast   v = (v-128)*f + 128，f = 259*(C+255)/(255*(259-C))，C = c*2.55
+ *   saturation v = gray + (v-gray)*(1+s/100)，gray = 0.299r+0.587g+0.114b
+ *   全部为确定性点运算，无随机、无时间依赖；每步后夹紧到 [0,255]。
+ *
+ * 【空格与占位约定】
+ *   alpha < 128 的源像素视为透明，不参与区域平均（避免透明黑边把颜色拉暗）。
+ *   整格全透明 → cells[i] = 65535，不计入 counts / stats.total，也不占用 colors 的色号。
+ *   抖动阶段 ColorKit 只接受稠密栅格，故空格先用「行主序前一个非空格的颜色」占位，
+ *   抖动结束后再按空格标记写回 65535；占位色与邻域色差很小，对误差扩散的影响可忽略。
+ *   若整图没有任何非空像素，直接返回全空图纸（不构造 matcher）。
+ *
+ * 【自测实测值（Node，见任务回报）】
+ *   黑白棋盘降采样到 1 格 → #BCBCBC（线性光空间，符合本决策 1）。
+ * ═══════════════════════════════════════════════════════════════════════════════
+ */
+;(function (root) {
+  'use strict';
+
+  var BEAD_MM = 2.6;            // 单颗拼豆外径（毫米）
+  var BOARD_CELLS = 29;         // 一块板 29×29 格
+  var MAX_DIM = 87;             // 3 板 = 87 格
+  var EMPTY = 65535;            // cells 里的空格标记
+  var ALPHA_MIN = 128;          // alpha < 128 视为透明
+  var MAX_SRC_PIXELS = 1200 * 1200;  // generate() 读取源图的像素上限（防止把 4000×3000 全量读进来）
+  var GROUP_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'M'];
+  var DEFAULT_PALETTE_ID = 'mard-221-getcolors';
+
+  /**
+   * 默认参数：与 src/ui.html 的默认控件值保持一致（否则「不传 opts」与「用界面默认值」
+   * 会得到两张不同的图纸，用户会认为有 bug）。逐项理由：
+   *   method 'nearest'      忠实、快、色块最干净，便于用户先看清原图结构再切 FS/Bayer 对比。
+   *   bayerN 4              UI 默认 4×4；4×4 在小格数（29×29）下纹理比 8×8 更细。
+   *   ditherStrength 0.3    UI 滑杆默认 30%；全强度(1)在拼豆这种「色块即成品」的载体上
+   *                         会把边缘打散成杂色，0.3 是稳妥起点。
+   *   quantize.enabled true 默认必须「拼得完」：随机噪声图用最近邻会命中 172/221 个色号，
+   *                         真实照片也常上百色，而没有人手上有 172 种拼豆。默认开减色。
+   *   quantize.maxColors 24 一板 29×29 = 841 颗；常用拼豆作品通常 10–25 色，24 落在
+   *                         「表现力够 + 买得到豆」的甜点上：87×87 满配时每色平均仍有
+   *                         ~315 颗，足以表现渐变；同时与 UI 的 maxColors 默认值一致。
+   *   paletteId             默认主谱系 mard-221-getcolors（palette.js 的第一个 key）。
+   *   gridW/gridH null      未给时按 boards + 原图宽高比推导；给出则优先并夹到 [1,87]。
+   *   boards 1              一板起步，最省豆。
+   * 说明：opts 里出现约定外的附加字段（如 app.js 的 keepLocks / locks）一律忽略，不报错。
+   */
+  var DEFAULT_OPTS = {
+    gridW: null,
+    gridH: null,
+    boards: 1,
+    lockAspect: true,
+    paletteId: DEFAULT_PALETTE_ID,
+    preprocess: { brightness: 0, contrast: 0, saturation: 0, autoWB: false, autoLevels: false },
+    method: 'nearest',
+    bayerN: 4,
+    ditherStrength: 0.3,
+    quantize: { enabled: true, maxColors: 24 },
+    prevPattern: null
+  };
+
+  /* ------------------------------------------------------------------ 小工具 */
+
+  function isFin(v) { return typeof v === 'number' && v === v && v !== Infinity && v !== -Infinity; }
+
+  function num(v, d) { return isFin(v) ? v : d; }
+
+  function numOrNull(v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'string' && v.trim() !== '') { var p = parseFloat(v); return isFin(p) ? p : null; }
+    return isFin(v) ? v : null;
+  }
+
+  function clampInt(v, lo, hi) {
+    var n = Math.round(v);
+    if (!isFin(n)) return lo;
+    return n < lo ? lo : (n > hi ? hi : n);
+  }
+
+  function clampNum(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+  function byte(v) {
+    var n = Math.round(isFin(v) ? v : 0);
+    return n < 0 ? 0 : (n > 255 ? 255 : n);
+  }
+
+  function round2(v) { return Math.round(v * 100) / 100; }
+
+  /* -------------------------------------------------- 色号自然序（冻结规则） */
+
+  function groupRank(group) {
+    var s = (group === null || group === undefined) ? '' : String(group).toUpperCase();
+    var k = GROUP_ORDER.indexOf(s);
+    return k >= 0 ? k : GROUP_ORDER.length + 1;   // 未知组排在 A..M 之后
+  }
+
+  function codeNumber(code) {
+    var m = /(\d+)/.exec(String(code));
+    return m ? parseInt(m[1], 10) : -1;
+  }
+
+  /** 自然序比较：组序 A,B,C,D,E,F,G,H,M → 组内数字升序 → 同号按字符串兜底。 */
+  function compareCodes(a, b) {
+    var ra = groupRank(a.group), rb = groupRank(b.group);
+    if (ra !== rb) return ra - rb;
+    if (ra > GROUP_ORDER.length) {
+      var ga = String(a.group).toUpperCase(), gb = String(b.group).toUpperCase();
+      if (ga !== gb) return ga < gb ? -1 : 1;
+    }
+    var na = codeNumber(a.code), nb = codeNumber(b.code);
+    if (na !== nb) return na - nb;
+    var ca = String(a.code), cb = String(b.code);
+    return ca < cb ? -1 : (ca > cb ? 1 : 0);
+  }
+
+  /* --------------------------------------------------------------- 线性光 */
+
+  function srgbToLinear01(v) {           // v ∈ [0,1]
+    if (!(v > 0)) return 0;
+    if (v >= 1) return 1;
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  }
+
+  function linearToSrgb255(l) {          // 线性光 → sRGB 0–255（浮点，不取整）
+    if (!(l > 0)) return 0;
+    if (l >= 1) return 255;
+    var v = l <= 0.0031308 ? l * 12.92 : 1.055 * Math.pow(l, 1 / 2.4) - 0.055;
+    return v * 255;
+  }
+
+  // 字节 → 线性光 查表，热循环不重复调用 Math.pow
+  var BYTE_TO_LIN = new Float64Array(256);
+  (function () {
+    for (var i = 0; i < 256; i++) BYTE_TO_LIN[i] = srgbToLinear01(i / 255);
+  })();
+
+  /* ------------------------------------------------------------------ 色表 */
+
+  function resolvePalette(paletteId, warnings) {
+    var all = root.PINDOU_PALETTES;
+    if (!all) throw new Error('Pipeline: 未找到全局色表 window.PINDOU_PALETTES（请先加载 src/palette.js）');
+    var key = (typeof paletteId === 'string' && paletteId) ? paletteId : DEFAULT_PALETTE_ID;
+    var entry = all[key];
+    if (!entry || !entry.colors || !entry.colors.length) {
+      var keys = Object.keys(all), fb = null;
+      for (var i = 0; i < keys.length; i++) {
+        var e = all[keys[i]];
+        if (e && e.colors && e.colors.length) { fb = keys[i]; break; }
+      }
+      if (!fb) throw new Error('Pipeline: 色表数据为空');
+      warnings.push('色表 "' + key + '" 不存在，已回退到 "' + fb + '"');
+      key = fb; entry = all[fb];
+    }
+    var CK = root.ColorKit;
+    var src = entry.colors, colors = new Array(src.length);
+    for (var j = 0; j < src.length; j++) {
+      var c = src[j] || {};
+      var rgb = null;
+      if (c.rgb && typeof c.rgb.length === 'number' && c.rgb.length >= 3) {
+        rgb = [byte(c.rgb[0]), byte(c.rgb[1]), byte(c.rgb[2])];
+      } else if (typeof c.hex === 'string' && CK && CK.hexToRgb) {
+        rgb = CK.hexToRgb(c.hex);
+      }
+      if (!rgb) rgb = [0, 0, 0];
+      var hex = (typeof c.hex === 'string' && c.hex) ? c.hex : ((CK && CK.rgbToHex) ? CK.rgbToHex(rgb) : '#000000');
+      colors[j] = {
+        code: c.code === undefined ? String(j) : String(c.code),
+        hex: hex,
+        rgb: rgb,
+        group: c.group === undefined ? '' : String(c.group)
+      };
+    }
+    return { id: key, colors: colors };
+  }
+
+  /* -------------------------------------------------------------- 参数解读 */
+
+  /** 只读解析，绝不修改传入的 opts。 */
+  function readOpts(opts) {
+    var o = (opts && typeof opts === 'object') ? opts : {};
+    var q = (o.quantize && typeof o.quantize === 'object') ? o.quantize : {};
+    var pp = (o.preprocess && typeof o.preprocess === 'object') ? o.preprocess : {};
+    var method = (o.method === 'fs' || o.method === 'bayer' || o.method === 'nearest') ? o.method : DEFAULT_OPTS.method;
+    return {
+      gridW: numOrNull(o.gridW),
+      gridH: numOrNull(o.gridH),
+      boards: clampInt(num(o.boards, DEFAULT_OPTS.boards), 1, 3),
+      lockAspect: o.lockAspect === undefined ? DEFAULT_OPTS.lockAspect : !!o.lockAspect,
+      paletteId: typeof o.paletteId === 'string' ? o.paletteId : '',
+      method: method,
+      methodGiven: o.method,
+      bayerN: clampInt(num(o.bayerN, DEFAULT_OPTS.bayerN), 4, 8) === 8 ? 8 : 4,
+      ditherStrength: clampNum(num(o.ditherStrength, DEFAULT_OPTS.ditherStrength), 0, 1),
+      preprocess: {
+        brightness: clampNum(num(pp.brightness, 0), -100, 100),
+        contrast: clampNum(num(pp.contrast, 0), -100, 100),
+        saturation: clampNum(num(pp.saturation, 0), -100, 100),
+        autoWB: !!pp.autoWB,
+        autoLevels: !!pp.autoLevels
+      },
+      quantize: {
+        enabled: q.enabled === undefined ? DEFAULT_OPTS.quantize.enabled : !!q.enabled,
+        maxColors: clampInt(num(q.maxColors, DEFAULT_OPTS.quantize.maxColors), 1, 221)
+      },
+      prevPattern: (o.prevPattern && typeof o.prevPattern === 'object') ? o.prevPattern : null
+    };
+  }
+
+  /**
+   * 尺寸推导。长边上限 = 29 * boards（29/58/87）。
+   * - gridW/gridH 都未给：长边取上限，短边按原图宽高比推导后夹到 [1,87]（极端比例不强行方形）。
+   * - 只给一边：另一边按 lockAspect 推导（true = 按原图比例；false = 取与已给一边相同的格数）。
+   * - 两边都给：优先采用，各自夹到 [1,87]（是否等比拉伸由调用方决定，管线不擅自改用户输入）。
+   */
+  function deriveDims(sw, sh, o, warnings) {
+    var w = o.gridW, h = o.gridH;
+    var aspect = sw / sh;                    // 宽/高，恒 > 0
+    if (w === null && h === null) {
+      var lim = BOARD_CELLS * o.boards;      // 29 / 58 / 87
+      if (aspect >= 1) { w = lim; h = clampInt(Math.round(lim / aspect), 1, MAX_DIM); }
+      else { h = lim; w = clampInt(Math.round(lim * aspect), 1, MAX_DIM); }
+    } else if (w === null) {
+      h = clampInt(h, 1, MAX_DIM);
+      w = o.lockAspect ? clampInt(Math.round(h * aspect), 1, MAX_DIM) : h;
+    } else if (h === null) {
+      w = clampInt(w, 1, MAX_DIM);
+      h = o.lockAspect ? clampInt(Math.round(w / aspect), 1, MAX_DIM) : w;
+    } else {
+      var cw = clampInt(w, 1, MAX_DIM), ch = clampInt(h, 1, MAX_DIM);
+      if (cw !== Math.round(w) || ch !== Math.round(h)) {
+        warnings.push('gridW/gridH 已夹到合法范围 [1,87]：' + w + '×' + h + ' → ' + cw + '×' + ch);
+      }
+      w = cw; h = ch;
+    }
+    return { w: w, h: h };
+  }
+
+  /* ------------------------------------------------------- 区域平均降采样 */
+
+  /** 归一化成 RGBA 字节。非 Uint8 输入按 ToUint8Clamp 规则转（确定性）。 */
+  function toBytes(rgba, need) {
+    if (rgba instanceof Uint8Array) return rgba;                       // 覆盖 Uint8ClampedArray
+    var out = new Uint8ClampedArray(rgba.length);
+    out.set(rgba);
+    return out;
+  }
+
+  /**
+   * box filter 降采样：每个目标格覆盖源图一块整数对齐的区域，逐像素在线性光空间累加，
+   * 再转回 sRGB 浮点。alpha < 128 的像素直接跳过（不计入平均、不拉暗颜色）。
+   * 全透明格 → empty[i] = 1，rgb 留 0。
+   */
+  function downsample(rgba, sw, sh, gw, gh) {
+    var rgb = new Float64Array(gw * gh * 3);
+    var empty = new Uint8Array(gw * gh);
+    for (var gy = 0; gy < gh; gy++) {
+      var y0 = Math.floor(gy * sh / gh), y1 = Math.floor((gy + 1) * sh / gh);
+      if (y1 <= y0) y1 = y0 + 1;
+      if (y1 > sh) y1 = sh;
+      for (var gx = 0; gx < gw; gx++) {
+        var x0 = Math.floor(gx * sw / gw), x1 = Math.floor((gx + 1) * sw / gw);
+        if (x1 <= x0) x1 = x0 + 1;
+        if (x1 > sw) x1 = sw;
+        var sR = 0, sG = 0, sB = 0, n = 0;
+        for (var sy = y0; sy < y1; sy++) {
+          var rowBase = sy * sw;
+          for (var sx = x0; sx < x1; sx++) {
+            var p = (rowBase + sx) * 4;
+            if (rgba[p + 3] < ALPHA_MIN) continue;
+            sR += BYTE_TO_LIN[rgba[p]];
+            sG += BYTE_TO_LIN[rgba[p + 1]];
+            sB += BYTE_TO_LIN[rgba[p + 2]];
+            n++;
+          }
+        }
+        var gi = gy * gw + gx;
+        if (n === 0) { empty[gi] = 1; continue; }
+        var q = gi * 3;
+        rgb[q] = linearToSrgb255(sR / n);
+        rgb[q + 1] = linearToSrgb255(sG / n);
+        rgb[q + 2] = linearToSrgb255(sB / n);
+      }
+    }
+    return { rgb: rgb, empty: empty };
+  }
+
+  /* -------------------------------------------------------------- 预处理 */
+
+  function emptyCount(empty) {
+    var n = 0;
+    for (var i = 0; i < empty.length; i++) if (!empty[i]) n++;
+    return n;
+  }
+
+  function grayWorld(rgb, empty) {
+    var mR = 0, mG = 0, mB = 0, n = 0;
+    for (var i = 0; i < empty.length; i++) {
+      if (empty[i]) continue;
+      var q = i * 3;
+      mR += rgb[q]; mG += rgb[q + 1]; mB += rgb[q + 2]; n++;
+    }
+    if (n === 0) return;
+    mR /= n; mG /= n; mB /= n;
+    var mg = (mR + mG + mB) / 3;
+    if (!(mR > 1e-6) || !(mG > 1e-6) || !(mB > 1e-6)) return;   // 全黑 / 退化图不动
+    var kR = mg / mR, kG = mg / mG, kB = mg / mB;
+    for (var j = 0; j < empty.length; j++) {
+      if (empty[j]) continue;
+      var p = j * 3;
+      rgb[p] = clampNum(rgb[p] * kR, 0, 255);
+      rgb[p + 1] = clampNum(rgb[p + 1] * kG, 0, 255);
+      rgb[p + 2] = clampNum(rgb[p + 2] * kB, 0, 255);
+    }
+  }
+
+  function autoLevels(rgb, empty) {
+    var n = emptyCount(empty);
+    if (n === 0) return;
+    var cut = Math.floor(n * 0.005);                 // 每通道各裁 0.5% 分位
+    var hist = [new Int32Array(256), new Int32Array(256), new Int32Array(256)];
+    for (var i = 0; i < empty.length; i++) {
+      if (empty[i]) continue;
+      var q = i * 3;
+      hist[0][byte(rgb[q])]++;
+      hist[1][byte(rgb[q + 1])]++;
+      hist[2][byte(rgb[q + 2])]++;
+    }
+    var lo = [0, 0, 0], hi = [255, 255, 255];
+    for (var ch = 0; ch < 3; ch++) {
+      var h = hist[ch], acc = 0, a, b;
+      for (a = 0; a < 256; a++) { acc += h[a]; if (acc > cut) break; }
+      if (a > 255) a = 255;
+      acc = 0;
+      for (b = 255; b >= 0; b--) { acc += h[b]; if (acc > cut) break; }
+      if (b < 0) b = 0;
+      lo[ch] = a; hi[ch] = b;
+    }
+    var sc = [1, 1, 1];
+    for (var c = 0; c < 3; c++) if (hi[c] > lo[c]) sc[c] = 255 / (hi[c] - lo[c]); else sc[c] = 0;
+    for (var j = 0; j < empty.length; j++) {
+      if (empty[j]) continue;
+      var p = j * 3;
+      for (var k = 0; k < 3; k++) {
+        var v = rgb[p + k];
+        rgb[p + k] = (sc[k] === 0) ? clampNum(v, 0, 255)
+          : clampNum((v - lo[k]) * sc[k], 0, 255);
+      }
+    }
+  }
+
+  /** brightness → contrast → saturation（单趟完成，与三趟点运算等价）。 */
+  function toneAndSaturation(rgb, empty, bv, cv, sv) {
+    var shift = bv * 2.55;
+    var C = cv * 2.55;
+    var f = (259 * (C + 255)) / (255 * (259 - C));      // C = 0 时 f = 1（恒等）
+    var sat = 1 + sv / 100;
+    for (var i = 0; i < empty.length; i++) {
+      if (empty[i]) continue;
+      var p = i * 3;
+      var r = clampNum(rgb[p] + shift, 0, 255);
+      var g = clampNum(rgb[p + 1] + shift, 0, 255);
+      var b = clampNum(rgb[p + 2] + shift, 0, 255);
+      r = clampNum((r - 128) * f + 128, 0, 255);
+      g = clampNum((g - 128) * f + 128, 0, 255);
+      b = clampNum((b - 128) * f + 128, 0, 255);
+      var gray = 0.299 * r + 0.587 * g + 0.114 * b;
+      r = clampNum(gray + (r - gray) * sat, 0, 255);
+      g = clampNum(gray + (g - gray) * sat, 0, 255);
+      b = clampNum(gray + (b - gray) * sat, 0, 255);
+      rgb[p] = r; rgb[p + 1] = g; rgb[p + 2] = b;
+    }
+  }
+
+  function preprocess(rgb, empty, pp) {
+    if (pp.autoWB) grayWorld(rgb, empty);
+    if (pp.autoLevels) autoLevels(rgb, empty);
+    if (pp.brightness !== 0 || pp.contrast !== 0 || pp.saturation !== 0) {
+      toneAndSaturation(rgb, empty, pp.brightness, pp.contrast, pp.saturation);
+    }
+  }
+
+  /* ------------------------------------------------------------ 分类与统计 */
+
+  /** 最近邻（逐格吸附到 matcher 的调色板）。 */
+  function nearestPass(work, w, h, matcher) {
+    var out = new Uint16Array(w * h);
+    var CK = root.ColorKit;
+    for (var i = 0; i < out.length; i++) {
+      var p = i * 3;
+      var lab = CK.srgbToLab([work[p], work[p + 1], work[p + 2]]);
+      out[i] = matcher._nearestL ? matcher._nearestL(lab[0], lab[1], lab[2]) : matcher.nearestLab(lab);
+    }
+    return out;
+  }
+
+  function classify(work, w, h, matcher, o) {
+    var CK = root.ColorKit;
+    if (o.method === 'fs') return CK.ditherFS(work, w, h, matcher, o.ditherStrength);
+    if (o.method === 'bayer') return CK.ditherBayer(work, w, h, matcher, o.bayerN, o.ditherStrength);
+    return nearestPass(work, w, h, matcher);
+  }
+
+  /* ------------------------------------------------------------ 锁定格处理 */
+
+  function findPaletteColorByCode(palette, code) {
+    for (var i = 0; i < palette.length; i++) if (palette[i].code === code) return palette[i];
+    return null;
+  }
+
+  function snapshotLockedCode(prev, i) {
+    if (!prev || !prev.locked || !prev.locked[i]) return null;
+    if (!prev.cells || !prev.colors) return null;
+    var ci = prev.cells[i];
+    if (!(ci >= 0 && ci < prev.colors.length)) return null;
+    var c = prev.colors[ci];
+    if (!c || c.code === undefined || c.code === null) return null;
+    return String(c.code);
+  }
+
+  function copyColor(c) {
+    return { code: c.code, hex: c.hex, rgb: [c.rgb[0], c.rgb[1], c.rgb[2]], group: c.group };
+  }
+
+  /* -------------------------------------------------------------- 主装配 */
+
+  function buildPattern(gw, gh, ds, o, pal, warnings) {
+    var n = gw * gh;
+    var rgb = ds.rgb, empty = ds.empty;
+
+    preprocess(rgb, empty, o.preprocess);
+
+    // 非空像素压缩成一维栅格交给 quantize（它只接受稠密栅格；空格不参与减色统计）
+    var nonEmpty = emptyCount(empty);
+    var redList = null;                       // 本次使用的调色板子集（matcher 的 index 空间）
+    if (nonEmpty > 0) {
+      var packed = new Float32Array(nonEmpty * 3);
+      var k = 0;
+      for (var i = 0; i < n; i++) {
+        if (empty[i]) continue;
+        var q = i * 3;
+        packed[k * 3] = rgb[q]; packed[k * 3 + 1] = rgb[q + 1]; packed[k * 3 + 2] = rgb[q + 2];
+        k++;
+      }
+      var matcher = root.ColorKit.makeMatcher(pal.colors);
+      if (o.quantize.enabled) {
+        // quantize 返回的 indices 是【色表下标】（见 color.js 第 464/468 行：簇心先经
+        // nearestL 吸附成 palOf[]，再用 palOf 填 indices）。这里只取 used 作为调色板收窄依据。
+        var qr = root.ColorKit.quantize(packed, nonEmpty, 1, o.quantize.maxColors, matcher);
+        var used = qr.used;
+        redList = new Array(used.length);
+        for (var u = 0; u < used.length; u++) redList[u] = pal.colors[used[u]];
+        if (redList.length === 0) redList = pal.colors;      // 理论上不会发生
+      } else {
+        redList = pal.colors;
+      }
+    }
+
+    // 空格占位（行主序前一个非空格的颜色；若之前没有则用整图第一个非空格的颜色）后分类
+    var cells = null;
+    if (redList && redList.length) {
+      var work = new Float32Array(n * 3);
+      var carryR = 0, carryG = 0, carryB = 0, has = false;
+      for (var f = 0; f < n; f++) {
+        if (!empty[f]) { var pf = f * 3; carryR = rgb[pf]; carryG = rgb[pf + 1]; carryB = rgb[pf + 2]; has = true; break; }
+      }
+      for (var c = 0; c < n; c++) {
+        var pc = c * 3;
+        if (!empty[c]) { carryR = rgb[pc]; carryG = rgb[pc + 1]; carryB = rgb[pc + 2]; has = true; }
+        work[pc] = has ? carryR : 0;
+        work[pc + 1] = has ? carryG : 0;
+        work[pc + 2] = has ? carryB : 0;
+      }
+      cells = classify(work, gw, gh, root.ColorKit.makeMatcher(redList), o);
+    } else {
+      cells = new Uint16Array(n);
+    }
+
+    /* 锁定格：并入色号 → 自然序排序 → 全量重映射下标 */
+    var forcedCode = new Array(n);            // 只对锁定格有值
+    var locked = new Uint8Array(n);
+    var prev = o.prevPattern;
+    if (prev) {
+      var sameSize = (Math.round(prev.w) === gw && Math.round(prev.h) === gh
+        && prev.cells && typeof prev.cells.length === 'number'
+        && prev.cells.length === n && prev.colors);
+      if (sameSize) {
+        for (var s = 0; s < n; s++) {
+          var code = snapshotLockedCode(prev, s);
+          if (code === null) continue;
+          forcedCode[s] = code;
+          locked[s] = 1;
+        }
+      } else {
+        warnings.push('prevPattern 尺寸（' + prev.w + '×' + prev.h + '）与本次（'
+          + gw + '×' + gh + '）不一致，已忽略锁定格（无法逐格对应）');
+      }
+    }
+
+    // 1) 收齐本次真正用到的色号（含锁定格并入的新色号）
+    var prevColors = (prev && prev.colors && typeof prev.colors.length === 'number') ? prev.colors : [];
+    var byCode = new Map();
+    var set = [];
+    function ensure(color) {
+      var code = String(color.code);
+      var idx = byCode.get(code);
+      if (idx !== undefined) return idx;
+      idx = set.length;
+      byCode.set(code, idx);
+      set.push(copyColor(color));
+      return idx;
+    }
+    if (redList) {
+      // 只登记「真正被格点用到」的色号：未被用到的色号不进 colors（colors.length === counts.length 依赖这一点）
+      for (var m = 0; m < n; m++) {
+        if (empty[m]) continue;
+        ensure(redList[cells[m]]);
+      }
+    }
+    for (var t = 0; t < n; t++) {
+      if (!forcedCode[t]) continue;
+      // 锁定色号优先取当前色表的规范值；色表里没有（例如用户换过色表）则沿用历史色值
+      var canonical = findPaletteColorByCode(pal.colors, forcedCode[t])
+        || findPaletteColorByCode(prevColors, forcedCode[t]);
+      if (canonical) ensure(canonical);
+    }
+
+    // 2) 按色号自然序排序，建立「色号 → 终值下标」
+    set.sort(compareCodes);
+    byCode = new Map();
+    for (var v = 0; v < set.length; v++) byCode.set(String(set[v].code), v);
+
+    // 3) 全量重映射：cells 下标必须依然指向正确的色号
+    var finalCells = new Uint16Array(n);
+    for (var z = 0; z < n; z++) {
+      // 锁定格优先于空格判定：用户锁了这格就说明他要求这里保留这颗豆
+      // （边界：只有「锁住一个有豆的格」才走到这里；锁一个空格无法表达，见 snapshotLockedCode）
+      if (forcedCode[z]) { finalCells[z] = byCode.get(forcedCode[z]); continue; }
+      if (empty[z]) { finalCells[z] = EMPTY; continue; }
+      var old = cells[z];
+      finalCells[z] = byCode.get(String(redList[old].code));
+    }
+
+    // 4) 统计（空格不计入）
+    var acc = new Int32Array(set.length);
+    var total = 0;
+    for (var y = 0; y < n; y++) {
+      var ci = finalCells[y];
+      if (ci >= 0 && ci < set.length) { acc[ci]++; total++; }
+    }
+    var counts = [];
+    for (var x = 0; x < set.length; x++) {
+      if (acc[x] > 0) {
+        counts.push({ code: set[x].code, hex: set[x].hex, rgb: set[x].rgb, count: acc[x], _i: x });
+      }
+    }
+    counts.sort(function (a, b) { return (b.count - a.count) || (a._i - b._i); });
+    for (var w2 = 0; w2 < counts.length; w2++) delete counts[w2]._i;
+    if (counts.length !== set.length) {
+      warnings.push('内部不一致：colors ' + set.length + ' 项，counts ' + counts.length + ' 项');
+    }
+
+    return {
+      w: gw,
+      h: gh,
+      beadMM: BEAD_MM,
+      paletteId: pal.id,
+      colors: set,
+      cells: finalCells,
+      locked: locked,
+      counts: counts,
+      stats: {
+        total: total,
+        usedColors: set.length,
+        boardX: Math.ceil(gw / BOARD_CELLS),
+        boardY: Math.ceil(gh / BOARD_CELLS),
+        cmW: round2(gw * BEAD_MM / 10),
+        cmH: round2(gh * BEAD_MM / 10)
+      },
+      warnings: warnings
+    };
+  }
+
+  /* ------------------------------------------------------------- 公开 API */
+
+  /** 纯函数核心：无 DOM 依赖，可在 Node 中直接跑。不修改 rgba / opts / opts.prevPattern。 */
+  function generateFromRGBA(rgba, srcW, srcH, opts) {
+    if (!rgba || typeof rgba.length !== 'number') {
+      throw new Error('Pipeline.generateFromRGBA: rgba 必须是像素缓冲（Uint8ClampedArray 等）');
+    }
+    var sw = Math.round(num(srcW, 0)), sh = Math.round(num(srcH, 0));
+    if (!(sw >= 1) || !(sh >= 1)) throw new Error('Pipeline.generateFromRGBA: 源图尺寸非法（' + srcW + '×' + srcH + '）');
+    if (rgba.length < sw * sh * 4) {
+      throw new Error('Pipeline.generateFromRGBA: rgba 长度不足（需要 ' + (sw * sh * 4) + '，实际 ' + rgba.length + '）');
+    }
+    if (!root.ColorKit) throw new Error('Pipeline: 未找到 window.ColorKit（请先加载 src/color.js）');
+
+    var warnings = [];
+    var o = readOpts(opts);
+    if (o.methodGiven !== undefined && o.methodGiven !== null && o.method !== o.methodGiven) {
+      warnings.push('method "' + o.methodGiven + '" 非法，已回退到 "' + o.method + '"');
+    }
+    var pal = resolvePalette(o.paletteId, warnings);
+    var dims = deriveDims(sw, sh, o, warnings);
+    var bytes = toBytes(rgba, sw * sh * 4);
+    var ds = downsample(bytes, sw, sh, dims.w, dims.h);
+    return buildPattern(dims.w, dims.h, ds, o, pal, warnings);
+  }
+
+  function sourceSize(imageLike) {
+    if (!imageLike) return null;
+    var w = imageLike.naturalWidth || imageLike.videoWidth || imageLike.width;
+    var h = imageLike.naturalHeight || imageLike.videoHeight || imageLike.height;
+    if (isFin(w) && isFin(h) && w >= 1 && h >= 1) return { w: Math.round(w), h: Math.round(h) };
+    return null;
+  }
+
+  /**
+   * DOM 包装：把 imageLike 画到 canvas 取 ImageData，再交给 generateFromRGBA。
+   * 支持 HTMLImageElement / HTMLCanvasElement / ImageBitmap / OffscreenCanvas / ImageData。
+   * 源图超过 MAX_SRC_PIXELS 时先等比缩小再读像素，避免把 4000×3000 全量读进内存。
+   * 注意：这条路径依赖浏览器环境，Node 里只测过「缺 DOM 时报错清晰」。
+   */
+  function generate(imageLike, opts) {
+    // 已经是 ImageData：直接用
+    if (imageLike && imageLike.data && isFin(imageLike.width) && isFin(imageLike.height)) {
+      return generateFromRGBA(imageLike.data, imageLike.width, imageLike.height, opts);
+    }
+    var doc = root.document;
+    if (!doc || typeof doc.createElement !== 'function') {
+      throw new Error('Pipeline.generate: 当前环境没有 DOM，请改用 generateFromRGBA(rgba, w, h, opts)');
+    }
+    var size = sourceSize(imageLike);
+    if (!size) throw new Error('Pipeline.generate: 无法识别图片来源（缺少 width/height）');
+    var scale = 1;
+    var px = size.w * size.h;
+    if (px > MAX_SRC_PIXELS) scale = Math.sqrt(MAX_SRC_PIXELS / px);
+    var dw = Math.max(1, Math.round(size.w * scale));
+    var dh = Math.max(1, Math.round(size.h * scale));
+
+    var cv = doc.createElement('canvas');
+    cv.width = dw;
+    cv.height = dh;
+    var ctx = cv.getContext ? cv.getContext('2d') : null;
+    if (!ctx) throw new Error('Pipeline.generate: 无法获取 2D 绘图上下文');
+    ctx.drawImage(imageLike, 0, 0, dw, dh);
+    var img = ctx.getImageData(0, 0, dw, dh);
+    return generateFromRGBA(img.data, dw, dh, opts);
+  }
+
+  root.Pipeline = {
+    generateFromRGBA: generateFromRGBA,
+    generate: generate,
+    DEFAULT_OPTS: DEFAULT_OPTS
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+</script>
+<script>
+/* ===== src/render.js ===== */
+/*!
+ * src/render.js —— 拼豆图纸渲染层（零依赖 / 零外部资源）
+ *
+ * 职责：
+ *   1) drawPattern  把 Pattern 画成可打印的白底图纸（网格 + 29 格板边界 + 刻度 + 编号）
+ *   2) drawCompare  原图 / 图纸 等高并排对照
+ *   3) exportPNG    canvas -> PNG 下载
+ *   4) exportCSV    Pattern -> CSV 字符串（UTF-8 BOM，由调用方负责下载）
+ *   5) legendHTML   Pattern -> 图例 HTML 片段
+ *
+ * 硬约束：
+ *   - 只读 Pattern（不重排 colors、不改 cells）
+ *   - 编号规则：图纸上的数字 = cells[i] + 1（colors 下标从 0 开始，编号从 1 开始）
+ *   - 图纸画布永远是白底（可打印文档），深色主题只属于 UI
+ *   - 无 import / export / require，全部通过 window.Render 挂载
+ */
+(function () {
+  'use strict';
+
+  /* ---------------------------------------------------------------- 常量 */
+
+  var EMPTY = 65535;         // cells 里的空格 / 不用豆标记
+  var BOARD = 29;            // 一块拼豆板的边长（格）
+  var MIN_CODE_PX = 9;       // cellPx 小于此值不写编号（4px 数字是噪声不是信息）
+  var MIN_CELL_PX = 4;
+  var MAX_CELL_PX = 40;
+  var DEFAULT_CELL_PX = 12;
+  var MIN_PAD = 40;          // 刻度区最小边距
+  var GRID_HALF = 0.5;       // 1px 线落在像素中心，避免糊边
+
+  var HEX_FULL = /^#[0-9a-fA-F]{6}$/;
+  var HEX_SHORT = /^#[0-9a-fA-F]{3}$/;
+
+  var FONT_SANS = 'system-ui, "Segoe UI", "Microsoft YaHei", sans-serif';
+  var FONT_MONO = 'ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace';
+
+  var C = {
+    paper: '#FFFFFF',        // 纸底
+    grid: '#DCE0E6',         // 细网格线
+    board: '#39424F',        // 29 格板边界线（加粗）
+    rulerLine: '#98A2B3',
+    rulerText: '#5A6472',
+    rulerBoardText: '#39424F',
+    title: '#2B3240',
+    placeholder: '#EEF1F5',
+    placeholderText: '#8A94A6'
+  };
+
+  /* ------------------------------------------------------------ 小工具 */
+
+  function isNum(v) { return typeof v === 'number' && isFinite(v); }
+
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+  function clampCellPx(v) {
+    if (!isNum(v) || v <= 0) return DEFAULT_CELL_PX;
+    return clamp(Math.round(v), MIN_CELL_PX, MAX_CELL_PX);
+  }
+
+  function normalizeOpts(viewOpts) {
+    var o = viewOpts || {};
+    return {
+      showCodes: o.showCodes !== false,          // 默认 true
+      showRuler: o.showRuler !== false,          // 默认 true
+      cellPx: clampCellPx(o.cellPx),             // 默认 12，夹到 4..40
+      highlightLocked: o.highlightLocked === true // 默认 false
+    };
+  }
+
+  function hexToRgb(hex) {
+    if (typeof hex !== 'string') return null;
+    var s = hex, r, g, b;
+    if (HEX_SHORT.test(s)) {
+      r = parseInt(s.charAt(1) + s.charAt(1), 16);
+      g = parseInt(s.charAt(2) + s.charAt(2), 16);
+      b = parseInt(s.charAt(3) + s.charAt(3), 16);
+      return [r, g, b];
+    }
+    if (HEX_FULL.test(s)) {
+      return [parseInt(s.substr(1, 2), 16), parseInt(s.substr(3, 2), 16), parseInt(s.substr(5, 2), 16)];
+    }
+    return null;
+  }
+
+  // 编号文字颜色按色块亮度取反，保证任何色号上都看得见
+  function textColorFor(hex) {
+    var rgb = hexToRgb(hex);
+    if (!rgb) return '#111827';
+    var lum = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+    return lum > 0.55 ? '#111827' : '#FFFFFF';
+  }
+
+  function escapeHTML(v) {
+    return String(v === null || v === undefined ? '' : v)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function csvField(v) {
+    var s = (v === null || v === undefined) ? '' : String(v);
+    if (s.indexOf('"') >= 0 || s.indexOf(',') >= 0 || s.indexOf('\r') >= 0 || s.indexOf('\n') >= 0) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+
+  /* ------------------------------------------------------------ 版式计算 */
+
+  function layoutOf(pattern, opts) {
+    var w = Math.max(0, Math.floor((pattern && pattern.w) || 0));
+    var h = Math.max(0, Math.floor((pattern && pattern.h) || 0));
+    var cellPx = opts.cellPx;
+    var pad = Math.max(MIN_PAD, cellPx * 3 + 20);
+    return {
+      w: w,
+      h: h,
+      cellPx: cellPx,
+      pad: pad,
+      gridW: w * cellPx,
+      gridH: h * cellPx,
+      width: pad * 2 + w * cellPx,
+      height: pad * 2 + h * cellPx
+    };
+  }
+
+  // 板边界位置：29, 58, 87 …；末格外框也补一条（它同样是板的边）
+  function boardPositions(n) {
+    var out = [], k;
+    for (k = BOARD; k <= n; k += BOARD) out.push(k);
+    if (n > 0 && out[out.length - 1] !== n) out.push(n);
+    return out;
+  }
+
+  // 刻度文字位置：每 5 格一个数字；29 的板边界额外补标（二者重合时只标一次）
+  function rulerPositions(n) {
+    var boards = boardPositions(n), boardSet = {}, seen = {}, out = [], i, k;
+    for (i = 0; i < boards.length; i++) boardSet[boards[i]] = 1;
+    for (k = 5; k <= n; k += 5) {
+      seen[k] = 1;
+      out.push({ at: k, board: boardSet[k] === 1 });
+    }
+    for (i = 0; i < boards.length; i++) {
+      k = boards[i];
+      if (!seen[k]) { seen[k] = 1; out.push({ at: k, board: true }); }
+    }
+    out.sort(function (a, b) { return a.at - b.at; });
+    return out;
+  }
+
+  /* --------------------------------------------------------------- 统计 */
+
+  // 从 cells 统计每个色号下标的颗数（cells 是唯一真源，保证与图纸一致）
+  function tally(pattern) {
+    var colors = (pattern && pattern.colors) || [];
+    var cells = (pattern && pattern.cells) || [];
+    var n = colors.length;
+    var arr = [], i, idx, total = 0;
+    for (i = 0; i < n; i++) arr.push(0);
+    for (i = 0; i < cells.length; i++) {
+      idx = cells[i];
+      if (idx === EMPTY) continue;                       // 空格
+      if (!isNum(idx) || idx < 0 || idx >= n) continue;   // 越界 / 坏数据
+      arr[idx]++;
+      total++;
+    }
+    return { perIndex: arr, total: total };
+  }
+
+  /* ------------------------------------------------------------- 绘制：格 */
+
+  function cellPos(i, w, cellPx, ox, oy) {
+    return [ox + (i % w) * cellPx, oy + Math.floor(i / w) * cellPx];
+  }
+
+  function paintCells(ctx, pattern, opts, lay, ox, oy) {
+    var colors = (pattern && pattern.colors) || [];
+    var cells = (pattern && pattern.cells) || [];
+    var locked = (pattern && pattern.locked) || null;
+    var n = colors.length;
+    var cellPx = lay.cellPx;
+    var total = Math.min(cells.length, lay.w * lay.h);
+    var hexes = [], inks = [], i, idx, p, x, y, s;
+    var drawn = 0, markers = 0;
+
+    // 每个色号只算一次 hex / 文字色，避免逐格解析
+    for (i = 0; i < n; i++) {
+      hexes.push(colors[i] && typeof colors[i].hex === 'string' ? colors[i].hex : null);
+      inks.push(textColorFor(hexes[i]));
+    }
+
+    for (i = 0; i < total; i++) {
+      idx = cells[i];
+      if (idx === EMPTY) continue;
+      if (!isNum(idx) || idx < 0 || idx >= n) continue;
+      if (!hexes[idx]) continue;
+      p = cellPos(i, lay.w, cellPx, ox, oy);
+      x = p[0]; y = p[1];
+      ctx.fillStyle = hexes[idx];
+      ctx.fillRect(x, y, cellPx, cellPx);
+      drawn++;
+    }
+
+    if (opts.highlightLocked && locked && locked.length) {
+      s = Math.max(3, Math.round(cellPx * 0.28));
+      for (i = 0; i < total; i++) {
+        idx = cells[i];
+        if (idx === EMPTY) continue;
+        if (!isNum(idx) || idx < 0 || idx >= n) continue;
+        if (locked[i] !== 1) continue;
+        p = cellPos(i, lay.w, cellPx, ox, oy);
+        x = p[0]; y = p[1];
+        ctx.fillStyle = inks[idx];
+        ctx.beginPath();
+        ctx.moveTo(x + cellPx, y + 0.5);          // 右上角小三角
+        ctx.lineTo(x + cellPx, y + s + 0.5);
+        ctx.lineTo(x + cellPx - s, y + 0.5);
+        ctx.closePath();
+        ctx.fill();
+        markers++;
+      }
+    }
+
+    return { codesDrawn: opts.showCodes && cellPx >= MIN_CODE_PX, cellsDrawn: drawn, markers: markers };
+  }
+
+  function paintGrid(ctx, pattern, lay, ox, oy) {
+    var w = lay.w, h = lay.h, cellPx = lay.cellPx, i, x, y, k, vb, hb;
+
+    // 细网格线：一次成路径、一次 stroke（性能）
+    ctx.beginPath();
+    ctx.strokeStyle = C.grid;
+    ctx.lineWidth = 1;
+    for (i = 0; i <= w; i++) {
+      x = ox + i * cellPx + GRID_HALF;
+      ctx.moveTo(x, oy + GRID_HALF);
+      ctx.lineTo(x, oy + lay.gridH + GRID_HALF);
+    }
+    for (i = 0; i <= h; i++) {
+      y = oy + i * cellPx + GRID_HALF;
+      ctx.moveTo(ox + GRID_HALF, y);
+      ctx.lineTo(ox + lay.gridW + GRID_HALF, y);
+    }
+    ctx.stroke();
+
+    // 29 格板边界：每一条单独成路径并单独 stroke，便于数清也便于后续调线型
+    vb = boardPositions(w);
+    hb = boardPositions(h);
+    ctx.strokeStyle = C.board;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'butt';
+    for (k = 0; k < vb.length; k++) {
+      x = ox + vb[k] * cellPx;
+      ctx.beginPath();
+      ctx.moveTo(x, oy - 2);
+      ctx.lineTo(x, oy + lay.gridH + 2);
+      ctx.stroke();
+    }
+    for (k = 0; k < hb.length; k++) {
+      y = oy + hb[k] * cellPx;
+      ctx.beginPath();
+      ctx.moveTo(ox - 2, y);
+      ctx.lineTo(ox + lay.gridW + 2, y);
+      ctx.stroke();
+    }
+    return { v: vb.length, h: hb.length };
+  }
+
+  function paintCodes(ctx, pattern, lay, ox, oy) {
+    var colors = (pattern && pattern.colors) || [];
+    var cells = (pattern && pattern.cells) || [];
+    var n = colors.length;
+    var cellPx = lay.cellPx;
+    var total = Math.min(cells.length, lay.w * lay.h);
+    var size = Math.max(5, Math.round(cellPx * 0.5));
+    var inks = [], i, idx, p, drawn = 0;
+
+    for (i = 0; i < n; i++) inks.push(textColorFor(colors[i] && colors[i].hex));
+
+    ctx.font = '600 ' + size + 'px ' + FONT_MONO;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (i = 0; i < total; i++) {
+      idx = cells[i];
+      if (idx === EMPTY) continue;
+      if (!isNum(idx) || idx < 0 || idx >= n) continue;
+      p = cellPos(i, lay.w, cellPx, ox, oy);
+      ctx.fillStyle = inks[idx];
+      ctx.fillText(String(idx + 1), p[0] + cellPx / 2, p[1] + cellPx / 2 + 0.5);
+      drawn++;
+    }
+    return drawn;
+  }
+
+  function paintRuler(ctx, lay, ox, oy) {
+    var w = lay.w, h = lay.h, cellPx = lay.cellPx;
+    var size = clamp(Math.round(cellPx * 0.9), 9, 14);
+    var pos, i, k, x, y, len, board;
+
+    // 顶部刻度线
+    ctx.strokeStyle = C.rulerLine;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    pos = rulerPositions(w);
+    for (i = 0; i < pos.length; i++) {
+      k = pos[i].at;
+      len = (k % 10 === 0 || pos[i].board) ? 12 : 7;
+      x = ox + k * cellPx + GRID_HALF;
+      ctx.moveTo(x, oy - GRID_HALF);
+      ctx.lineTo(x, oy - len);
+    }
+    // 左侧刻度线
+    pos = rulerPositions(h);
+    for (i = 0; i < pos.length; i++) {
+      k = pos[i].at;
+      len = (k % 10 === 0 || pos[i].board) ? 12 : 7;
+      y = oy + k * cellPx + GRID_HALF;
+      ctx.moveTo(ox - GRID_HALF, y);
+      ctx.lineTo(ox - len, y);
+    }
+    ctx.stroke();
+
+    // 刻度数字（1 基：标在格子起始边界上）
+    ctx.font = size + 'px ' + FONT_SANS;
+    pos = rulerPositions(w);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    for (i = 0; i < pos.length; i++) {
+      k = pos[i].at;
+      ctx.fillStyle = pos[i].board ? C.rulerBoardText : C.rulerText;
+      ctx.fillText(String(k), ox + k * cellPx, oy - 16);
+    }
+    pos = rulerPositions(h);
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (i = 0; i < pos.length; i++) {
+      k = pos[i].at;
+      ctx.fillStyle = pos[i].board ? C.rulerBoardText : C.rulerText;
+      ctx.fillText(String(k), ox - 16, oy + k * cellPx);
+    }
+  }
+
+  /* --------------------------------------------------- 绘制：图纸（核心） */
+
+  // 在 (ox, oy) = 网格左上角处绘制一张完整图纸；调用方负责白底与画布尺寸
+  function paintPatternAt(ctx, pattern, opts, lay, ox, oy) {
+    var res = paintCells(ctx, pattern, opts, lay, ox, oy);
+    paintGrid(ctx, pattern, lay, ox, oy);
+    if (res.codesDrawn) paintCodes(ctx, pattern, lay, ox, oy);
+    if (opts.showRuler) paintRuler(ctx, lay, ox, oy);
+    return res;
+  }
+
+  function fillPaper(ctx, w, h) {
+    ctx.fillStyle = C.paper;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  /* ------------------------------------------------------------- 公开 API */
+
+  function drawPattern(pattern, canvas, viewOpts) {
+    var blank = { codesDrawn: false, cellsDrawn: 0 };
+    if (!pattern || !canvas || typeof canvas.getContext !== 'function') return blank;
+    var opts = normalizeOpts(viewOpts);
+    var lay = layoutOf(pattern, opts);
+    canvas.width = lay.width;
+    canvas.height = lay.height;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return blank;
+
+    ctx.save();
+    fillPaper(ctx, lay.width, lay.height);
+    var res = paintPatternAt(ctx, pattern, opts, lay, lay.pad, lay.pad);
+    ctx.restore();
+    return { codesDrawn: res.codesDrawn, cellsDrawn: res.cellsDrawn };
+  }
+
+  function sourceSize(src) {
+    if (!src || typeof src !== 'object') return null;
+    var w = Number(src.naturalWidth || src.videoWidth || src.width) || 0;
+    var h = Number(src.naturalHeight || src.videoHeight || src.height) || 0;
+    if (!(w > 0) || !(h > 0)) return null;
+    return { w: w, h: h };
+  }
+
+  function drawCompare(pattern, sourceImage, canvas, viewOpts) {
+    var blank = { codesDrawn: false, cellsDrawn: 0 };
+    if (!pattern || !canvas || typeof canvas.getContext !== 'function') return blank;
+    var opts = normalizeOpts(viewOpts);
+    var lay = layoutOf(pattern, opts);
+
+    var titleH = 28;
+    var gap = Math.max(24, Math.round(opts.cellPx * 2));
+    var padX = 16, padY = 12;
+    var maxLeftW = Math.max(240, lay.height);       // 防止超宽原图撑出巨大画布
+
+    var size = sourceSize(sourceImage);
+    var leftW = maxLeftW, imgW = 0, imgH = 0, imgX = padX, imgY = padY + titleH;
+    if (size) {
+      var sc = Math.min(maxLeftW / size.w, lay.height / size.h);
+      imgW = Math.max(1, Math.round(size.w * sc));
+      imgH = Math.max(1, Math.round(size.h * sc));
+      imgX = padX + Math.round((leftW - imgW) / 2);
+      imgY = padY + titleH + Math.round((lay.height - imgH) / 2);   // 面板等高，图内居中（contain 不变形）
+    }
+
+    var gridX = padX + leftW + gap;
+    var gridY = padY + titleH;
+    var W = gridX + lay.width + padX;
+    var H = padY * 2 + titleH + lay.height;
+
+    canvas.width = W;
+    canvas.height = H;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return blank;
+
+    ctx.save();
+    fillPaper(ctx, W, H);
+
+    // 小标题
+    ctx.fillStyle = C.title;
+    ctx.font = '600 15px ' + FONT_SANS;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('原图', padX + leftW / 2, padY + 14);
+    ctx.fillText('拼豆图纸', gridX + lay.width / 2, padY + 14);
+
+    // 左：原图（contain 缩放，不拉伸变形）
+    if (size && typeof ctx.drawImage === 'function') {
+      try {
+        ctx.drawImage(sourceImage, imgX, imgY, imgW, imgH);
+      } catch (e) {
+        drawImagePlaceholder(ctx, imgX, imgY, imgW, imgH);
+      }
+      ctx.strokeStyle = C.grid;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(imgX + GRID_HALF, imgY + GRID_HALF, imgW, imgH);
+    } else {
+      drawImagePlaceholder(ctx, imgX, imgY, leftW, lay.height);
+    }
+
+    // 右：图纸（复用同一套绘制逻辑，不复制粘贴）
+    var res = paintPatternAt(ctx, pattern, opts, lay, gridX + lay.pad, gridY + lay.pad);
+    ctx.restore();
+    return { codesDrawn: res.codesDrawn, cellsDrawn: res.cellsDrawn, width: W, height: H };
+  }
+
+  function drawImagePlaceholder(ctx, x, y, w, h) {
+    ctx.fillStyle = C.placeholder;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = C.grid;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + GRID_HALF, y + GRID_HALF, w, h);
+    ctx.fillStyle = C.placeholderText;
+    ctx.font = '13px ' + FONT_SANS;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('（原图不可用）', x + w / 2, y + h / 2);
+  }
+
+  function exportPNG(canvas, filename) {
+    return new Promise(function (resolve, reject) {
+      if (!canvas || typeof canvas.toBlob !== 'function') {
+        reject(new Error('exportPNG：传入的 canvas 不支持 toBlob()'));
+        return;
+      }
+      var name = (filename === null || filename === undefined || filename === '') ? 'pattern.png' : String(filename);
+
+      canvas.toBlob(function (blob) {
+        if (!blob) {
+          reject(new Error('exportPNG：canvas.toBlob() 返回 null，导出失败（画布过大或上下文已丢失）'));
+          return;
+        }
+        var url = null;
+        var U = hostURL();
+        try {
+          if (!U) throw new Error('exportPNG：当前环境不支持 URL.createObjectURL()');
+          var D = hostDocument();
+          if (!D) throw new Error('exportPNG：当前环境缺少 document，无法触发下载');
+          url = U.createObjectURL(blob);
+          var a = D.createElement('a');
+          a.href = url;
+          a.download = name;
+          a.rel = 'noopener';
+          if (a.style) a.style.display = 'none';
+          D.body.appendChild(a);
+          a.click();
+          D.body.removeChild(a);
+        } catch (err) {
+          revokeURL(U, url);
+          reject(err);
+          return;
+        }
+        // 延迟回收：个别浏览器在下载真正启动前还需要这个 URL 有效
+        var later = hostSetTimeout();
+        if (later) {
+          later(function () { revokeURL(U, url); }, 1000);
+        } else {
+          revokeURL(U, url);
+        }
+        resolve();
+      }, 'image/png');
+    });
+  }
+
+  function revokeURL(U, url) {
+    if (!U || !url) return;
+    try { U.revokeObjectURL(url); } catch (e) { /* 回收失败不影响导出结果 */ }
+  }
+
+  /* 宿主对象解析：浏览器里裸 URL / document / setTimeout 与 window.X 是同一份，
+   * 但桩环境、沙箱可能只提供其中一份，两份都取，避免把“环境差异”误判成“不支持导出”。 */
+  function hostURL() {
+    var bare = (typeof URL !== 'undefined') ? URL : null;
+    if (bare && typeof bare.createObjectURL === 'function') return bare;
+    var w = window.URL;
+    return (w && typeof w.createObjectURL === 'function') ? w : null;
+  }
+
+  function hostDocument() {
+    var d = (typeof document !== 'undefined') ? document : null;
+    if (!d) d = window.document;
+    return (d && d.body && typeof d.createElement === 'function') ? d : null;
+  }
+
+  function hostSetTimeout() {
+    if (typeof setTimeout === 'function') return setTimeout;
+    return (typeof window.setTimeout === 'function') ? window.setTimeout : null;
+  }
+
+  function exportCSV(pattern) {
+    var colors = (pattern && pattern.colors) || [];
+    var t = tally(pattern);
+    var lines = [];
+    var i, c, rgb, hex, r, g, b;
+
+    lines.push(['编号', '色号', '颜色名', 'HEX', 'R', 'G', 'B', '颗数'].map(csvField).join(','));
+
+    for (i = 0; i < colors.length; i++) {
+      if (!t.perIndex[i]) continue;                  // 本图没用到就不列
+      c = colors[i] || {};
+      hex = typeof c.hex === 'string' ? c.hex : '';
+      rgb = (c.rgb && c.rgb.length >= 3) ? c.rgb : (hexToRgb(hex) || []);
+      r = rgb.length >= 3 ? rgb[0] : '';
+      g = rgb.length >= 3 ? rgb[1] : '';
+      b = rgb.length >= 3 ? rgb[2] : '';
+      lines.push([i + 1, c.code, '', hex, r, g, b, t.perIndex[i]].map(csvField).join(','));
+    }
+
+    lines.push(['合计', '', '', '', '', '', '', t.total].map(csvField).join(','));
+    return '\uFEFF' + lines.join('\r\n') + '\r\n';   // BOM + CRLF（Excel 友好）
+  }
+
+  function legendHTML(pattern) {
+    var colors = (pattern && pattern.colors) || [];
+    var t = tally(pattern);
+    var rows = [];
+    var i, c, code, raw, hex, count;
+
+    for (i = 0; i < colors.length; i++) {
+      count = t.perIndex[i];
+      if (!count) continue;
+      c = colors[i] || {};
+      code = c.code === null || c.code === undefined ? '' : String(c.code);
+      raw = typeof c.hex === 'string' ? c.hex : '';
+      hex = (HEX_FULL.test(raw) || HEX_SHORT.test(raw)) ? raw : '#000000';  // 只放行合法色值，防注入
+      rows.push(
+        '<div class="pd-legend-row" style="display:flex;align-items:center;gap:8px;padding:2px 0;line-height:1.4">' +
+          '<span class="pd-legend-no" style="min-width:2.5em;text-align:right;font-variant-numeric:tabular-nums">' + (i + 1) + '</span>' +
+          '<span class="pd-legend-swatch" style="display:inline-block;width:16px;height:16px;border-radius:3px;border:1px solid rgba(0,0,0,.28);background-color:' + hex + '"></span>' +
+          '<span class="pd-legend-code" style="min-width:3.2em;font-weight:600">' + escapeHTML(code) + '</span>' +
+          '<span class="pd-legend-hex" style="opacity:.75;font-variant-numeric:tabular-nums">' + escapeHTML(hex) + '</span>' +
+          '<span class="pd-legend-count" style="margin-left:auto;font-variant-numeric:tabular-nums">' + count + ' 颗</span>' +
+        '</div>'
+      );
+    }
+    return rows.join('\n');
+  }
+
+  /* --------------------------------------------------------------- 挂载 */
+
+  window.Render = {
+    drawPattern: drawPattern,
+    drawCompare: drawCompare,
+    exportPNG: exportPNG,
+    exportCSV: exportCSV,
+    legendHTML: legendHTML
+  };
+})();
+</script>
+<script>
+/* ===== src/app.js ===== */
+/* 拼豆图纸生成器 · 界面交互逻辑
+ * 纯脚本体：无模块语法，无外部资源，无框架。
+ * 由 build.mjs 内联到单文件 HTML 的 body 末尾（在 palette / color / pipeline / render 之后）。
+ * 依赖的全局契约：window.PINDOU_PALETTES、window.Pipeline、window.Render。
+ * 三者缺失时界面仍完整渲染，并给出明确提示，不抛未捕获异常。
+ */
+(function () {
+  'use strict';
+
+  var win = (typeof window !== 'undefined' && window) ? window
+    : ((typeof globalThis !== 'undefined') ? globalThis : {});
+  var doc = (typeof document !== 'undefined') ? document : null;
+
+  var MAX_DIM = 87;          /* 单边硬上限：3 × 3 板 */
+  var BOARD_STEP = 29;       /* 每块拼板 29 × 29 格 */
+  var BOARD_MAX = 3;
+  var EMPTY_CELL = 65535;    /* Pattern.cells 里的空格标记，与 pipeline.js / render.js 保持一致 */
+  var DEBOUNCE_MS = 200;
+  var RULER_PAD = 16;        /* 内置降级渲染器的四周对称留白 */
+  var SRC_MAX_EDGE = 1600;   /* 像素源长边上限：≥87 格图纸完全够用，且 getImageData 更快 */
+
+  var DISCLAIMER = 'RGB 为屏幕参考值，非品牌官方色值；严谨对色请以实物色卡为准。';
+
+  /* 注意：quantizeEnabled / maxColors 必须与 Pipeline.DEFAULT_OPTS.quantize 保持一致
+     （默认减色开启、24 色）——同一语义只能有这一份 UI 默认值，pipeline 那边另有默认值，
+     两边是刻意对齐的；boot / 重置时还会用 syncQuantizeFromPipeline() 再从 pipeline 拉一次。 */
+  var DEFAULTS = {
+    brightness: 0, contrast: 0, saturation: 0, autoWB: false, autoLevels: false,
+    method: 'nearest', bayerN: '4', ditherStrength: 30,
+    quantizeEnabled: true, maxColors: 24,
+    boards: '1', lockAspect: true,
+    showNumbers: true, showRuler: false, cellSize: 12,
+    recolorMode: false, lockToggle: true
+  };
+
+  /* ---------------------------------------------------------------- 状态 */
+
+  var state = {
+    booted: false,
+    busy: false,
+    pending: false,
+    timer: null,
+    renderScheduled: false,
+    dragActive: false,
+    missingUI: [],
+    source: null,        /* <img> / ImageBitmap / canvas：交给 Pipeline.generate 的像素源 */
+    srcW: 0, srcH: 0,    /* 原图自然尺寸（用于宽高比） */
+    pixW: 0, pixH: 0,    /* 实际写入 sourceCanvas 的像素尺寸（长边受 SRC_MAX_EDGE 限制） */
+    srcCtx: null,        /* sourceCanvas 的 2d 上下文：getImageData 取像素 */
+    pattern: null,
+    renderFallback: false,
+    viewOpts: { cellSize: 12, showNumbers: true, showRuler: false, showGrid: true },
+    status: { text: '', kind: 'info' },
+    lastMs: 0,
+    lockCount: 0,
+    /* 用户是否亲手动过某控件：没动过就跟随 Pipeline.DEFAULT_OPTS，避免两份默认值悄悄错开 */
+    touched: { quantizeEnabled: false, maxColors: false }
+  };
+
+  var ui = {};
+
+  /* ---------------------------------------------------------- 小工具函数 */
+
+  function byId(id) {
+    if (!doc || typeof doc.getElementById !== 'function') return null;
+    return doc.getElementById(id);
+  }
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+  function num(el, fallback) {
+    if (!el) return fallback;
+    var v = Number(el.value);
+    return (isFinite(v) ? v : fallback);
+  }
+
+  function intNow() { return Date.now(); }
+
+  function now() {
+    if (win.performance && typeof win.performance.now === 'function') return win.performance.now();
+    return intNow();
+  }
+
+  function later(fn, ms) {
+    if (typeof win.setTimeout === 'function') return win.setTimeout(fn, ms);
+    fn();
+    return null;
+  }
+
+  function cancelLater(id) {
+    if (id !== null && id !== undefined && typeof win.clearTimeout === 'function') win.clearTimeout(id);
+  }
+
+  function errText(e) {
+    if (!e) return '未知错误';
+    if (typeof e === 'string') return e;
+    if (e.message) return String(e.message);
+    try { return String(e); } catch (err) { return '未知错误'; }
+  }
+
+  function fmt1(v) {
+    var n = Number(v);
+    if (!isFinite(n)) return '—';
+    return (Math.round(n * 10) / 10).toFixed(1);
+  }
+
+  function setText(el, t) { if (el) el.textContent = String(t); }
+  function setVal(el, v) { if (el) el.value = v; }
+  function setChecked(el, v) { if (el) el.checked = !!v; }
+
+  function on(el, type, fn) {
+    if (el && typeof el.addEventListener === 'function') el.addEventListener(type, fn);
+  }
+
+  function hasClassList(el) { return !!(el && el.classList && typeof el.classList.add === 'function'); }
+
+  /* ------------------------------------------------------- 模块可用性探测 */
+
+  function describeModules() {
+    var P = win.PINDOU_PALETTES;
+    var palettes = !!(P && typeof P === 'object' && typeof Object.keys === 'function' && Object.keys(P).length > 0);
+    var pipeline = !!(win.Pipeline && (typeof win.Pipeline.generateFromRGBA === 'function' || typeof win.Pipeline.generate === 'function'));
+    var render = !!(win.Render && (typeof win.Render.drawPattern === 'function' || typeof win.Render.legendHTML === 'function'));
+    var missing = [];
+    if (!palettes) missing.push('色卡数据 window.PINDOU_PALETTES');
+    if (!pipeline) missing.push('转换引擎 window.Pipeline');
+    if (!render) missing.push('渲染模块 window.Render');
+    return { palettes: palettes, pipeline: pipeline, render: render, ok: missing.length === 0, missing: missing };
+  }
+
+  function updateModuleNotice(mods) {
+    if (!ui.moduleNotice) return;
+    var msgs = [];
+    if (state.missingUI.length) {
+      msgs.push('界面结构不完整，缺少控件：' + state.missingUI.join('、') + '（对应功能不可用）。');
+    }
+    if (!mods.ok) {
+      msgs.push('核心模块未加载：' + mods.missing.join('、') + '。界面可以正常浏览、调整参数，但生成 / 渲染 / 导出暂不可用；'
+        + '请用 build.mjs 把 palette.js、color.js、pipeline.js、render.js 内联进单文件后再打开。');
+    }
+    if (!msgs.length) {
+      ui.moduleNotice.hidden = true;
+      setText(ui.moduleNotice, '');
+      return;
+    }
+    ui.moduleNotice.hidden = false;
+    setText(ui.moduleNotice, msgs.join(' '));
+    if (hasClassList(ui.moduleNotice) && ui.moduleNotice.classList.add) ui.moduleNotice.classList.add('notice-warn');
+  }
+
+  /* ------------------------------------------------------------- 色卡数据 */
+
+  function paletteEntries() {
+    var out = [];
+    var P = win.PINDOU_PALETTES;
+    if (!P || typeof P !== 'object') return out;
+    var keys = Object.keys(P);
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      var p = P[key];
+      if (!p) continue;
+      var colors = p.colors || [];
+      out.push({
+        id: p.id || key,
+        key: key,
+        label: p.label || key,
+        count: p.count || colors.length,
+        colors: colors,
+        source: p.source,
+        license: p.license,
+        disclaimer: p.disclaimer
+      });
+    }
+    return out;
+  }
+
+  function paletteById(id) {
+    if (!id) return null;
+    var list = paletteEntries();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === id || list[i].key === id) return list[i];
+    }
+    return null;
+  }
+
+  function currentPalette() {
+    return paletteById(ui.paletteSelect ? ui.paletteSelect.value : '') || paletteEntries()[0] || null;
+  }
+
+  function fillPaletteSelect() {
+    var sel = ui.paletteSelect;
+    if (!sel) return;
+    var prev = sel.value;
+    var list = paletteEntries();
+    var html = '';
+    if (!list.length) {
+      html = '<option value="">（色卡数据未加载）</option>';
+    } else {
+      for (var i = 0; i < list.length; i++) {
+        html += '<option value="' + esc(list[i].id) + '">' + esc(list[i].label + '（' + list[i].count + ' 色）') + '</option>';
+      }
+    }
+    sel.innerHTML = html;
+    if (prev && hasOptionValue(sel, prev)) sel.value = prev;
+    syncPaletteMeta();
+  }
+
+  function hasOptionValue(sel, v) {
+    var opts = sel && sel.options;
+    if (!opts) return false;
+    for (var i = 0; i < opts.length; i++) { if (opts[i].value === v) return true; }
+    return false;
+  }
+
+  function syncPaletteMeta() {
+    if (!ui.paletteMeta) return;
+    var mods = describeModules();
+    var p = currentPalette();
+    if (!mods.palettes || !p) {
+      setText(ui.paletteMeta, '色卡数据未加载，暂时无法生成图纸。' + DISCLAIMER);
+      return;
+    }
+    var parts = ['共 ' + (p.count || (p.colors || []).length) + ' 色'];
+    if (p.source) parts.push('来源：' + p.source);
+    if (p.license) parts.push('许可：' + p.license);
+    var text = parts.join(' · ');
+    if (p.disclaimer) text += '。' + p.disclaimer;
+    else text += '。' + DISCLAIMER;
+    setText(ui.paletteMeta, text);
+  }
+
+  function findPaletteColor(paletteId, code) {
+    var entries = paletteEntries();
+    var pick = null;
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].id === paletteId || entries[i].key === paletteId) { pick = entries[i]; break; }
+    }
+    var pools = pick ? [pick] : entries;
+    for (var p = 0; p < pools.length; p++) {
+      var colors = pools[p].colors || [];
+      for (var j = 0; j < colors.length; j++) {
+        if (colors[j] && colors[j].code === code) return colors[j];
+      }
+    }
+    return null;
+  }
+
+  /* ------------------------------------------------------- 控件读写与同步 */
+
+  function methodOf() {
+    if (ui.methodBayer && ui.methodBayer.checked) return 'bayer';
+    if (ui.methodFS && ui.methodFS.checked) return 'fs';
+    return 'nearest';
+  }
+
+  function syncLabels() {
+    setText(ui.brightnessVal, signed(num(ui.brightness, 0)));
+    setText(ui.contrastVal, signed(num(ui.contrast, 0)));
+    setText(ui.saturationVal, signed(num(ui.saturation, 0)));
+    setText(ui.ditherStrengthVal, Math.round(clamp(num(ui.ditherStrength, 30), 0, 100)) + '%');
+    setText(ui.cellSizeVal, Math.round(clamp(num(ui.cellSize, 12), 4, 28)) + 'px');
+  }
+
+  function signed(v) { return (v > 0 ? '+' : '') + v; }
+
+  function syncEnabledState() {
+    var method = methodOf();
+    if (ui.bayerN) ui.bayerN.disabled = (method !== 'bayer');
+    if (ui.ditherStrength) ui.ditherStrength.disabled = (method === 'nearest');
+    if (ui.maxColors) ui.maxColors.disabled = !(ui.quantizeEnabled && ui.quantizeEnabled.checked);
+  }
+
+  function syncMethodState() { syncEnabledState(); }
+
+  function viewOpts() {
+    var cell = Math.round(clamp(num(ui.cellSize, 12), 4, 28));
+    var codes = !!(ui.showNumbers && ui.showNumbers.checked);
+    var ruler = !!(ui.showRuler && ui.showRuler.checked);
+    return {
+      /* render.js 实际读取的键名 */
+      cellPx: cell,
+      showCodes: codes,
+      showRuler: ruler,
+      highlightLocked: true,
+      /* 契约文档中的键名：同义双写，兼容任一实现 */
+      cellSize: cell,
+      showNumbers: codes,
+      showGrid: true,
+      paletteId: state.pattern ? state.pattern.paletteId : (ui.paletteSelect ? ui.paletteSelect.value : '')
+    };
+  }
+
+  function gridDims() {
+    return {
+      w: Math.round(clamp(num(ui.gridW, 29), 1, MAX_DIM)),
+      h: Math.round(clamp(num(ui.gridH, 29), 1, MAX_DIM))
+    };
+  }
+
+  function boardLayoutFor(w, h) {
+    return clamp(Math.max(Math.ceil(w / BOARD_STEP), Math.ceil(h / BOARD_STEP)), 1, BOARD_MAX);
+  }
+
+  function sourceAspect() {
+    if (state.srcW > 0 && state.srcH > 0) return state.srcW / state.srcH;
+    return 1;
+  }
+
+  function applyBoardsPreset() {
+    var sel = ui.boardsSelect;
+    if (!sel) return;
+    if (sel.value === 'custom') return;
+    var limit = clamp(Math.round(num({ value: sel.value }, 1)) * BOARD_STEP, 1, MAX_DIM);
+    var w, h;
+    var lock = !!(ui.lockAspect && ui.lockAspect.checked);
+    if (!lock) {
+      w = limit; h = limit;
+    } else {
+      var aspect = sourceAspect();
+      if (aspect >= 1) { w = limit; h = clamp(Math.round(limit / aspect), 1, MAX_DIM); }
+      else { h = limit; w = clamp(Math.round(limit * aspect), 1, MAX_DIM); }
+    }
+    setVal(ui.gridW, w);
+    setVal(ui.gridH, h);
+    syncLabels();
+  }
+
+  /* 手动输入格数：夹到 1..87，按需同步另一边，并把拼板规格切到「自定义」 */
+  function normalizeDims(which) {
+    var dims = gridDims();
+    var w = dims.w, h = dims.h;
+    if (ui.lockAspect && ui.lockAspect.checked && state.srcW > 0 && state.srcH > 0) {
+      var aspect = sourceAspect();
+      if (which === 'gridW') h = clamp(Math.round(w / aspect), 1, MAX_DIM);
+      else w = clamp(Math.round(h * aspect), 1, MAX_DIM);
+    }
+    if (String(w) !== String(ui.gridW ? ui.gridW.value : w)) setVal(ui.gridW, w);
+    if (String(h) !== String(ui.gridH ? ui.gridH.value : h)) setVal(ui.gridH, h);
+    if (ui.boardsSelect && ui.boardsSelect.value !== 'custom') setVal(ui.boardsSelect, 'custom');
+    syncLabels();
+    return { w: w, h: h };
+  }
+
+  /* 减色的单一事实来源是 Pipeline.DEFAULT_OPTS.quantize：初次进入与「重置微调」都从它同步 UI。
+     这样将来任一边改了默认值，界面显示值与实际传给 Pipeline 的值仍然一致。 */
+  function pipelineQuantizeDefault() {
+    var D = win.Pipeline && win.Pipeline.DEFAULT_OPTS;
+    return (D && D.quantize && typeof D.quantize === 'object') ? D.quantize : null;
+  }
+
+  function syncQuantizeFromPipeline() {
+    var d = pipelineQuantizeDefault();
+    if (!d) return;
+    if (typeof d.enabled === 'boolean') setChecked(ui.quantizeEnabled, d.enabled);
+    if (typeof d.maxColors === 'number') setVal(ui.maxColors, Math.round(clamp(d.maxColors, 2, 221)));
+    syncEnabledState();
+  }
+
+  /* 没动过控件时跟随 pipeline 默认值；动过则完全按 UI 走。 */
+  function quantizeOpts() {
+    var enabled = !!(ui.quantizeEnabled && ui.quantizeEnabled.checked);
+    var maxColors = Math.round(clamp(num(ui.maxColors, 24), 2, 221));
+    var d = pipelineQuantizeDefault();
+    if (d) {
+      if (!state.touched.quantizeEnabled && typeof d.enabled === 'boolean') enabled = !!d.enabled;
+      if (!state.touched.maxColors && typeof d.maxColors === 'number') maxColors = Math.round(clamp(d.maxColors, 2, 221));
+    }
+    return { enabled: enabled, maxColors: maxColors };
+  }
+
+  /* 色卡 id：select 的值优先，为空时回落到第一个色卡（某些环境下 select 不会自动选中第一项） */
+  function paletteIdForOpts() {
+    var v = ui.paletteSelect ? ui.paletteSelect.value : '';
+    if (v) return v;
+    var p = currentPalette();
+    return p ? p.id : '';
+  }
+
+  function buildOpts() {
+    var dims = gridDims();
+    var method = methodOf();
+    return {
+      paletteId: paletteIdForOpts(),
+      boards: boardLayoutFor(dims.w, dims.h),
+      gridW: dims.w,
+      gridH: dims.h,
+      lockAspect: !!(ui.lockAspect && ui.lockAspect.checked),
+      preprocess: {
+        brightness: num(ui.brightness, 0),
+        contrast: num(ui.contrast, 0),
+        saturation: num(ui.saturation, 0),
+        autoWB: !!(ui.autoWB && ui.autoWB.checked),
+        autoLevels: !!(ui.autoLevels && ui.autoLevels.checked)
+      },
+      method: method,
+      bayerN: (Math.round(num(ui.bayerN, 4)) === 8) ? 8 : 4,
+      ditherStrength: clamp(num(ui.ditherStrength, 30), 0, 100) / 100,
+      quantize: quantizeOpts()
+    };
+  }
+
+  /* ----------------------------------------------------------- 状态提示区 */
+
+  function setStatus(text, kind) {
+    state.status = { text: String(text), kind: kind || 'info' };
+    if (!ui.statusText) return;
+    setText(ui.statusText, state.status.text);
+    if (hasClassList(ui.statusText)) {
+      ui.statusText.classList.remove('ok');
+      ui.statusText.classList.remove('warn');
+      ui.statusText.classList.remove('err');
+      if (kind === 'ok' || kind === 'warn' || kind === 'err') ui.statusText.classList.add(kind);
+    }
+  }
+
+  function setElapsed(ms) {
+    state.lastMs = Math.max(0, Math.round(ms));
+    setText(ui.elapsedText, state.lastMs ? ('耗时 ' + state.lastMs + ' ms') : '');
+  }
+
+  function setProgress(active) {
+    if (ui.progressWrap) ui.progressWrap.hidden = !active;
+    if (ui.progressBar && ui.progressBar.style) ui.progressBar.style.width = active ? '35%' : '0%';
+  }
+
+  function setCanvasPlaceholders() {
+    if (ui.patternHint) ui.patternHint.hidden = !!state.pattern;
+    if (ui.emptyState) ui.emptyState.hidden = !!state.source;
+    if (ui.sourceHint) ui.sourceHint.hidden = !!state.source;
+  }
+
+  /* ------------------------------------------------------- 计时 / 防抖调度 */
+
+  function afterPaint(fn) {
+    var raf = win.requestAnimationFrame;
+    if (typeof raf === 'function') {
+      raf(function () { later(fn, 0); });
+      return;
+    }
+    later(fn, 16);
+  }
+
+  function scheduleRegenerate(delay) {
+    var ms = (delay === null || delay === undefined) ? DEBOUNCE_MS : delay;
+    cancelLater(state.timer);
+    state.timer = null;
+    if (typeof win.setTimeout !== 'function') { regenerate(); return; }
+    state.timer = win.setTimeout(function () { state.timer = null; regenerate(); }, ms);
+  }
+
+  function scheduleRender() {
+    if (state.renderScheduled) return;
+    state.renderScheduled = true;
+    afterPaint(function () {
+      state.renderScheduled = false;
+      renderPattern();
+    });
+  }
+
+  /* ------------------------------------------------------------- 生成流程 */
+
+  function runPipeline(opts) {
+    var P = win.Pipeline;
+    if (!P) return null;
+    if (typeof P.generateFromRGBA === 'function' && state.srcCtx && state.pixW > 0) {
+      var img = state.srcCtx.getImageData(0, 0, state.pixW, state.pixH);
+      var data = (img && img.data) ? img.data : img;
+      return P.generateFromRGBA(data, state.pixW, state.pixH, opts);
+    }
+    if (typeof P.generate === 'function') {
+      return P.generate(state.source || ui.sourceCanvas, opts);
+    }
+    return null;
+  }
+
+  function regenerate() {
+    var mods = describeModules();
+    updateModuleNotice(mods);
+    if (!state.source) { setStatus('请先选择一张图片', 'warn'); return; }
+    if (!mods.pipeline) { setStatus('核心模块未加载：无法生成图纸。', 'err'); return; }
+    if (state.busy) { state.pending = true; return; }
+    state.busy = true;
+    setStatus('正在生成图纸…', 'info');
+    setProgress(true);
+    afterPaint(doGenerate);
+  }
+
+  function doGenerate() {
+    var t0 = now();
+    var opts = buildOpts();
+    /* 锁定格的恢复只由 Pipeline 负责（它会按色号并入、自然序重排、全量重映射下标）。
+       app.js 不再自带一份恢复实现：两份实现必然错开，且本地恢复会打乱 colors 的自然序，
+       而图纸上的编号 = colors 下标 + 1（见 render.js），一旦乱序就会改动整张图纸的编号。
+       尺寸不一致时 Pipeline 会忽略锁定并在 warnings 里说明，这里照原样展示。 */
+    if (state.pattern) opts.prevPattern = state.pattern;
+    var pattern = null;
+    var failure = '';
+    try {
+      pattern = runPipeline(opts);
+    } catch (e) {
+      failure = errText(e);
+    }
+    state.busy = false;
+    var again = state.pending;
+    state.pending = false;
+    setProgress(false);
+
+    if (!pattern) {
+      setStatus('生成失败：' + (failure || 'Pipeline 未返回图纸数据'), 'err');
+      setElapsed(now() - t0);
+      if (again) scheduleRegenerate(0);
+      return;
+    }
+
+    state.pattern = pattern;
+    state.viewOpts = viewOpts();
+
+    renderPattern();
+    renderLegend();
+    renderSummary();
+    syncRecolorColors(pattern);
+    updateLockInfo();
+    setElapsed(now() - t0);
+
+    var stats = pattern.stats || {};
+    var total = (stats.total !== null && stats.total !== undefined) ? stats.total : countBeads(pattern);
+    var note = '';
+    var kept = countLocked(pattern);
+    if (kept) note += ' · 保留手动改色 ' + kept + ' 格';
+    if (state.renderFallback) note += ' · 渲染降级为内置模式';
+    var warn = (pattern.warnings && pattern.warnings.length) ? '（' + pattern.warnings.join('；') + '）' : '';
+    setStatus('已生成 ' + pattern.w + ' × ' + pattern.h + ' 格 · 共 ' + total + ' 颗' + note + warn, 'ok');
+
+    if (again) scheduleRegenerate(0);
+  }
+
+  function countLocked(p) {
+    var n = 0;
+    if (p && p.locked) {
+      for (var i = 0; i < p.locked.length; i++) { if (p.locked[i]) n++; }
+    }
+    return n;
+  }
+
+  /* 锁定格的恢复不在 app.js 实现：见 doGenerate 里 opts.prevPattern 的注释。 */
+
+  function countBeads(p) {
+    var n = 0;
+    if (p && p.cells && p.colors) {
+      for (var i = 0; i < p.cells.length; i++) { if (p.cells[i] < p.colors.length) n++; }
+    }
+    return n;
+  }
+
+  function recount(p) {
+    if (!p || !p.cells || !p.colors) return p;
+    var n = p.colors.length;
+    var acc = [];
+    for (var i = 0; i < n; i++) acc.push(0);
+    var total = 0;
+    for (var j = 0; j < p.cells.length; j++) {
+      var c = p.cells[j];
+      if (c >= 0 && c < n) { acc[c]++; total++; }
+    }
+    var list = [];
+    for (var k = 0; k < n; k++) {
+      if (acc[k] > 0) {
+        list.push({ code: p.colors[k].code, hex: p.colors[k].hex, rgb: p.colors[k].rgb, count: acc[k] });
+      }
+    }
+    list.sort(function (a, b) { return b.count - a.count; });
+    p.counts = list;
+    p.stats = p.stats || {};
+    p.stats.total = total;
+    p.stats.usedColors = list.length;
+    return p;
+  }
+
+  /* ------------------------------------------------------------- 改色模式 */
+
+  /* 改色必须让 Pattern.colors 始终维持 Pipeline 的「自然序」：图纸上的编号 = colors 下标 + 1
+     （render.js 画的是 String(idx+1)），下标一乱，整张图纸的编号就变了。
+     排序键用色表（palette.js）里的数组顺序 —— 集成回归证明它与 Pipeline 内部 compareCodes
+     的顺序一致，所以不必在 app.js 里再复制一份比较器（一份语义只留一处实现）。 */
+  function paletteOrderKeyMap(paletteId) {
+    var pal = paletteById(paletteId) || currentPalette();
+    var map = {};
+    if (!pal || !pal.colors) return map;
+    for (var i = 0; i < pal.colors.length; i++) map[String(pal.colors[i].code)] = i;
+    return map;
+  }
+
+  function indexOfCode(p, code) {
+    for (var i = 0; i < p.colors.length; i++) { if (String(p.colors[i].code) === String(code)) return i; }
+    return -1;
+  }
+
+  /* 把色表里的新色号按自然序插入，并把受影响格子的下标整体平移（只对非空格操作） */
+  function insertColorNatural(p, code) {
+    var c = findPaletteColor(p.paletteId, code);
+    if (!c) return -1;
+    var order = paletteOrderKeyMap(p.paletteId);
+    var big = Number.MAX_SAFE_INTEGER;
+    var key = (order[String(code)] === undefined) ? big : order[String(code)];
+    var pos = p.colors.length;
+    for (var i = 0; i < p.colors.length; i++) {
+      var k = (order[String(p.colors[i].code)] === undefined) ? big : order[String(p.colors[i].code)];
+      if (k > key) { pos = i; break; }
+    }
+    p.colors.splice(pos, 0, { code: c.code, hex: c.hex, rgb: c.rgb, group: c.group });
+    for (var j = 0; j < p.cells.length; j++) {
+      if (p.cells[j] !== EMPTY_CELL && p.cells[j] >= pos) p.cells[j]++;
+    }
+    return pos;
+  }
+
+  /* 移除颗数归零的色号（保持 colors.length === counts.length 与「colors 只含用到的色号」），
+     移除同样会平移下标；从后往前删，删除点之前的下标不受影响。 */
+  function pruneUnusedColors(p) {
+    var used = {};
+    for (var i = 0; i < p.cells.length; i++) {
+      var ci = p.cells[i];
+      if (ci !== EMPTY_CELL && ci >= 0 && ci < p.colors.length) used[ci] = true;
+    }
+    for (var k = p.colors.length - 1; k >= 0; k--) {
+      if (used[k]) continue;
+      p.colors.splice(k, 1);
+      for (var j = 0; j < p.cells.length; j++) {
+        var v = p.cells[j];
+        if (v !== EMPTY_CELL && v > k) p.cells[j] = v - 1;
+      }
+    }
+  }
+
+  function applyRecolor(idx, code, lock) {
+    var p = state.pattern;
+    if (!p || !p.cells) return;
+    if (idx < 0 || idx >= p.cells.length) return;
+    var ci = indexOfCode(p, code);
+    if (ci < 0) {
+      ci = insertColorNatural(p, code);
+      if (ci < 0) { setStatus('色号 ' + code + ' 不在当前色卡中，无法改色', 'warn'); return; }
+    }
+    p.cells[idx] = ci;
+    if (p.locked) p.locked[idx] = lock ? 1 : 0;
+    pruneUnusedColors(p);
+    recount(p);
+    var finalCi = p.cells[idx];
+    renderPattern();
+    renderLegend();
+    renderSummary();
+    updateLockInfo();
+    var code = p.colors[finalCi] ? p.colors[finalCi].code : '?';
+    setStatus('已改色：第 ' + (Math.floor(idx / p.w) + 1) + ' 行 第 ' + (idx % p.w + 1) + ' 列 → 色号 '
+      + code + '（图纸编号 ' + (finalCi + 1) + '）' + (lock ? '［已锁定，重新生成时保留］' : '［未锁定］'), 'ok');
+  }
+
+  /* 点击坐标 → 格子下标。
+   * 优先使用 Render.hitTest(pattern, canvas, px, py, viewOpts)（若渲染模块提供）；
+   * 否则按「四周对称留白」推断：render.js 的画布为 pad*2 + w*cellPx、(pad, pad) 处起画，
+   * 内置降级渲染器采用同样的对称留白，因此 (canvas 尺寸 - 网格尺寸) / 2 即为原点。 */
+  function hitTestCell(evt) {
+    var p = state.pattern;
+    var cv = ui.patternCanvas;
+    if (!p || !cv || typeof cv.getBoundingClientRect !== 'function' || !evt) return -1;
+    var rect = cv.getBoundingClientRect();
+    var scaleX = rect.width ? (cv.width / rect.width) : 1;
+    var scaleY = rect.height ? (cv.height / rect.height) : 1;
+    var px = (evt.clientX - rect.left) * scaleX;
+    var py = (evt.clientY - rect.top) * scaleY;
+
+    if (win.Render && typeof win.Render.hitTest === 'function') {
+      try {
+        var r = win.Render.hitTest(p, cv, px, py, state.viewOpts);
+        if (typeof r === 'number') return (r >= 0 && r < p.cells.length) ? r : -1;
+      } catch (e) { /* 落到内置推断 */ }
+    }
+
+    var v = state.viewOpts || {};
+    var cell = v.cellSize || v.cellPx || 12;
+    var gridW = p.w * cell, gridH = p.h * cell;
+    var offX = (cv.width > gridW) ? Math.floor((cv.width - gridW) / 2) : 0;
+    var offY = (cv.height > gridH) ? Math.floor((cv.height - gridH) / 2) : 0;
+    var col = Math.floor((px - offX) / cell);
+    var row = Math.floor((py - offY) / cell);
+    if (col < 0 || row < 0 || col >= p.w || row >= p.h) return -1;
+    return row * p.w + col;
+  }
+
+  function onPatternClick(evt) {
+    if (!ui.recolorMode || !ui.recolorMode.checked) return;
+    var p = state.pattern;
+    if (!p) { setStatus('尚未生成图纸', 'warn'); return; }
+    var idx = hitTestCell(evt);
+    if (idx < 0) { setStatus('点击位置不在图纸网格内（可调大「格子像素大小」后重试）', 'warn'); return; }
+    if (evt && (evt.altKey || evt.shiftKey)) {
+      if (p.locked) p.locked[idx] = p.locked[idx] ? 0 : 1;
+      renderPattern();
+      updateLockInfo();
+      setStatus(p.locked && p.locked[idx] ? '已锁定该格' : '已解锁该格', 'ok');
+      return;
+    }
+    var code = ui.recolorColor ? ui.recolorColor.value : '';
+    if (!code) { setStatus('请先在上方「目标色号」里选一个色号', 'warn'); return; }
+    var lock = !(ui.lockToggle && !ui.lockToggle.checked);
+    applyRecolor(idx, code, lock);
+  }
+
+  function unlockAll() {
+    var p = state.pattern;
+    if (!p || !p.locked) { setStatus('当前没有可解锁的图纸', 'warn'); return; }
+    for (var i = 0; i < p.locked.length; i++) p.locked[i] = 0;
+    renderPattern();
+    updateLockInfo();
+    setStatus('已清除所有锁定（下次重算将按算法重新取色）', 'ok');
+  }
+
+  function updateLockInfo() {
+    var p = state.pattern;
+    var n = 0;
+    if (p && p.locked) {
+      for (var i = 0; i < p.locked.length; i++) { if (p.locked[i]) n++; }
+    }
+    state.lockCount = n;
+    if (!ui.lockInfo) return;
+    var editing = !!(ui.recolorMode && ui.recolorMode.checked);
+    var lockOn = !(ui.lockToggle && !ui.lockToggle.checked);
+    var text = '已锁定 ' + n + ' 格';
+    if (editing) text += '（改色模式已开启' + (lockOn ? '，点击后自动锁定' : '，点击不锁定') + '）';
+    setText(ui.lockInfo, text);
+  }
+
+  function syncRecolorColors(pattern) {
+    var sel = ui.recolorColor;
+    if (!sel) return;
+    var prev = sel.value;
+    var pid = pattern ? pattern.paletteId : (ui.paletteSelect ? ui.paletteSelect.value : '');
+    var pal = paletteById(pid)
+      || paletteById(ui.paletteSelect ? ui.paletteSelect.value : '')
+      || paletteEntries()[0] || null;
+    var list = (pal && pal.colors && pal.colors.length) ? pal.colors
+      : ((pattern && pattern.colors) ? pattern.colors : []);
+    if (!list.length) {
+      sel.innerHTML = '<option value="">（色卡数据未加载）</option>';
+      return;
+    }
+    var groups = {}, order = [];
+    for (var j = 0; j < list.length; j++) {
+      var c = list[j];
+      if (!c) continue;
+      var g = c.group ? String(c.group) : '色号';
+      if (!groups[g]) { groups[g] = []; order.push(g); }
+      groups[g].push(c);
+    }
+    var html = '';
+    for (var k = 0; k < order.length; k++) {
+      var arr = groups[order[k]];
+      html += '<optgroup label="' + esc(order[k]) + '">';
+      for (var m = 0; m < arr.length; m++) {
+        html += '<option value="' + esc(arr[m].code) + '">' + esc(arr[m].code + ' · ' + (arr[m].hex || '')) + '</option>';
+      }
+      html += '</optgroup>';
+    }
+    sel.innerHTML = html;
+    if (prev && hasOptionValue(sel, prev)) sel.value = prev;
+    else if (pattern && pattern.counts && pattern.counts.length) sel.value = pattern.counts[0].code;
+    else if (sel.options && sel.options.length) sel.value = sel.options[0].value;
+  }
+
+  /* --------------------------------------------------------------- 渲染区 */
+
+  function renderPattern() {
+    var cv = ui.patternCanvas;
+    var p = state.pattern;
+    setCanvasPlaceholders();
+    if (!cv || !p) return;
+    state.viewOpts = viewOpts();
+    var v = state.viewOpts;
+    var R = win.Render;
+    var fell = false;
+    if (R && typeof R.drawPattern === 'function') {
+      try {
+        R.drawPattern(p, cv, v);
+      } catch (e) {
+        fell = true;
+        fallbackDrawPattern(cv, p, v);
+        setStatus('渲染失败，已改用内置简化渲染：' + errText(e), 'warn');
+      }
+    } else {
+      fell = true;
+      fallbackDrawPattern(cv, p, v);
+    }
+    if (!fell && (!cv.width || cv.width < 2)) { fell = true; fallbackDrawPattern(cv, p, v); }
+    state.renderFallback = fell;
+    if (hasClassList(cv)) {
+      if (ui.recolorMode && ui.recolorMode.checked) cv.classList.add('editing');
+      else cv.classList.remove('editing');
+    }
+  }
+
+  function contrastText(rgb) {
+    var r = 0, g = 0, b = 0;
+    if (Object.prototype.toString.call(rgb) === '[object Array]') { r = rgb[0]; g = rgb[1]; b = rgb[2]; }
+    else if (rgb && typeof rgb === 'object') { r = rgb.r; g = rgb.g; b = rgb.b; }
+    r = Number(r) || 0; g = Number(g) || 0; b = Number(b) || 0;
+    return ((0.299 * r + 0.587 * g + 0.114 * b) > 150) ? '#1b1b1b' : '#f5f5f5';
+  }
+
+  /* 内置降级渲染：render.js 缺失或抛错时仍能看到图纸（不依赖任何外部模块）。
+     画布布局与 render.js 一致：四周对称留白 pad，网格从 (pad, pad) 起画，
+     这样 hitTestCell 的「对称余量」推断对两种渲染器都精确成立。 */
+  function fallbackDrawPattern(cv, p, v) {
+    if (!cv || typeof cv.getContext !== 'function' || !p || !p.cells) return;
+    var cell = v.cellSize || v.cellPx || 12;
+    var pad = RULER_PAD;
+    cv.width = pad * 2 + p.w * cell;
+    cv.height = pad * 2 + p.h * cell;
+    var ctx = cv.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#FFFFFF';                 /* 纸底，与 render.js 的 C.paper 一致（图纸要能打印） */
+    ctx.fillRect(0, 0, cv.width, cv.height);
+
+    for (var y = 0; y < p.h; y++) {
+      for (var x = 0; x < p.w; x++) {
+        var i = y * p.w + x;
+        var ci = p.cells[i];
+        /* 空格（65535）与任何越界下标都跳过：不填色，保留纸底，避免被画成黑方块 */
+        if (!(ci >= 0 && ci < p.colors.length)) continue;
+        var col = p.colors[ci];
+        var dx = pad + x * cell, dy = pad + y * cell;
+        ctx.fillStyle = col.hex || '#000000';
+        ctx.fillRect(dx, dy, cell, cell);
+        if (p.locked && p.locked[i] && cell >= 6) {
+          ctx.strokeStyle = '#E8695F';         /* 白底上用红框标出「手动锁定」的格子 */
+          ctx.lineWidth = 1;
+          ctx.strokeRect(dx + 0.5, dy + 0.5, cell - 1, cell - 1);
+        }
+        if (v.showNumbers && cell >= 9) {
+          /* 与 render.js 一致：图纸上的编号 = colors 下标 + 1（不是色号字符串），
+             阈值也沿用它的 MIN_CODE_PX = 9；墨色按其底色明暗取反以保证可读 */
+          ctx.fillStyle = contrastText(col.rgb);
+          ctx.font = Math.max(7, Math.floor(cell * 0.42)) + 'px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(ci + 1), dx + cell / 2, dy + cell / 2 + 0.5);
+        }
+      }
+    }
+
+    ctx.strokeStyle = '#DCE0E6';               /* 细网格，与 render.js 的 C.grid 一致（白底上可见） */
+    ctx.lineWidth = 1;
+    for (var gx = 0; gx <= p.w; gx++) {
+      ctx.beginPath();
+      ctx.moveTo(pad + gx * cell + 0.5, pad);
+      ctx.lineTo(pad + gx * cell + 0.5, pad + p.h * cell);
+      ctx.stroke();
+    }
+    for (var gy = 0; gy <= p.h; gy++) {
+      ctx.beginPath();
+      ctx.moveTo(pad, pad + gy * cell + 0.5);
+      ctx.lineTo(pad + p.w * cell, pad + gy * cell + 0.5);
+      ctx.stroke();
+    }
+
+    if (v.showRuler) {
+      ctx.fillStyle = '#5A6472';               /* 刻度文字，与 render.js 的 C.rulerText 一致 */
+      ctx.font = '9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (var cx = 0; cx < p.w; cx++) {
+        if (cell < 12 && (cx + 1) % 5 !== 0) continue;
+        ctx.fillText(String(cx + 1), pad + cx * cell + cell / 2, pad / 2);
+      }
+      ctx.textAlign = 'right';
+      for (var cy = 0; cy < p.h; cy++) {
+        if (cell < 12 && (cy + 1) % 5 !== 0) continue;
+        ctx.fillText(String(cy + 1), pad - 3, pad + cy * cell + cell / 2);
+      }
+    }
+  }
+
+  function builtinLegendHTML(p) {
+    var rows = [];
+    var list = (p && p.counts) ? p.counts : [];
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      rows.push('<div class="legend-row">'
+        + '<span class="legend-code">' + esc(c.code) + '</span>'
+        + '<span class="legend-sw" style="background:' + esc(c.hex) + '"></span>'
+        + '<span class="legend-hex">' + esc(c.hex) + '</span>'
+        + '<span class="legend-count">' + esc(c.count) + ' 颗</span>'
+        + '</div>');
+    }
+    if (!rows.length) return '<p class="muted">暂无用量数据</p>';
+    return '<div class="legend-grid">' + rows.join('') + '</div>';
+  }
+
+  function renderLegend() {
+    if (!ui.legendBox) return;
+    var p = state.pattern;
+    if (!p) { ui.legendBox.innerHTML = '<p class="muted">尚未生成图纸</p>'; return; }
+    var R = win.Render;
+    if (R && typeof R.legendHTML === 'function') {
+      try {
+        var html = R.legendHTML(p);
+        ui.legendBox.innerHTML = html ? html : '<p class="muted">图例为空</p>';
+        return;
+      } catch (e) {
+        /* 落到内置图例 */
+      }
+    }
+    ui.legendBox.innerHTML = builtinLegendHTML(p);
+  }
+
+  function summaryRow(k, v) {
+    return '<div class="summary-row"><span class="summary-k">' + esc(k) + '</span>'
+      + '<span class="summary-v">' + esc(v) + '</span></div>';
+  }
+
+  function renderSummary() {
+    if (!ui.summaryBox) return;
+    var p = state.pattern;
+    if (!p) { ui.summaryBox.innerHTML = '<p class="muted">尚未生成图纸</p>'; return; }
+    var s = p.stats || {};
+    var total = (s.total !== null && s.total !== undefined) ? s.total : countBeads(p);
+    var used = (s.usedColors !== null && s.usedColors !== undefined) ? s.usedColors : ((p.counts || []).length);
+    var html = '';
+    html += summaryRow('总颗数', total + ' 颗');
+    html += summaryRow('用色数', used + ' 色');
+    html += summaryRow('成品尺寸', fmt1(s.cmW) + ' × ' + fmt1(s.cmH) + ' cm');
+    html += summaryRow('拼板', ((s.boardX !== null && s.boardX !== undefined) ? s.boardX : '—')
+      + ' × ' + ((s.boardY !== null && s.boardY !== undefined) ? s.boardY : '—') + ' 板');
+    html += summaryRow('图纸格数', p.w + ' × ' + p.h);
+    html += summaryRow('色卡', p.paletteId || '—');
+    ui.summaryBox.innerHTML = html;
+  }
+
+  /* ------------------------------------------------------------- 文件输出 */
+
+  function downloadBlob(blob, filename) {
+    if (!blob) { setStatus('导出失败：文件内容为空', 'err'); return false; }
+    if (!doc || typeof doc.createElement !== 'function') { setStatus('当前环境不支持下载', 'err'); return false; }
+    var url = null;
+    try {
+      url = (win.URL && typeof win.URL.createObjectURL === 'function') ? win.URL.createObjectURL(blob) : null;
+    } catch (e) { url = null; }
+    if (!url) { setStatus('当前环境不支持文件下载（缺少 Blob URL 支持）', 'err'); return false; }
+    var a = doc.createElement('a');
+    a.href = url;
+    a.download = filename;
+    if (doc.body && typeof doc.body.appendChild === 'function') doc.body.appendChild(a);
+    if (typeof a.click === 'function') a.click();
+    later(function () {
+      try { if (win.URL && win.URL.revokeObjectURL) win.URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ }
+      if (a.parentNode && typeof a.parentNode.removeChild === 'function') a.parentNode.removeChild(a);
+    }, 4000);
+    return true;
+  }
+
+  /* 语义：确保落地文本以 UTF-8 BOM 开头，且只加一次。
+     render.js 的 exportCSV 按冻结契约已经自带 U+FEFF，所以这里仅当首字符不是 U+FEFF 时才补，
+     否则落地文件会变成双 BOM（U+FEFF U+FEFF 编号,...）。不要改回「无条件前置 BOM」。 */
+  function downloadText(text, filename, mime) {
+    if (!win.Blob) { setStatus('当前环境不支持导出（缺少 Blob 支持）', 'err'); return false; }
+    var body = String(text === null || text === undefined ? '' : text);
+    if (body.charCodeAt(0) !== 0xFEFF) body = '\ufeff' + body;
+    return downloadBlob(new win.Blob([body], { type: (mime || 'text/plain') + ';charset=utf-8' }), filename);
+  }
+
+  function exportCsv() {
+    var p = state.pattern;
+    var R = win.Render;
+    if (!p) { setStatus('请先生成图纸', 'warn'); return; }
+    if (!R || typeof R.exportCSV !== 'function') { setStatus('核心模块未加载：无法导出用量清单 CSV', 'err'); return; }
+    try {
+      var csv = R.exportCSV(p);
+      if (downloadText(csv || '', '拼豆用量清单.csv', 'text/csv')) setStatus('已导出用量清单 CSV', 'ok');
+    } catch (e) {
+      setStatus('导出 CSV 失败：' + errText(e), 'err');
+    }
+  }
+
+  function exportPngOf(canvas, filename, okMsg) {
+    var R = win.Render;
+    if (!R || typeof R.exportPNG !== 'function') { setStatus('核心模块未加载：无法导出 PNG', 'err'); return; }
+    if (!canvas) { setStatus('导出失败：画布不存在', 'err'); return; }
+    try {
+      var ret = R.exportPNG(canvas, filename);
+      if (ret && typeof ret.then === 'function') {
+        ret.then(function () { setStatus(okMsg, 'ok'); },
+          function (e) { setStatus('导出 PNG 失败：' + errText(e), 'err'); });
+      } else {
+        setStatus(okMsg, 'ok');
+      }
+    } catch (e) {
+      setStatus('导出 PNG 失败：' + errText(e), 'err');
+    }
+  }
+
+  function exportPng() {
+    if (!state.pattern) { setStatus('请先生成图纸', 'warn'); return; }
+    exportPngOf(ui.patternCanvas, '拼豆图纸.png', '已导出图纸 PNG');
+  }
+
+  function exportCompare() {
+    var p = state.pattern;
+    var R = win.Render;
+    if (!p) { setStatus('请先生成图纸', 'warn'); return; }
+    if (!R || typeof R.exportPNG !== 'function') { setStatus('核心模块未加载：无法导出对照图', 'err'); return; }
+    if (!ui.sourceCanvas) { setStatus('导出失败：原图尚未载入', 'err'); return; }
+    if (typeof R.drawCompare !== 'function') { setStatus('核心模块未加载：无法合成对照图', 'err'); return; }
+    if (!doc || typeof doc.createElement !== 'function') { setStatus('当前环境不支持导出', 'err'); return; }
+    try {
+      var tmp = doc.createElement('canvas');
+      R.drawCompare(p, ui.sourceCanvas, tmp, state.viewOpts);
+      exportPngOf(tmp, '拼豆对照图.png', '已导出对照图 PNG');
+    } catch (e) {
+      setStatus('导出对照图失败：' + errText(e), 'err');
+    }
+  }
+
+  /* ------------------------------------------------------------- 图片读入 */
+
+  function isImageType(t) {
+    return !t || String(t).toLowerCase().indexOf('image/') === 0;
+  }
+
+  function pickFile() {
+    if (!ui.fileInput) { setStatus('当前环境不支持文件选择', 'warn'); return; }
+    if (typeof ui.fileInput.click === 'function') ui.fileInput.click();
+  }
+
+  function revoke(url) {
+    try { if (url && win.URL && win.URL.revokeObjectURL) win.URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ }
+  }
+
+  function loadViaImageBitmap(blob, ok, fail) {
+    if (typeof win.createImageBitmap === 'function') {
+      try {
+        win.createImageBitmap(blob).then(function (bmp) { ok(bmp, bmp.width, bmp.height); },
+          function (e) { fail(errText(e)); });
+        return;
+      } catch (e) { /* 继续走失败分支 */ }
+    }
+    fail('当前环境不支持读取该图片格式');
+  }
+
+  function loadImageFromBlob(blob) {
+    if (!blob) { setStatus('没有拿到图片数据', 'warn'); return; }
+    var type = blob.type || '';
+    if (!isImageType(type)) { setStatus('这不是图片文件：' + type, 'err'); return; }
+    setStatus('正在读取图片…', 'info');
+    var url = null;
+    try {
+      url = (win.URL && typeof win.URL.createObjectURL === 'function') ? win.URL.createObjectURL(blob) : null;
+    } catch (e) { url = null; }
+
+    var finished = false;
+    function ok(src, w, h) {
+      if (finished) return;
+      finished = true;
+      revoke(url);
+      useImageSource(src, w, h);
+    }
+    function fail(msg) {
+      if (finished) return;
+      finished = true;
+      revoke(url);
+      setStatus('图片读取失败：' + msg, 'err');
+    }
+
+    if (!url) { loadViaImageBitmap(blob, ok, fail); return; }
+    var Img = win.Image;
+    if (typeof Img !== 'function') { loadViaImageBitmap(blob, ok, fail); return; }
+    var img = new Img();
+    img.onload = function () {
+      ok(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+    };
+    img.onerror = function () { loadViaImageBitmap(blob, ok, fail); };
+    img.src = url;
+  }
+
+  function drawSourceCanvas() {
+    var cv = ui.sourceCanvas;
+    var src = state.source;
+    state.srcCtx = null;
+    state.pixW = 0;
+    state.pixH = 0;
+    if (!cv || !src || !state.srcW || !state.srcH) return;
+    var scale = 1;
+    var edge = Math.max(state.srcW, state.srcH);
+    if (edge > SRC_MAX_EDGE) scale = SRC_MAX_EDGE / edge;
+    var pw = Math.max(1, Math.round(state.srcW * scale));
+    var ph = Math.max(1, Math.round(state.srcH * scale));
+    cv.width = pw;
+    cv.height = ph;
+    if (typeof cv.getContext !== 'function') return;
+    var ctx = cv.getContext('2d');
+    if (!ctx) return;
+    if (typeof ctx.drawImage === 'function') {
+      try { ctx.drawImage(src, 0, 0, pw, ph); } catch (e) { /* 来源不可绘制：保留空白画布 */ }
+    }
+    state.srcCtx = ctx;
+    state.pixW = pw;
+    state.pixH = ph;
+  }
+
+  function useImageSource(src, w, h) {
+    if (!src || !w || !h) { setStatus('图片尺寸无效，无法处理', 'err'); return; }
+    state.source = src;
+    state.srcW = Math.round(w);
+    state.srcH = Math.round(h);
+    state.pattern = null;
+    drawSourceCanvas();
+    if (ui.lockAspect && ui.lockAspect.checked) applyBoardsPreset();
+    else normalizeDims('gridW');
+    setCanvasPlaceholders();
+    renderPattern();
+    renderLegend();
+    renderSummary();
+    updateLockInfo();
+    setStatus('已载入 ' + state.srcW + ' × ' + state.srcH + ' 图片，正在生成图纸…', 'info');
+    scheduleRegenerate(0);
+  }
+
+  /* --------------------------------------------------------- 拖拽 / 粘贴 */
+
+  function dragHasFiles(e) {
+    var dt = e && e.dataTransfer;
+    if (!dt) return false;
+    var types = dt.types;
+    if (!types || !types.length) return true;
+    for (var i = 0; i < types.length; i++) {
+      if (String(types[i]).toLowerCase() === 'files') return true;
+    }
+    return false;
+  }
+
+  function imageFileFrom(dt) {
+    if (!dt) return null;
+    var files = dt.files;
+    if (files && files.length) {
+      for (var i = 0; i < files.length; i++) {
+        if (files[i] && isImageType(files[i].type)) return files[i];
+      }
+    }
+    var items = dt.items;
+    if (items && items.length) {
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j];
+        if (it && it.kind === 'file' && isImageType(it.type) && typeof it.getAsFile === 'function') {
+          var f = it.getAsFile();
+          if (f) return f;
+        }
+      }
+    }
+    return null;
+  }
+
+  function setDragActive(active) {
+    var on2 = !!active;
+    if (state.dragActive === on2) return;
+    state.dragActive = on2;
+    if (hasClassList(ui.dropZone)) {
+      if (on2) ui.dropZone.classList.add('drag-active');
+      else ui.dropZone.classList.remove('drag-active');
+    }
+    if (hasClassList(ui.dropHint)) {
+      if (on2) ui.dropHint.classList.add('drag-active');
+      else ui.dropHint.classList.remove('drag-active');
+    }
+  }
+
+  function onDragOver(e) {
+    if (!dragHasFiles(e)) return;
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (e && e.dataTransfer) { try { e.dataTransfer.dropEffect = 'copy'; } catch (err) { /* 忽略 */ } }
+    setDragActive(true);
+  }
+
+  function onDragLeave(e) {
+    if (e && e.relatedTarget) return;   /* 仅在真正离开窗口时取消高亮 */
+    setDragActive(false);
+  }
+
+  function onDrop(e) {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    setDragActive(false);
+    var f = imageFileFrom(e && e.dataTransfer);
+    if (f) loadImageFromBlob(f);
+    else setStatus('没有识别到图片文件，请拖入 PNG / JPEG / WebP / GIF 图片', 'warn');
+  }
+
+  function onPaste(e) {
+    var cb = e && e.clipboardData;
+    if (!cb) return;
+    var f = imageFileFrom(cb);
+    if (!f) {
+      var text = '';
+      try { text = (typeof cb.getData === 'function') ? (cb.getData('text') || '') : ''; } catch (err) { text = ''; }
+      if (text) setStatus('剪贴板里是文本而不是图片：请先在系统里复制图片，再按 Ctrl+V。', 'warn');
+      return;
+    }
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    loadImageFromBlob(f);
+  }
+
+  /* ------------------------------------------------------------- 事件绑定 */
+
+  function onControlInput(id) {
+    syncLabels();
+    if (id === 'maxColors') state.touched.maxColors = true;
+    if (id === 'cellSize') { scheduleRender(); return; }
+    if (id === 'gridW' || id === 'gridH') normalizeDims(id);
+    scheduleRegenerate(DEBOUNCE_MS);
+  }
+
+  function onToggleChange(id) {
+    if (id === 'quantizeEnabled') state.touched.quantizeEnabled = true;
+    if (id === 'showNumbers' || id === 'showRuler') { scheduleRender(); return; }
+    if (id === 'recolorMode') {
+      renderPattern();
+      updateLockInfo();
+      setStatus(ui.recolorMode && ui.recolorMode.checked
+        ? '改色模式已开启：点击图纸格子即可改成目标色号'
+        : '改色模式已关闭', 'info');
+      return;
+    }
+    if (id === 'lockToggle') { updateLockInfo(); return; }
+    syncEnabledState();
+    if (id === 'lockAspect' && ui.lockAspect && ui.lockAspect.checked) normalizeDims('gridW');
+    scheduleRegenerate(0);
+  }
+
+  function onSelectChange(id) {
+    if (id === 'paletteSelect') {
+      syncPaletteMeta();
+      syncRecolorColors(state.pattern);
+      scheduleRegenerate(0);
+      return;
+    }
+    if (id === 'bayerN') { syncEnabledState(); scheduleRegenerate(0); return; }
+    if (id === 'boardsSelect') { applyBoardsPreset(); scheduleRegenerate(0); return; }
+  }
+
+  function applyDefaults(regen) {
+    if (!ui.brightness) { setStatus('界面控件缺失，无法重置微调', 'warn'); return; }
+    setVal(ui.brightness, DEFAULTS.brightness);
+    setVal(ui.contrast, DEFAULTS.contrast);
+    setVal(ui.saturation, DEFAULTS.saturation);
+    setVal(ui.ditherStrength, DEFAULTS.ditherStrength);
+    setVal(ui.maxColors, DEFAULTS.maxColors);
+    setVal(ui.cellSize, DEFAULTS.cellSize);
+    setChecked(ui.autoWB, DEFAULTS.autoWB);
+    setChecked(ui.autoLevels, DEFAULTS.autoLevels);
+    setChecked(ui.quantizeEnabled, DEFAULTS.quantizeEnabled);
+    setChecked(ui.lockAspect, DEFAULTS.lockAspect);
+    setChecked(ui.showNumbers, DEFAULTS.showNumbers);
+    setChecked(ui.showRuler, DEFAULTS.showRuler);
+    setChecked(ui.lockToggle, DEFAULTS.lockToggle);
+    setChecked(ui.recolorMode, DEFAULTS.recolorMode);
+    setChecked(ui.methodNearest, DEFAULTS.method === 'nearest');
+    setChecked(ui.methodFS, DEFAULTS.method === 'fs');
+    setChecked(ui.methodBayer, DEFAULTS.method === 'bayer');
+    setVal(ui.bayerN, DEFAULTS.bayerN);
+    setVal(ui.boardsSelect, DEFAULTS.boards);
+    applyBoardsPreset();
+    syncQuantizeFromPipeline();      /* 回到默认 = 跟随 Pipeline.DEFAULT_OPTS.quantize */
+    state.touched.quantizeEnabled = false;
+    state.touched.maxColors = false;
+    syncLabels();
+    syncEnabledState();
+    state.viewOpts = viewOpts();
+    renderPattern();
+    updateLockInfo();
+    if (regen) {
+      setStatus('已重置微调参数', 'info');
+      scheduleRegenerate(0);
+    }
+  }
+
+  function bindEvents() {
+    var continuous = ['brightness', 'contrast', 'saturation', 'ditherStrength', 'cellSize', 'maxColors', 'gridW', 'gridH'];
+    var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showNumbers', 'showRuler', 'lockToggle', 'recolorMode'];
+    var selects = ['boardsSelect', 'paletteSelect', 'bayerN'];
+    var methods = ['methodNearest', 'methodFS', 'methodBayer'];
+    var i;
+
+    for (i = 0; i < continuous.length; i++) {
+      (function (id) {
+        var el = ui[id];
+        if (!el) return;
+        on(el, 'input', function () { onControlInput(id); });
+        on(el, 'change', function () { onControlInput(id); });
+      }(continuous[i]));
+    }
+    for (i = 0; i < toggles.length; i++) {
+      (function (id) {
+        on(ui[id], 'change', function () { onToggleChange(id); });
+      }(toggles[i]));
+    }
+    for (i = 0; i < selects.length; i++) {
+      (function (id) {
+        on(ui[id], 'change', function () { onSelectChange(id); });
+      }(selects[i]));
+    }
+    for (i = 0; i < methods.length; i++) {
+      on(ui[methods[i]], 'change', function () {
+        syncEnabledState();
+        scheduleRegenerate(0);
+      });
+    }
+
+    on(ui.btnRegenerate, 'click', function () { scheduleRegenerate(0); });
+    on(ui.btnResetAdjust, 'click', function () { applyDefaults(true); });
+    on(ui.btnExportPng, 'click', exportPng);
+    on(ui.btnExportCompare, 'click', exportCompare);
+    on(ui.btnExportCsv, 'click', exportCsv);
+    on(ui.btnUnlockAll, 'click', unlockAll);
+    on(ui.btnPickFile, 'click', pickFile);
+    on(ui.emptyState, 'click', pickFile);
+    on(ui.dropZone, 'click', function () { if (!state.source) pickFile(); });
+    on(ui.sourceCanvas, 'click', function () { if (!state.source) pickFile(); });
+    on(ui.patternCanvas, 'click', onPatternClick);
+    on(ui.fileInput, 'change', function () {
+      var f = (ui.fileInput.files && ui.fileInput.files.length) ? ui.fileInput.files[0] : null;
+      if (f) loadImageFromBlob(f);
+      else setStatus('没有选中文件', 'warn');
+      try { ui.fileInput.value = ''; } catch (e) { /* 某些环境只读，忽略 */ }
+    });
+
+    if (doc && typeof doc.addEventListener === 'function') {
+      doc.addEventListener('dragover', onDragOver);
+      doc.addEventListener('dragleave', onDragLeave);
+      doc.addEventListener('drop', onDrop);
+      doc.addEventListener('paste', onPaste);
+    }
+  }
+
+  /* ------------------------------------------------------------------ 启动 */
+
+  function buildUI() {
+    ui = {
+      fileInput: byId('fileInput'),
+      btnPickFile: byId('btnPickFile'),
+      dropHint: byId('dropHint'),
+      moduleNotice: byId('moduleNotice'),
+      brightness: byId('brightness'),
+      brightnessVal: byId('brightnessVal'),
+      contrast: byId('contrast'),
+      contrastVal: byId('contrastVal'),
+      saturation: byId('saturation'),
+      saturationVal: byId('saturationVal'),
+      autoWB: byId('autoWB'),
+      autoLevels: byId('autoLevels'),
+      methodNearest: byId('methodNearest'),
+      methodFS: byId('methodFS'),
+      methodBayer: byId('methodBayer'),
+      bayerN: byId('bayerN'),
+      ditherStrength: byId('ditherStrength'),
+      ditherStrengthVal: byId('ditherStrengthVal'),
+      quantizeEnabled: byId('quantizeEnabled'),
+      maxColors: byId('maxColors'),
+      boardsSelect: byId('boardsSelect'),
+      gridW: byId('gridW'),
+      gridH: byId('gridH'),
+      lockAspect: byId('lockAspect'),
+      paletteSelect: byId('paletteSelect'),
+      paletteMeta: byId('paletteMeta'),
+      showNumbers: byId('showNumbers'),
+      showRuler: byId('showRuler'),
+      cellSize: byId('cellSize'),
+      cellSizeVal: byId('cellSizeVal'),
+      recolorMode: byId('recolorMode'),
+      recolorColor: byId('recolorColor'),
+      lockToggle: byId('lockToggle'),
+      btnUnlockAll: byId('btnUnlockAll'),
+      lockInfo: byId('lockInfo'),
+      btnRegenerate: byId('btnRegenerate'),
+      btnResetAdjust: byId('btnResetAdjust'),
+      btnExportPng: byId('btnExportPng'),
+      btnExportCompare: byId('btnExportCompare'),
+      btnExportCsv: byId('btnExportCsv'),
+      dropZone: byId('dropZone'),
+      statusText: byId('statusText'),
+      elapsedText: byId('elapsedText'),
+      progressWrap: byId('progressWrap'),
+      progressBar: byId('progressBar'),
+      patternCanvas: byId('patternCanvas'),
+      patternHint: byId('patternHint'),
+      emptyState: byId('emptyState'),
+      sourceCanvas: byId('sourceCanvas'),
+      sourceHint: byId('sourceHint'),
+      summaryBox: byId('summaryBox'),
+      legendBox: byId('legendBox')
+    };
+    var missing = [];
+    for (var k in ui) {
+      if (Object.prototype.hasOwnProperty.call(ui, k) && !ui[k]) missing.push(k);
+    }
+    return missing;
+  }
+
+  function boot() {
+    if (state.booted) return;
+    if (!doc || typeof doc.getElementById !== 'function') return;  /* 无 DOM：只保留 API，不做任何事 */
+    state.booted = true;
+    state.missingUI = buildUI();
+    fillPaletteSelect();
+    syncRecolorColors(null);
+    applyDefaults(false);
+    bindEvents();
+    var mods = describeModules();
+    updateModuleNotice(mods);
+    setStatus(mods.ok ? '就绪：请先选择一张图片' : '核心模块未加载：界面可用，生成 / 渲染 / 导出暂不可用', mods.ok ? 'info' : 'warn');
+    renderLegend();
+    renderSummary();
+    updateLockInfo();
+    setCanvasPlaceholders();
+  }
+
+  var api = {
+    boot: boot,
+    modules: describeModules,
+    regenerate: regenerate,
+    adoptImage: useImageSource,
+    options: buildOpts,
+    clickCell: onPatternClick,
+    hitTestCell: hitTestCell,
+    applyRecolor: applyRecolor,
+    recount: recount,
+    exportCsv: exportCsv,
+    state: function () { return state; },
+    elements: function () { return ui; }
+  };
+
+  if (win && typeof win === 'object') win.PindouUI = api;
+
+  if (doc && typeof doc.addEventListener === 'function') {
+    if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', boot);
+    else boot();
+  }
+}());
+</script>
+</body>
+</html>

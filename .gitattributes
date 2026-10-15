@@ -1,0 +1,11 @@
+# 统一按 LF 存储/检出。
+# 这不是洁癖：build.mjs 把源文件逐字节内联成单文件产物，行尾一旦被自动转换成 CRLF，
+# 产物的字节与 sha256 就会变，验证过的「两次构建字节完全相同」这条性质也就失效了。
+* text=auto eol=lf
+
+# 明确指定，避免被误判为二进制
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.html  text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf

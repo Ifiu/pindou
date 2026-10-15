@@ -1,0 +1,266 @@
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#101216; --bg2:#15181e; --panel:#181b22; --panel2:#1f232b; --line:#2a2f39;
+    --text:#e8eaf0; --muted:#98a1b0; --accent:#5b9bf3; --accent-soft:rgba(91,155,243,.14);
+    --ok:#4ec38a; --warn:#d9a441; --err:#e8695f; --radius:10px;
+  }
+  [hidden]{display:none!important}
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB",sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  #app{max-width:1800px;margin:0 auto;padding:14px 16px 22px;min-height:100vh;display:flex;flex-direction:column;gap:12px}
+
+  .app-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:10px}
+  .app-head h1{margin:0 0 2px;font-size:18px;letter-spacing:.4px}
+  .app-sub{margin:0;color:var(--muted);font-size:12.5px}
+  .head-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .drop-hint{color:var(--muted);font-size:12.5px;padding:5px 9px;border:1px dashed var(--line);border-radius:8px;transition:color .15s,border-color .15s,background .15s}
+  .drop-hint.drag-active{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+  .file-input{display:none}
+
+  .notice{border-radius:var(--radius);padding:9px 12px;font-size:12.8px}
+  .notice-warn{background:rgba(217,164,65,.10);border:1px solid rgba(217,164,65,.35);color:#efd9a7}
+  .notice-soft{background:var(--panel);border:1px solid var(--line);color:var(--muted)}
+
+  .layout{display:grid;grid-template-columns:310px minmax(0,1fr) 320px;gap:12px;align-items:start}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
+  .panel h2{margin:0;font-size:13px;font-weight:600;color:var(--text)}
+  .group{border-bottom:1px solid var(--line);padding:10px 0}
+  .group:first-child{padding-top:0}
+  .group:last-child{border-bottom:0;padding-bottom:0}
+  .group h2{margin-bottom:8px;color:var(--accent)}
+  .controls{display:flex;flex-direction:column;gap:2px;max-height:calc(100vh - 150px);overflow:auto}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.8px;color:var(--muted);margin:6px 0 2px}
+  .row output{color:var(--accent);font-variant-numeric:tabular-nums}
+  .check{display:flex;align-items:flex-start;gap:7px;font-size:12.8px;margin:6px 0;cursor:pointer;color:var(--text)}
+  .check input{margin:2px 0 0;accent-color:var(--accent);flex:none}
+  .radios{display:flex;flex-direction:column;gap:2px;margin:2px 0}
+  .field{display:flex;flex-direction:column;gap:3px;font-size:12.4px;color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0}
+  .hint{margin:6px 0 0;font-size:11.8px;line-height:1.5;color:var(--muted)}
+  .muted{color:var(--muted)}
+  input[type="range"]{width:100%;accent-color:var(--accent);margin:2px 0 4px}
+  input[type="number"],select{
+    width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);
+    border-radius:6px;padding:5px 7px;font-size:12.8px;font-family:inherit
+  }
+  input[type="number"]:disabled,select:disabled{opacity:.45;cursor:not-allowed}
+  button{font-family:inherit}
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;
+    padding:7px 12px;font-size:12.8px;cursor:pointer;transition:border-color .15s,background .15s
+  }
+  .btn:hover{border-color:var(--accent);background:#232936}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
+  .btn-primary:hover{background:#79b0f7;border-color:#79b0f7}
+  .btn-ghost{background:transparent}
+  .group-actions .btn{width:100%;margin-top:8px}
+  .group-actions .btn:first-of-type{margin-top:2px}
+
+  .canvas-panel{position:relative;min-width:0}
+  .canvas-panel.drag-active{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-soft),0 0 0 3px var(--accent-soft)}
+  .panel-head{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+  .status-line{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-size:12.4px}
+  .status{color:var(--muted)}
+  .status.ok{color:var(--ok)}
+  .status.warn{color:var(--warn)}
+  .status.err{color:var(--err)}
+  .elapsed{color:var(--muted);font-variant-numeric:tabular-nums}
+  .progress{height:3px;border-radius:2px;background:var(--panel2);overflow:hidden}
+  .progress-bar{height:100%;width:35%;background:var(--accent);animation:pindou-slide 1s ease-in-out infinite}
+  @keyframes pindou-slide{0%{margin-left:-35%}100%{margin-left:100%}}
+  .canvas-scroll{position:relative;overflow:auto;max-height:72vh;padding:8px;background:var(--bg2);border:1px solid var(--line);border-radius:8px}
+  .pattern-canvas{display:block;max-width:100%;height:auto;background:#0c0e12;border-radius:6px;image-rendering:pixelated;cursor:default}
+  .pattern-canvas.editing{cursor:crosshair}
+  .canvas-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;pointer-events:none;padding:16px}
+  .canvas-hint{margin:0;text-align:center;color:var(--muted);font-size:12.8px;line-height:1.6;background:rgba(16,18,22,.82);border:1px dashed var(--line);border-radius:10px;padding:12px 16px;max-width:80%}
+  .canvas-hint.small{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:11.5px;padding:7px 10px;max-width:88%}
+  .empty-cta{pointer-events:auto}
+
+  .side{display:flex;flex-direction:column;gap:12px}
+  .block h2{margin-bottom:8px;color:var(--accent)}
+  .source-wrap{position:relative}
+  .source-canvas{display:block;width:100%;max-width:100%;height:auto;background:#0c0e12;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated}
+  .summary{display:flex;flex-direction:column;gap:5px}
+  .summary-row{display:flex;justify-content:space-between;gap:10px;font-size:12.6px;border-bottom:1px dotted var(--line);padding-bottom:4px}
+  .summary-k{color:var(--muted)}
+  .summary-v{color:var(--text);font-variant-numeric:tabular-nums;text-align:right}
+  .legend{max-height:340px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+  .legend-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .legend-row{display:flex;align-items:center;gap:7px;font-size:12.2px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:5px 7px}
+  .legend-code{font-weight:600;min-width:34px;font-variant-numeric:tabular-nums}
+  .legend-sw{width:18px;height:18px;border-radius:4px;border:1px solid rgba(255,255,255,.25);flex:none}
+  .legend-hex{color:var(--muted);font-size:11.4px}
+  .legend-count{margin-left:auto;color:var(--text);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  .disclaimer{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:var(--radius);padding:9px 12px;font-size:12.6px;color:#e4d9c1}
+  .disclaimer-tag{display:inline-block;color:var(--warn);font-weight:600;margin-right:6px}
+
+  @media (max-width:1180px){
+    .layout{grid-template-columns:1fr}
+    .controls{max-height:none;overflow:visible}
+    .canvas-scroll{max-height:60vh}
+  }
+  @media (max-width:640px){
+    #app{padding:10px 10px 18px}
+    .legend-grid{grid-template-columns:1fr}
+  }
+</style>
+
+<div id="app">
+  <header class="app-head">
+    <div class="head-title">
+      <h1>拼豆图纸生成器</h1>
+      <p class="app-sub">纯本地运行 · 上传图片 → MARD 色卡网格图纸 + 色号用量清单</p>
+    </div>
+    <div class="head-actions">
+      <button id="btnPickFile" class="btn btn-primary" type="button">选择图片…</button>
+      <input id="fileInput" class="file-input" type="file" accept="image/*" />
+      <span id="dropHint" class="drop-hint">也可拖拽图片到窗口，或按 Ctrl+V 粘贴</span>
+    </div>
+  </header>
+
+  <div id="moduleNotice" class="notice notice-warn" hidden></div>
+
+  <div class="layout">
+    <aside class="panel controls" aria-label="参数面板">
+      <section class="group">
+        <h2>1 · 图片输入</h2>
+        <p class="hint">三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。图片只在本地处理，不会上传到任何服务器。</p>
+      </section>
+
+      <section class="group">
+        <h2>2 · 预处理</h2>
+        <label class="row" for="brightness"><span>亮度</span><output id="brightnessVal">0</output></label>
+        <input id="brightness" type="range" min="-100" max="100" step="1" value="0" />
+        <label class="row" for="contrast"><span>对比度</span><output id="contrastVal">0</output></label>
+        <input id="contrast" type="range" min="-100" max="100" step="1" value="0" />
+        <label class="row" for="saturation"><span>饱和度</span><output id="saturationVal">0</output></label>
+        <input id="saturation" type="range" min="-100" max="100" step="1" value="0" />
+        <label class="check"><input id="autoWB" type="checkbox" /> 自动白平衡</label>
+        <label class="check"><input id="autoLevels" type="checkbox" /> 自动色阶</label>
+      </section>
+
+      <section class="group">
+        <h2>3 · 取色方式</h2>
+        <div class="radios" role="radiogroup" aria-label="取色方式">
+          <label class="check"><input id="methodNearest" type="radio" name="method" value="nearest" checked /> 最近邻（色块最干净）</label>
+          <label class="check"><input id="methodFS" type="radio" name="method" value="fs" /> 误差扩散（Floyd–Steinberg）</label>
+          <label class="check"><input id="methodBayer" type="radio" name="method" value="bayer" /> 有序抖动（Bayer）</label>
+        </div>
+        <label class="row" for="bayerN"><span>Bayer 尺寸</span></label>
+        <select id="bayerN">
+          <option value="4">4 × 4</option>
+          <option value="8">8 × 8</option>
+        </select>
+        <label class="row" for="ditherStrength"><span>抖动强度</span><output id="ditherStrengthVal">30%</output></label>
+        <input id="ditherStrength" type="range" min="0" max="100" step="1" value="30" />
+      </section>
+
+      <section class="group">
+        <h2>4 · 减色</h2>
+        <label class="check"><input id="quantizeEnabled" type="checkbox" checked /> 启用减色（限制最大色数）</label>
+        <label class="row" for="maxColors"><span>最大色数</span></label>
+        <input id="maxColors" type="number" min="2" max="221" step="1" value="24" />
+      </section>
+
+      <section class="group">
+        <h2>5 · 图纸尺寸</h2>
+        <label class="row" for="boardsSelect"><span>拼板规格</span></label>
+        <select id="boardsSelect">
+          <option value="1" selected>1 × 1 板（上限 29 格）</option>
+          <option value="2">2 × 2 板（上限 58 格）</option>
+          <option value="3">3 × 3 板（上限 87 格）</option>
+          <option value="custom">自定义格数</option>
+        </select>
+        <div class="grid2">
+          <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="87" step="1" value="29" /></label>
+          <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="87" step="1" value="29" /></label>
+        </div>
+        <label class="check"><input id="lockAspect" type="checkbox" checked /> 保持原图宽高比</label>
+        <p class="hint">单边上限硬限制 87 格（3 × 3 板），超出会被自动压回。</p>
+      </section>
+
+      <section class="group">
+        <h2>6 · 色卡版本</h2>
+        <select id="paletteSelect"></select>
+        <p id="paletteMeta" class="hint">色卡数据未加载</p>
+      </section>
+
+      <section class="group">
+        <h2>7 · 图纸显示</h2>
+        <label class="check"><input id="showNumbers" type="checkbox" checked /> 显示数字编号（色号）</label>
+        <label class="check"><input id="showRuler" type="checkbox" /> 显示坐标刻度</label>
+        <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">12px</output></label>
+        <input id="cellSize" type="range" min="4" max="28" step="1" value="12" />
+      </section>
+
+      <section class="group">
+        <h2>8 · 改色模式</h2>
+        <label class="check"><input id="recolorMode" type="checkbox" /> 开启改色模式（点击图纸格子改色）</label>
+        <label class="row" for="recolorColor"><span>目标色号</span></label>
+        <select id="recolorColor"></select>
+        <label class="check"><input id="lockToggle" type="checkbox" checked /> 改色时锁定该格（重算时不被覆盖）</label>
+        <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
+        <p id="lockInfo" class="hint">已锁定 0 格</p>
+        <p class="hint">提示：按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格。</p>
+      </section>
+
+      <section class="group group-actions">
+        <h2>9 · 操作</h2>
+        <button id="btnRegenerate" class="btn btn-primary" type="button">重新生成</button>
+        <button id="btnResetAdjust" class="btn" type="button">重置微调</button>
+        <button id="btnExportPng" class="btn" type="button">导出图纸 PNG</button>
+        <button id="btnExportCompare" class="btn" type="button">导出对照图 PNG</button>
+        <button id="btnExportCsv" class="btn" type="button">导出用量清单 CSV</button>
+      </section>
+    </aside>
+
+    <main id="dropZone" class="panel canvas-panel">
+      <div class="panel-head">
+        <h2>图纸预览</h2>
+        <div class="status-line">
+          <span id="statusText" class="status">就绪</span>
+          <span id="elapsedText" class="elapsed"></span>
+        </div>
+        <div id="progressWrap" class="progress" hidden><div id="progressBar" class="progress-bar"></div></div>
+      </div>
+      <div class="canvas-scroll">
+        <canvas id="patternCanvas" class="pattern-canvas" width="640" height="420"></canvas>
+        <div class="canvas-overlay">
+          <p id="patternHint" class="canvas-hint">尚未载入图片<br /><span class="muted">点击上方「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴</span></p>
+          <button id="emptyState" class="btn btn-primary" type="button">选择本地图片…</button>
+        </div>
+      </div>
+      <p class="hint">参数调整会自动重算（防抖 200ms）。开启第 8 组「改色模式」后，点击图纸格子即可把它改成目标色号。</p>
+    </main>
+
+    <aside class="panel side">
+      <section class="block">
+        <h2>原图对照</h2>
+        <div class="source-wrap">
+          <canvas id="sourceCanvas" class="source-canvas" width="240" height="180"></canvas>
+          <p id="sourceHint" class="canvas-hint small">尚未载入图片</p>
+        </div>
+      </section>
+      <section class="block">
+        <h2>用量汇总</h2>
+        <div id="summaryBox" class="summary"></div>
+      </section>
+      <section class="block">
+        <h2>色号图例</h2>
+        <div id="legendBox" class="legend"></div>
+      </section>
+    </aside>
+  </div>
+
+  <footer class="disclaimer">
+    <span class="disclaimer-tag">声明</span>RGB 为屏幕参考值，非品牌官方色值；严谨对色请以实物色卡为准。
+  </footer>
+</div>

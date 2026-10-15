@@ -13,7 +13,8 @@
  *   cellLabel       'code'(默认) 画真色号 A1/A10/M15 | 'index' 画图纸编号 | 'none' 不画
  *   showCodes       旧键：false 等价于 cellLabel:'none'；true 且未给 cellLabel 时视为 'index'
  *   padMode         'tight'(默认) 白边约 4%，受刻度文字下限约束 | 'normal' 旧的 max(40, cellPx*3+20)
- *   annotate        true 时在网格下方追加「色号 | 色块 | HEX | 颗数」用量表
+ *   annotate        true 时在网格下方追加用量块：每个色号一个「圆角色块 + 色号 + 颗数」的
+ *                   行内块，横向排布、超出容器宽度自动换行、每行居中
  *   showRuler       默认 true，每 5 格一个刻度（29 格板边界额外补标）
  *   highlightLocked 默认 false，锁定的格子画一个角标
  *
@@ -54,7 +55,6 @@
   var RULER_FONT_MIN = 9;
   var RULER_FONT_MAX = 40;
   var ANNOTATE_FONT_RATIO = 0.45;
-  var TABLE_HEAD = ['色号', '色块', 'HEX', '颗数'];
 
   var HEX_FULL = /^#[0-9a-fA-F]{6}$/;
   var HEX_SHORT = /^#[0-9a-fA-F]{3}$/;
@@ -69,12 +69,13 @@
     rulerLine: '#98A2B3',
     rulerText: '#5A6472',
     rulerBoardText: '#39424F',
+    caption: '#5A6472',      // 左下角尺寸标注
     title: '#2B3240',
     placeholder: '#EEF1F5',
     placeholderText: '#8A94A6',
-    tableHead: '#EEF1F5',    // 用量表表头底
-    tableLine: '#DCE0E6',    // 用量表分隔线
-    tableBorder: '#98A2B3',  // 用量表外框
+    chipBg: '#F5F7FA',       // 用量块底
+    chipLine: '#DCE0E6',     // 用量块描边
+    chipCount: '#5A6472',    // 用量块里的颗数文字
     swatchEdge: '#8A94A6'    // 色块描边
   };
 
@@ -272,55 +273,83 @@
     return rows;
   }
 
-  // 列宽按比例拉伸到目标总宽（最后一列吃下取整误差）
-  function stretchCols(nat, total) {
-    var sum = 0, i, out = [], prev = 0, edge, cum = 0;
-    for (i = 0; i < nat.length; i++) sum += nat[i];
-    if (sum <= 0 || total <= sum) return nat.slice();
-    for (i = 0; i < nat.length; i++) {
-      cum += nat[i];
-      edge = (i === nat.length - 1) ? total : Math.round(total * cum / sum);
-      out.push(edge - prev);
-      prev = edge;
-    }
-    return out;
-  }
-
-  // 网格下方用量表的版式（尺寸只在这里算一次，绘制与面积守卫共用）
+  // 网格下方用量块的版式：每个色号一个「圆角色块 + 色号 + 颗数」的行内块，横向排布、自动换行。
+  // 尺寸只在这里算一次，绘制与面积守卫共用。
   function annotateLayout(pattern, opts, gridW) {
     var rows = usageRows(pattern);
+    var gap = Math.max(2, Math.round(opts.cellPx * 0.5));
+    if (!rows.length) {
+      return { rows: rows, chips: [], lines: [], fontPx: 0, swatch: 0, chipPadX: 0, inner: 0,
+        chipGapX: 0, chipGapY: 0, chipH: 0, chipR: 0, tableW: gridW, tableH: 0, gap: 0 };
+    }
+
     var fontPx = clamp(Math.round(opts.cellPx * ANNOTATE_FONT_RATIO), 9, 40);
-    var rowH = Math.max(fontPx + 6, Math.round(fontPx * 1.9));
-    var cellPad = Math.max(6, Math.round(fontPx * 0.6));
-    var swatch = Math.max(8, Math.round(fontPx * 0.9));
-    var wCode = estTextW(TABLE_HEAD[0], fontPx), wSwatch = estTextW(TABLE_HEAD[1], fontPx);
-    var wHex = estTextW(TABLE_HEAD[2], fontPx), wCount = estTextW(TABLE_HEAD[3], fontPx);
-    var i, r;
+    var swatch = Math.max(10, Math.round(fontPx * 1.15));    // 圆角色块边长
+    var padX = Math.max(7, Math.round(fontPx * 0.6));        // 块内左右留白
+    var inner = Math.max(4, Math.round(fontPx * 0.45));      // 色块↔色号↔颗数 的间距
+    var gapX = Math.max(6, Math.round(fontPx * 0.55));       // 块与块的横向间距
+    var gapY = Math.max(6, Math.round(fontPx * 0.55));       // 行距
+    var chipH = Math.max(Math.round(fontPx * 2.2), swatch + Math.round(fontPx * 0.7));
+    var chipR = Math.max(3, Math.round(chipH * 0.3));        // 胶囊圆角半径
+
+    var i, r, chip, chips = [], widest = 0;
     for (i = 0; i < rows.length; i++) {
       r = rows[i];
-      wCode = Math.max(wCode, estTextW(textOf(r.code), fontPx));
-      wHex = Math.max(wHex, estTextW(safeHex(r.hex), fontPx));
-      wCount = Math.max(wCount, estTextW(r.count + ' 颗', fontPx));
+      chip = { code: textOf(r.code), hex: safeHex(r.hex), count: textOf(r.count) };
+      chip.w = padX * 2 + swatch + inner + Math.ceil(estTextW(chip.code, fontPx))
+        + inner + Math.ceil(estTextW(chip.count + ' 颗', fontPx));
+      chips.push(chip);
+      if (chip.w > widest) widest = chip.w;
     }
-    var nat = [
-      Math.ceil(wCode) + cellPad * 2,
-      Math.ceil(Math.max(wSwatch, swatch)) + cellPad * 2,
-      Math.ceil(wHex) + cellPad * 2,
-      Math.ceil(wCount) + cellPad * 2
-    ];
-    var natW = nat[0] + nat[1] + nat[2] + nat[3];
-    var tableW = Math.max(natW, gridW);            // 至少与网格同宽，超出就撑开（网格随后居中）
+
+    // 换行容器：至少与网格同宽；单个块比网格还宽时以最宽的那个块为准
+    var boxW = Math.max(gridW, widest);
+    var lines = [], cur = [], curW = 0, need;
+    for (i = 0; i < chips.length; i++) {
+      need = cur.length ? curW + gapX + chips[i].w : chips[i].w;
+      if (cur.length && need > boxW) { lines.push({ items: cur, w: curW }); cur = []; curW = 0; need = chips[i].w; }
+      cur.push(chips[i]);
+      curW = need;
+    }
+    if (cur.length) lines.push({ items: cur, w: curW });
+    var lineCount = lines.length;
+
     return {
       rows: rows,
+      chips: chips,
+      lines: lines,
       fontPx: fontPx,
-      rowH: rowH,
-      cellPad: cellPad,
       swatch: swatch,
-      cols: stretchCols(nat, tableW),
-      tableW: tableW,
-      tableH: rowH * (rows.length + 1),            // 表头 + 数据行
-      gap: Math.max(2, Math.round(opts.cellPx * 0.5))
+      chipPadX: padX,
+      inner: inner,
+      chipGapX: gapX,
+      chipGapY: gapY,
+      chipH: chipH,
+      chipR: chipR,
+      tableW: boxW,
+      tableH: lineCount * chipH + (lineCount - 1) * gapY,
+      gap: gap
     };
+  }
+
+  // 左下角尺寸标注的文字：一切从 pattern 自身推导（不读 stats，避免标注与网格对不上）
+  function captionText(pattern) {
+    var w = Math.max(0, Math.floor((pattern && pattern.w) || 0));
+    var h = Math.max(0, Math.floor((pattern && pattern.h) || 0));
+    if (!w || !h) return '';
+    var mm = Number(pattern.beadMM) > 0 ? Number(pattern.beadMM) : 2.6;
+    var cw = w * mm / 10, ch = h * mm / 10;
+    return w + ' × ' + h + ' 格 · ' + Math.ceil(w / BOARD) + ' × ' + Math.ceil(h / BOARD) + ' 块板 · 成品约 '
+      + cw.toFixed(1) + ' × ' + ch.toFixed(1) + ' cm';
+  }
+
+  // 标注占用的额外高度（上间距 + 一行字 + 底部留白），由 layoutOf 计入画布高度与面积守卫
+  function captionMetrics(pattern, opts) {
+    var text = captionText(pattern);
+    if (!text) return { text: '', fontPx: 0, top: 0, h: 0 };
+    var fontPx = clamp(Math.round(opts.cellPx * 0.45), 9, 28);
+    var top = Math.max(4, Math.round(opts.cellPx * 0.35));
+    return { text: text, fontPx: fontPx, top: top, h: top + fontPx + Math.max(3, Math.round(fontPx * 0.35)) };
   }
 
   function layoutOf(pattern, opts) {
@@ -332,6 +361,7 @@
     var maxDigits = String(Math.max(w, h, 1)).length;
     var pad = padOf(opts, gridW, gridH, ruler, maxDigits);
     var table = opts.annotate ? annotateLayout(pattern, opts, gridW) : null;
+    var cap = captionMetrics(pattern, opts);
     var contentW = Math.max(gridW, table ? table.tableW : 0);
     if (table) {
       table.dx = Math.round((contentW - table.tableW) / 2);   // 相对网格原点
@@ -349,8 +379,9 @@
       rulerFontPx: ruler.fontPx,
       rulerGap: ruler.gap,
       table: table,
+      caption: cap,
       width: pad * 2 + contentW,
-      height: pad * 2 + gridH + (table ? table.gap + table.tableH : 0)
+      height: pad * 2 + gridH + (table ? table.gap + table.tableH : 0) + cap.h
     };
   }
 
@@ -586,83 +617,67 @@
     }
   }
 
-  /* ------------------------------------------------------- 绘制：用量表 */
+  /* ------------------------------------------------------- 绘制：用量块 */
 
+  // 圆角矩形路径：优先用原生 roundRect（现代浏览器）；旧环境退回直角，不报错
+  function roundRectPath(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') { ctx.roundRect(x, y, w, h, r); return; }
+    ctx.rect(x, y, w, h);
+  }
+
+  // 单个用量块：圆角色块 + 色号 + 颗数
+  function paintChip(ctx, chip, x, y, t) {
+    var f = t.fontPx, h = t.chipH, mid = y + h / 2;
+    var sx = x + t.chipPadX, sy = mid - t.swatch / 2;
+    var sr = Math.max(2, Math.round(t.swatch * 0.3));
+    var tx;
+
+    ctx.fillStyle = C.chipBg;
+    roundRectPath(ctx, x, y, chip.w, h, t.chipR);
+    ctx.fill();
+    ctx.strokeStyle = C.chipLine;
+    ctx.lineWidth = 1;
+    roundRectPath(ctx, x + GRID_HALF, y + GRID_HALF, chip.w, h, t.chipR);
+    ctx.stroke();
+
+    ctx.fillStyle = chip.hex;
+    roundRectPath(ctx, sx, sy, t.swatch, t.swatch, sr);
+    ctx.fill();
+    ctx.strokeStyle = C.swatchEdge;
+    ctx.lineWidth = 1;
+    roundRectPath(ctx, sx + GRID_HALF, sy + GRID_HALF, t.swatch, t.swatch, sr);
+    ctx.stroke();
+
+    tx = sx + t.swatch + t.inner;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = C.title;
+    ctx.font = '600 ' + f + 'px ' + FONT_MONO;
+    ctx.fillText(chip.code, tx, mid);
+    tx += Math.ceil(estTextW(chip.code, f)) + t.inner;
+    ctx.fillStyle = C.chipCount;
+    ctx.font = f + 'px ' + FONT_SANS;
+    ctx.fillText(chip.count + ' 颗', tx, mid);
+  }
+
+  // 横向排布、每行居中；返回画出的块数
   function paintTable(ctx, lay, ox, oy) {
     var t = lay.table;
-    if (!t) return 0;
-    var rows = t.rows, cols = t.cols, f = t.fontPx;
-    var x = ox + t.dx, y = oy + t.dy, w = t.tableW, h = t.tableH;
-    var headMid = y + t.rowH / 2;
-    var bx, ty, i, r, sx, sy;
-
-    // 表头底 + 行/列分隔线
-    ctx.fillStyle = C.tableHead;
-    ctx.fillRect(x, y, w, t.rowH);
-    ctx.strokeStyle = C.tableLine;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (i = 1; i <= rows.length; i++) {
-      ty = y + i * t.rowH + GRID_HALF;
-      ctx.moveTo(x, ty);
-      ctx.lineTo(x + w, ty);
+    if (!t || !t.lines || !t.lines.length) return 0;
+    var x0 = ox + t.dx, y0 = oy + t.dy;
+    var drawn = 0, li, ci, line, cx, cy;
+    for (li = 0; li < t.lines.length; li++) {
+      line = t.lines[li];
+      cx = x0 + Math.round((t.tableW - line.w) / 2);
+      cy = y0 + li * (t.chipH + t.chipGapY);
+      for (ci = 0; ci < line.items.length; ci++) {
+        paintChip(ctx, line.items[ci], cx, cy, t);
+        cx += line.items[ci].w + t.chipGapX;
+        drawn++;
+      }
     }
-    bx = x;
-    for (i = 0; i < cols.length - 1; i++) {
-      bx += cols[i];
-      ctx.moveTo(bx + GRID_HALF, y);
-      ctx.lineTo(bx + GRID_HALF, y + h);
-    }
-    ctx.stroke();
-    ctx.strokeStyle = C.tableBorder;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x + GRID_HALF, y + GRID_HALF, w, h);
-
-    // 表头文字
-    ctx.fillStyle = C.title;
-    ctx.font = '600 ' + f + 'px ' + FONT_SANS;
-    ctx.textBaseline = 'middle';
-    bx = x;
-    ctx.textAlign = 'left';
-    ctx.fillText(TABLE_HEAD[0], bx + t.cellPad, headMid);
-    bx += cols[0];
-    ctx.textAlign = 'center';
-    ctx.fillText(TABLE_HEAD[1], bx + cols[1] / 2, headMid);
-    bx += cols[1];
-    ctx.textAlign = 'left';
-    ctx.fillText(TABLE_HEAD[2], bx + t.cellPad, headMid);
-    bx += cols[2];
-    ctx.textAlign = 'right';
-    ctx.fillText(TABLE_HEAD[3], bx + cols[3] - t.cellPad, headMid);
-
-    // 数据行：色号 | 色块 | HEX | 颗数
-    ctx.font = f + 'px ' + FONT_MONO;
-    for (i = 0; i < rows.length; i++) {
-      r = rows[i];
-      ty = y + (i + 1) * t.rowH + t.rowH / 2;
-      bx = x;
-      ctx.fillStyle = C.title;
-      ctx.textAlign = 'left';
-      ctx.fillText(textOf(r.code), bx + t.cellPad, ty);
-      bx += cols[0];
-
-      sx = bx + (cols[1] - t.swatch) / 2;
-      sy = ty - t.swatch / 2;
-      ctx.fillStyle = safeHex(r.hex);
-      ctx.fillRect(sx, sy, t.swatch, t.swatch);
-      ctx.strokeStyle = C.swatchEdge;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(sx + GRID_HALF, sy + GRID_HALF, t.swatch, t.swatch);
-      bx += cols[1];
-
-      ctx.fillStyle = C.title;
-      ctx.textAlign = 'left';
-      ctx.fillText(safeHex(r.hex), bx + t.cellPad, ty);
-      bx += cols[2];
-      ctx.textAlign = 'right';
-      ctx.fillText(textOf(r.count) + ' 颗', bx + cols[3] - t.cellPad, ty);
-    }
-    return rows.length;
+    return drawn;
   }
 
   /* --------------------------------------------------- 绘制：图纸（核心） */
@@ -706,6 +721,19 @@
 
   /* ------------------------------------------------------------- 公开 API */
 
+  /* --------------------------------------------- 绘制：左下角尺寸标注 */
+
+  function paintCaption(ctx, lay) {
+    var cap = lay.caption;
+    if (!cap || !cap.text) return;
+    var blockTop = lay.pad + lay.gridH + (lay.table ? lay.table.gap + lay.table.tableH : 0);
+    ctx.fillStyle = C.caption;
+    ctx.font = cap.fontPx + 'px ' + FONT_SANS;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(cap.text, lay.pad + lay.gridDX, blockTop + cap.top);
+  }
+
   function drawPattern(pattern, canvas, viewOpts) {
     var opts = normalizeOpts(viewOpts);
     var stat = labelStat(pattern, opts, usedScan(pattern));
@@ -747,6 +775,7 @@
     ctx.save();
     fillPaper(ctx, lay.width, lay.height);
     var res = paintPatternAt(ctx, pattern, opts, lay, lay.pad + lay.gridDX, lay.pad, stat);
+    paintCaption(ctx, lay);
     ctx.restore();
 
     base.ok = true;

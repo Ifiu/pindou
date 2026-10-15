@@ -542,7 +542,10 @@ startGroup('第 4 组 · 渲染（Render）');
 
 /** Mock 2D context：记录每次绘图调用及其当时的 fillStyle / lineWidth；跟踪当前路径。 */
 function makeMockCanvas() {
-  const rec = { fillRect: [], fillText: [], strokes: [], fills: [], strokeRect: [], drawImage: [], save: 0, restore: 0 };
+  // 图纸上有三类文字：格内标签/编号、坐标刻度、左下角尺寸标注。标注单独归到 rec.caption，
+  // 这样断言里的 rec.fillText 仍然精确表示「标签 + 刻度」这两类，不会被标注污染计数。
+  const CAPTION_RE = /格 · \d+ × \d+ 块板 · 成品约 [\d.]+ × [\d.]+ cm$/;
+  const rec = { fillRect: [], fillText: [], caption: [], strokes: [], fills: [], strokeRect: [], drawImage: [], roundRect: [], save: 0, restore: 0 };
   const ctx = {
     fillStyle: '#000000',
     strokeStyle: '#000000',
@@ -558,11 +561,14 @@ function makeMockCanvas() {
     strokeRect(x, y, w, h) { rec.strokeRect.push({ x, y, w, h, strokeStyle: String(this.strokeStyle) }); },
     drawImage(...a) { rec.drawImage.push(a); },
     fillText(t, x, y) {
-      rec.fillText.push({ text: String(t), x, y, fillStyle: String(this.fillStyle), font: this.font, textAlign: this.textAlign, textBaseline: this.textBaseline });
+      const item = { text: String(t), x, y, fillStyle: String(this.fillStyle), font: this.font, textAlign: this.textAlign, textBaseline: this.textBaseline };
+      if (CAPTION_RE.test(item.text)) rec.caption.push(item); else rec.fillText.push(item);
     },
     beginPath() { this._path = []; },
     moveTo(x, y) { this._path.push(['M', x, y]); },
     lineTo(x, y) { this._path.push(['L', x, y]); },
+    rect(x, y, w, h) { this._path.push(['R', x, y, w, h]); },
+    roundRect(x, y, w, h, r) { rec.roundRect.push({ x, y, w, h, r }); this._path.push(['RR', x, y, w, h, r]); },
     closePath() { this._path.push(['Z']); },
     stroke() { rec.strokes.push({ path: this._path.slice(), strokeStyle: String(this.strokeStyle), lineWidth: this.lineWidth, lineCap: this.lineCap }); this._path = []; },
     fill() { rec.fills.push({ path: this._path.slice(), fillStyle: String(this.fillStyle) }); this._path = []; },
@@ -644,8 +650,14 @@ const cv1 = makeMockCanvas();
 /* padMode:'normal' 是 render.js 保留的向后兼容路径（旧公式 max(40, cellPx*3+20)），
  * 所有旧几何断言都走它；新默认是 'tight'，几何另有专项断言。 */
 const r1 = Render.drawPattern(HP, cv1, { cellPx: 12, cellLabel: 'code', showRuler: false, padMode: 'normal' });
+/* 左下角尺寸标注占用的额外高度，镜像 render.js 的 captionMetrics（必须算进画布高与面积守卫） */
+const capH = (cellPx) => {
+  const f = Math.max(9, Math.min(28, Math.round(cellPx * 0.45)));
+  const top = Math.max(4, Math.round(cellPx * 0.35));
+  return top + f + Math.max(3, Math.round(f * 0.35));
+};
 eq('drawPattern | 画布宽 = pad*2 + w*cellPx', cv1.width, HP_PAD * 2 + HP.w * HP_CELL);
-eq('drawPattern | 画布高 = pad*2 + h*cellPx', cv1.height, HP_PAD * 2 + HP.h * HP_CELL);
+eq('drawPattern | 画布高 = pad*2 + h*cellPx + 尺寸标注高', cv1.height, HP_PAD * 2 + HP.h * HP_CELL + capH(HP_CELL));
 eq('drawPattern | 换算式 pad = max(40, cellPx*3+20)', HP_PAD, 56);
 eq('drawPattern | cellsDrawn === 非空格子数', r1.cellsDrawn, HP_NONEMPTY);
 /* 新标签规则：code 模式最小 cellPx = 20（本图最长色号 2 字符），12px 必然被抑制 */
@@ -798,28 +810,78 @@ eq('新增 | padMode:tight 的 pad 实测 56（= round(2784×2%)，受刻度下�
 ok('新增 | tight 的白边 ≤ normal 的白边', dT.pad <= dN.pad, dT.pad + ' vs ' + dN.pad);
 eq('新增 | 未给 padMode 时默认 tight（与 tight 显式结果一致）', (() => { const cv = makeMockCanvas(); Render.drawPattern(bigPat, cv, { cellPx: LABEL_PX, cellLabel: 'none' }); return cv.width; })(), cvTight.width);
 
-/* annotate：表格落在网格下方（不重叠），且列出每个色号的色号 / HEX / 颗数 */
+/* annotate：用量块落在网格下方（不重叠）；每块 = 圆角色块 + 色号 + 颗数，横向排布、自动换行 */
 const cvAnnOff = makeMockCanvas();
 Render.drawPattern(bigPat, cvAnnOff, { cellPx: LABEL_PX, cellLabel: 'none', padMode: 'tight', annotate: false });
 const cvAnnOn = makeMockCanvas();
 Render.drawPattern(bigPat, cvAnnOn, { cellPx: LABEL_PX, cellLabel: 'none', padMode: 'tight', annotate: true });
-ok('新增 | annotate:true 画布更高（下方追加用量表）', cvAnnOn.height > cvAnnOff.height, cvAnnOff.height + ' → ' + cvAnnOn.height);
-eq('新增 | annotate:false 时画布尺寸与旧路径一致（116×116 正方形）', [cvAnnOff.width, cvAnnOff.height], [cvAnnOn.width, cvAnnOn.width]);
-eq('新增 | annotate:false 与 true 的宽度相同（表格与网格等宽）', cvAnnOff.width, cvAnnOn.width);
-const headFill = cvAnnOn._rec.fillRect.find((r) => r.fillStyle === '#EEF1F5');
-ok('新增 | annotate:true 真的画了表头底色 #EEF1F5', !!headFill, JSON.stringify(headFill || null));
+ok('新增 | annotate:true 画布更高（下方追加用量块）', cvAnnOn.height > cvAnnOff.height, cvAnnOff.height + ' → ' + cvAnnOn.height);
+eq('新增 | annotate:false 时宽度不变、高度 = 宽度 + 尺寸标注高（网格本身是正方形）', [cvAnnOff.width, cvAnnOff.height - capH(LABEL_PX)], [cvAnnOn.width, cvAnnOn.width]);
+eq('新增 | annotate:false 与 true 的宽度相同（块不比网格宽时不撑宽画布）', cvAnnOff.width, cvAnnOn.width);
+
+const chipFills = cvAnnOn._rec.fills.filter((f) => f.fillStyle === '#F5F7FA');
+eq('新增 | 每个色号一个圆角底块', chipFills.length, bigPat.counts.length);
+ok('新增 | 底块走的是 roundRect（圆角），不是直角 fillRect', chipFills.length > 0 && chipFills.every((f) => f.path[0][0] === 'RR'), JSON.stringify(chipFills[0] ? chipFills[0].path[0] : null));
+ok('新增 | 圆角半径为正（真的是圆角）', cvAnnOn._rec.roundRect.every((r) => r.r >= 1), JSON.stringify(cvAnnOn._rec.roundRect.slice(0, 2)));
+const chipBoxes = chipFills.map((f) => ({ x: f.path[0][1], y: f.path[0][2], w: f.path[0][3], h: f.path[0][4] }));
 const gridBottom = dT.pad + BIG * LABEL_PX;
-if (headFill) {
-  ok('新增 | 表格顶 > 网格底（表格不遮挡网格）', headFill.y > gridBottom, headFill.y + ' > ' + gridBottom);
-  eq('新增 | 表格顶 = 网格底 + gap（gap = max(2, round(cellPx*0.5))）', headFill.y, gridBottom + Math.max(2, Math.round(LABEL_PX * 0.5)));
-}
+const chipTop = Math.min.apply(null, chipBoxes.map((b) => b.y));
+ok('新增 | 用量块顶 > 网格底（不遮挡网格）', chipTop > gridBottom, chipTop + ' > ' + gridBottom);
+eq('新增 | 用量块顶 = 网格底 + gap（gap = max(2, round(cellPx*0.5))）', chipTop, gridBottom + Math.max(2, Math.round(LABEL_PX * 0.5)));
+ok('新增 | 所有块都在画布内', chipBoxes.every((b) => b.x >= 0 && b.y >= 0 && b.x + b.w <= cvAnnOn.width && b.y + b.h <= cvAnnOn.height), JSON.stringify(chipBoxes.slice(0, 2)));
+
 const annTexts = cvAnnOn._rec.fillText.map((t) => t.text);
 for (const row of bigPat.counts) {
-  ok('新增 | 表格含色号 ' + row.code, annTexts.includes(row.code));
-  ok('新增 | 表格含 HEX ' + row.hex, annTexts.includes(row.hex));
-  ok('新增 | 表格含颗数 ' + row.count + ' 颗', annTexts.includes(row.count + ' 颗'));
+  ok('用量块含色号 ' + row.code, annTexts.includes(row.code));
+  ok('用量块含颗数 ' + row.count + ' 颗', annTexts.includes(row.count + ' 颗'));
+  ok('用量块画了该色号的圆角块 ' + row.hex, cvAnnOn._rec.fills.some((f) => String(f.fillStyle).toUpperCase() === String(row.hex).toUpperCase()));
 }
-ok('新增 | annotate:false 时零表格文字（不出现任何 HEX）', !cvAnnOff._rec.fillText.some((t) => String(t.text).startsWith('#')), JSON.stringify(cvAnnOff._rec.fillText.map((t) => t.text).slice(0, 5)));
+ok('用量块不再输出 HEX 文字（用户只要 色块 + 色号 + 颗数）', !annTexts.some((t) => String(t).startsWith('#')), JSON.stringify(annTexts.filter((t) => String(t).startsWith('#')).slice(0, 4)));
+ok('新增 | annotate:false 时零用量块（无底块、无 HEX 文字）', !cvAnnOff._rec.fills.some((f) => f.fillStyle === '#F5F7FA') && !cvAnnOff._rec.fillText.some((t) => String(t.text).startsWith('#')));
+
+/* 换行：窄容器下多个块必须自动折行，同一行内不重叠、全部在画布内 */
+const wrapPat = makePat(7, 7, 5);
+const cvWrap = makeMockCanvas();
+Render.drawPattern(wrapPat, cvWrap, { cellPx: 20, cellLabel: 'none', padMode: 'tight', annotate: true });
+const wrapBoxes = cvWrap._rec.fills.filter((f) => f.fillStyle === '#F5F7FA').map((f) => ({ x: f.path[0][1], y: f.path[0][2], w: f.path[0][3], h: f.path[0][4] }));
+eq('换行 | 5 个块全部画出', wrapBoxes.length, 5);
+const rowYs = Array.from(new Set(wrapBoxes.map((b) => b.y))).sort((a, b) => a - b);
+ok('换行 | 窄容器下确实折成了多行', rowYs.length > 1, rowYs.length + ' 行');
+let rowOverlap = 0, wrapOutside = 0;
+for (const y of rowYs) {
+  const line = wrapBoxes.filter((b) => b.y === y).sort((a, b) => a.x - b.x);
+  for (let i = 1; i < line.length; i++) if (line[i].x < line[i - 1].x + line[i - 1].w) rowOverlap++;
+}
+for (const b of wrapBoxes) if (b.x < 0 || b.y < 0 || b.x + b.w > cvWrap.width || b.y + b.h > cvWrap.height) wrapOutside++;
+eq('换行 | 同一行内的块不重叠', rowOverlap, 0);
+eq('换行 | 所有块都在画布内', wrapOutside, 0);
+const shortLine = wrapBoxes.filter((b) => b.y === rowYs[rowYs.length - 1]);
+ok('换行 | 末行也比画布（容器）更靠内 → 该行有水平居中留白', shortLine.length > 0 && shortLine[0].x > 0, JSON.stringify(shortLine[0] || null));
+
+/* 左下角尺寸标注：内容从 pattern 推导（不读 stats）、位置在网格左下、算进画布高 */
+const capTop = (cellPx) => Math.max(4, Math.round(cellPx * 0.35));
+const cvCap = makeMockCanvas();
+const capPat = makePat(7, 4, 3);
+capPat.beadMM = 2.6;
+capPat.stats = { total: 0, usedColors: 0, boardX: 99, boardY: 99, cmW: 999, cmH: 999 };  // 故意写错：标注若读 stats 就会露馅
+const rCap = Render.drawPattern(capPat, cvCap, { cellPx: 20, cellLabel: 'none', padMode: 'tight', annotate: false });
+eq('尺寸标注 | 恰好画一次', cvCap._rec.caption.length, 1);
+const capItem = cvCap._rec.caption[0] || { text: '', x: -1, y: -1, textAlign: '', textBaseline: '' };
+eq('尺寸标注 | 文字全部由 pattern 推导（stats 故意写错 99 块板 / 999cm 也不受影响）', capItem.text, '7 × 4 格 · 1 × 1 块板 · 成品约 1.8 × 1.0 cm');
+eq('尺寸标注 | 左对齐', capItem.textAlign, 'left');
+eq('尺寸标注 | 顶对齐（便于按底边定位）', capItem.textBaseline, 'top');
+const capPad = (cvCap.width - 7 * 20) / 2;
+eq('尺寸标注 | x 与网格左边缘对齐（左下角，不是画布最左）', capItem.x, capPad);
+eq('尺寸标注 | y = 网格底 + 标注上间距', capItem.y, capPad + 4 * 20 + capTop(20));
+ok('尺寸标注 | 落在网格下方（不遮挡图纸）', capItem.y > capPad + 4 * 20, capItem.y + ' > ' + (capPad + 4 * 20));
+eq('尺寸标注 | 画布高 = 网格 + 标注高（标注确实被计入布局）', rCap.height, capPad * 2 + 4 * 20 + capH(20));
+const cvCapAnn = makeMockCanvas();
+Render.drawPattern(capPat, cvCapAnn, { cellPx: 20, cellLabel: 'none', padMode: 'tight', annotate: true });
+eq('尺寸标注 | 开用量块时也画一次', cvCapAnn._rec.caption.length, 1);
+const capItem2 = cvCapAnn._rec.caption[0] || { y: -1 };
+const chipTopY = Math.min.apply(null, cvCapAnn._rec.fills.filter((f) => f.fillStyle === '#F5F7FA').map((f) => f.path[0][2]));
+ok('尺寸标注 | 开用量块时标注在用量块【下方】（不重叠）', capItem2.y >= chipTopY + 24, capItem2.y + ' vs chips@' + chipTopY);
+eq('尺寸标注 | 标注不混进「标签 + 刻度」的计数', cvCapAnn._rec.fillText.some((t) => /块板/.test(String(t.text))), false);
 
 /* 面积守卫：先算后画，超限时连画布尺寸都不设置 */
 const cvGuard = makeMockCanvas();

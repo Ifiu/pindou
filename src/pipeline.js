@@ -74,7 +74,7 @@
 
   var BEAD_MM = 2.6;            // 单颗拼豆外径（毫米）
   var BOARD_CELLS = 29;         // 一块板 29×29 格
-  var MAX_DIM = 87;             // 3 板 = 87 格
+  var MAX_DIM = 116;            // 4 板 = 116 格（与 ui.html 的 max="116" / 4×4 板档一致）
   var EMPTY = 65535;            // cells 里的空格标记
   var ALPHA_MIN = 128;          // alpha < 128 视为透明
   var MAX_SRC_PIXELS = 1200 * 1200;  // generate() 读取源图的像素上限（防止把 4000×3000 全量读进来）
@@ -91,10 +91,10 @@
    *   quantize.enabled true 默认必须「拼得完」：随机噪声图用最近邻会命中 172/221 个色号，
    *                         真实照片也常上百色，而没有人手上有 172 种拼豆。默认开减色。
    *   quantize.maxColors 24 一板 29×29 = 841 颗；常用拼豆作品通常 10–25 色，24 落在
-   *                         「表现力够 + 买得到豆」的甜点上：87×87 满配时每色平均仍有
-   *                         ~315 颗，足以表现渐变；同时与 UI 的 maxColors 默认值一致。
+   *                         「表现力够 + 买得到豆」的甜点上：116×116 满配时每色平均仍有
+   *                         ~560 颗，足以表现渐变；同时与 UI 的 maxColors 默认值一致。
    *   paletteId             默认主谱系 mard-221-getcolors（palette.js 的第一个 key）。
-   *   gridW/gridH null      未给时按 boards + 原图宽高比推导；给出则优先并夹到 [1,87]。
+   *   gridW/gridH null      未给时按 boards + 原图宽高比推导；给出则优先并夹到 [1,116]。
    *   boards 1              一板起步，最省豆。
    * 说明：opts 里出现约定外的附加字段（如 app.js 的 keepLocks / locks）一律忽略，不报错。
    */
@@ -260,10 +260,10 @@
   }
 
   /**
-   * 尺寸推导。长边上限 = 29 * boards（29/58/87）。
-   * - gridW/gridH 都未给：长边取上限，短边按原图宽高比推导后夹到 [1,87]（极端比例不强行方形）。
+   * 尺寸推导。长边上限 = 29 * boards（29/58/87；boards 自身夹在 1..3），单边硬上限 MAX_DIM = 116。
+   * - gridW/gridH 都未给：长边取上限，短边按原图宽高比推导后夹到 [1,116]（极端比例不强行方形）。
    * - 只给一边：另一边按 lockAspect 推导（true = 按原图比例；false = 取与已给一边相同的格数）。
-   * - 两边都给：优先采用，各自夹到 [1,87]（是否等比拉伸由调用方决定，管线不擅自改用户输入）。
+   * - 两边都给：优先采用，各自夹到 [1,116]（是否等比拉伸由调用方决定，管线不擅自改用户输入）。
    */
   function deriveDims(sw, sh, o, warnings) {
     var w = o.gridW, h = o.gridH;
@@ -281,7 +281,7 @@
     } else {
       var cw = clampInt(w, 1, MAX_DIM), ch = clampInt(h, 1, MAX_DIM);
       if (cw !== Math.round(w) || ch !== Math.round(h)) {
-        warnings.push('gridW/gridH 已夹到合法范围 [1,87]：' + w + '×' + h + ' → ' + cw + '×' + ch);
+        warnings.push('gridW/gridH 已夹到合法范围 [1,' + MAX_DIM + ']：' + w + '×' + h + ' → ' + cw + '×' + ch);
       }
       w = cw; h = ch;
     }

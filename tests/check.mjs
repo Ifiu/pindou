@@ -9,13 +9,14 @@
  * 退出码：全过 0，有任何失败 1。
  *
  * 边界声明：本脚本只做「加载 + 逻辑 + 结构」层面的验收。它没有浏览器，
- * 因此**不验证**真实渲染外观、交互、点击下载与打印效果。
+ * 因此**不验证**真实渲染外观、鼠标/键盘交互、点击下载与打印效果。
  *
- * 五组：色表 / 色彩引擎 / 主管线 / 渲染 / 产物。
+ * 八组：模块加载 / 色表 / 色彩引擎 / 主管线 / 渲染 / 产物 / 界面契约（app.js + ui.html）/ 原图编辑（srcedit.js）。
  */
 
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import path from 'node:path';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -63,12 +64,13 @@ function near(name, actual, expected, tol) {
 const info = (msg) => console.log('  INFO  ' + msg);
 
 /* ══════════════════════════════════════════════════ 模块加载（唯一可靠姿势） */
-/* 三个模块的全局解析方式不一致：
+/* 各模块的全局解析方式不一致：
  *   palette.js 裸用 window ；color.js 用 typeof window 判断 ；pipeline.js 无条件写 globalThis ；
- *   render.js / app.js 挂 window。
+ *   render.js / srcedit.js / app.js 挂 window。
  * 故：window === globalThis，逐个 new Function(src)() 求值，再从 globalThis 上取全局。
  * 反例：new Function('window', src)(fake) 会让 pipeline 把 Pipeline 挂到真 globalThis 上，
- * 假对象收不到 —— 这条路径已排除。
+ * 假对象收不到 —— 这条路径已排除。srcedit.js 在这条路径下（无 document）同样只挂
+ * globalThis.SourceEdit、不抛异常，已实测。
  */
 globalThis.window = globalThis;
 
@@ -86,7 +88,7 @@ function readSrc(file) {
   return readFileSync(abs, 'utf8');
 }
 
-const MODULE_FILES = ['palette.js', 'color.js', 'pipeline.js', 'render.js', 'app.js'];
+const MODULE_FILES = ['palette.js', 'color.js', 'pipeline.js', 'render.js', 'srcedit.js', 'app.js'];
 const srcText = {};
 const loadErrors = [];
 for (const f of MODULE_FILES) {
@@ -101,14 +103,17 @@ for (const f of MODULE_FILES) {
 }
 
 startGroup('第 0 组 · 模块加载');
-ok('src/ 下 5 个模块文件都存在', MODULE_FILES.every((f) => srcText[f] !== undefined), loadErrors.join(' / '));
-ok('5 个模块逐个 new Function(src)() 均无抛错', loadErrors.length === 0, loadErrors.join(' / '));
+ok('src/ 下 6 个模块文件都存在', MODULE_FILES.every((f) => srcText[f] !== undefined), loadErrors.join(' / '));
+ok('6 个模块逐个 new Function(src)() 均无抛错', loadErrors.length === 0, loadErrors.join(' / '));
 ok('window === globalThis（浏览器式全局模拟已生效）', globalThis.window === globalThis);
 
 const P = globalThis.PINDOU_PALETTES;
 const CK = globalThis.ColorKit;
 const Pipeline = globalThis.Pipeline;
 const Render = globalThis.Render;
+const SourceEdit = globalThis.SourceEdit;
+ok('globalThis.SourceEdit 已挂载（srcedit.js 无 document 也能挂）', !!SourceEdit && typeof SourceEdit === 'object');
+ok('typeof SourceEdit.mount === "function"', !!SourceEdit && typeof SourceEdit.mount === 'function', typeof (SourceEdit && SourceEdit.mount));
 
 /* ══════════════════════════════════════════════ 共用：色号自然序比较器（冻结规则） */
 const GROUP_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'M'];
@@ -343,7 +348,7 @@ const DIM_CASES = [
   { label: '1000×500 + boards:2', img: srcBig, w: 1000, h: 500, opts: { boards: 2 }, ew: 58, eh: 29 },
   { label: '1000×500 + boards:3', img: srcBig, w: 1000, h: 500, opts: { boards: 3 }, ew: 87, eh: 44 },
   { label: '1000×50 + boards:1', img: srcWide, w: 1000, h: 50, opts: { boards: 1 }, ew: 29, eh: 1 },
-  { label: '1000×500 + 显式 gridW:200（应夹到 87）', img: srcBig, w: 1000, h: 500, opts: { gridW: 200 }, ew: 87, eh: 44 },
+  { label: '1000×500 + 显式 gridW:200（应夹到 116）', img: srcBig, w: 1000, h: 500, opts: { gridW: 200 }, ew: 116, eh: 58 },
 ];
 for (const c of DIM_CASES) {
   const pat = Pipeline.generateFromRGBA(c.img, c.w, c.h, c.opts);
@@ -352,6 +357,32 @@ for (const c of DIM_CASES) {
   checkInvariants(c.label, pat);
   ok(c.label + ' | warnings 为数组', Array.isArray(pat.warnings));
 }
+
+/* ── MAX_DIM 从 87 提到 116：116 必须真的可用，而不是被静默夹回 ───────────── */
+const srcMed = synth(240, 240, (x, y) => [(x * 7) % 256, (y * 5) % 256, ((x + y) * 3) % 256]);
+const pat116 = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 116, gridH: 116 });
+eq('116×116 | pattern.w === 116', pat116.w, 116);
+eq('116×116 | pattern.h === 116', pat116.h, 116);
+eq('116×116 | warnings 原文为空（没有任何夹取提示）', pat116.warnings, []);
+ok('116×116 | warnings 里不出现「夹到」', !pat116.warnings.some((w) => String(w).includes('夹到')), JSON.stringify(pat116.warnings));
+eq('116×116 | stats.boardX === ceil(116/29) === 4', pat116.stats.boardX, 4);
+eq('116×116 | stats.boardY === 4', pat116.stats.boardY, 4);
+eq('116×116 | cells.length === 116*116', pat116.cells.length, 116 * 116);
+eq('116×116 | stats.total === 116*116（源图无透明像素）', pat116.stats.total, 116 * 116);
+checkInvariants('116×116', pat116);
+
+/* 上限真的是 116 而不是 87：117 必须被夹回 116，且告警文案由 MAX_DIM 拼出 */
+const pat117 = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 117, gridH: 117 });
+eq('117 → 夹到 116（上限不是 87）', [pat117.w, pat117.h], [116, 116]);
+ok('117 夹取告警含 [1,116]（文案不再硬编码 87）', pat117.warnings.some((w) => String(w).includes('[1,116]')), JSON.stringify(pat117.warnings));
+ok('117 夹取告警里不出现 87', !pat117.warnings.some((w) => String(w).includes('87')), JSON.stringify(pat117.warnings));
+
+/* 100 与 116 都不是 29 的整数倍/整倍数：末格补线规则由渲染层负责，此处只锁 boardX/Y */
+const pat100 = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 100, gridH: 100 });
+eq('100×100 | w/h', [pat100.w, pat100.h], [100, 100]);
+eq('100×100 | stats.boardX === ceil(100/29) === 4', pat100.stats.boardX, 4);
+eq('100×100 | stats.boardY === 4', pat100.stats.boardY, 4);
+eq('100×100 | warnings 原文为空', pat100.warnings, []);
 
 const flatPat = Pipeline.generateFromRGBA(synth(60, 60, () => [10, 200, 60]), 60, 60, { boards: 1 });
 eq('纯色图 | colors.length === 1', flatPat.colors.length, 1);
@@ -457,7 +488,7 @@ ok('边界 | prevPattern 尺寸不符 → 告警且忽略锁定（不崩）', mi
 eq('边界 | prevPattern 尺寸不符 → 仍照常出图', misPat.warnings.length >= 1 && misPat.colors.length, 1);
 
 eq('边界 | 1000×1 极端宽比的短边夹到 1', Pipeline.generateFromRGBA(synth(1000, 1, () => [10, 20, 30]), 1000, 1, { boards: 1 }).h, 1);
-eq('边界 | boards:99 夹到 3（长边 87）', Pipeline.generateFromRGBA(edgeGray, 40, 40, { boards: 99 }).w, 87);
+eq('边界 | boards 参数仍夹到 3（长边 87，与 MAX_DIM 116 是两套口径；app.js 永远显式给 gridW/gridH 故不触发）', Pipeline.generateFromRGBA(edgeGray, 40, 40, { boards: 99 }).w, 87);
 const onePat = Pipeline.generateFromRGBA(edgeGray, 40, 40, { gridW: 0, gridH: 0 });
 eq('边界 | gridW/gridH = 0 夹到 1×1', [onePat.w, onePat.h], [1, 1]);
 ok('边界 | 尺寸被夹时给出告警', onePat.warnings.some((w) => w.includes('夹到合法范围')), JSON.stringify(onePat.warnings));
@@ -571,13 +602,56 @@ function expectedFills(pat, cellPx, pad) {
 const isPaper = (r, cv) => r.x === 0 && r.y === 0 && r.w === cv.width && r.h === cv.height;
 const cellFillsOf = (cv) => cv._rec.fillRect.filter((r) => !isPaper(r, cv));
 
+/* 逐格标签期望值：'code' → colors[cells[i]].code；'index' → String(cells[i]+1) */
+function expectedLabels(pat, cellPx, pad, mode) {
+  const out = [];
+  for (let i = 0; i < pat.w * pat.h; i++) {
+    const idx = pat.cells[i];
+    if (idx === EMPTY) continue;
+    out.push({
+      text: mode === 'index' ? String(idx + 1) : String(pat.colors[idx].code),
+      x: pad + (i % pat.w) * cellPx + cellPx / 2,
+      y: pad + Math.floor(i / pat.w) * cellPx + cellPx / 2 + 0.5
+    });
+  }
+  return out;
+}
+
+/* 合成 Pattern（用于 116 格 / 面积守卫 / 板边界等大尺寸用例，避免每次都跑一遍管线） */
+function makePat(w, h, colorCount) {
+  const colors = [];
+  for (let i = 0; i < colorCount; i++) {
+    const v = (i * 97) % 256;
+    const hex = '#' + [v, 255 - v, (v * 3) % 256].map((n) => n.toString(16).padStart(2, '0')).join('').toUpperCase();
+    colors.push({ code: 'T' + (i + 1), hex, rgb: [v, 255 - v, (v * 3) % 256], group: 'A' });
+  }
+  const cells = new Uint16Array(w * h);
+  const tally = new Array(colorCount).fill(0);
+  for (let i = 0; i < w * h; i++) { cells[i] = i % colorCount; tally[i % colorCount]++; }
+  const counts = colors.map((c, i) => ({ code: c.code, hex: c.hex, rgb: c.rgb, count: tally[i] })).sort((a, b) => b.count - a.count);
+  return { w, h, colors, cells, locked: new Uint8Array(w * h), counts, stats: { total: w * h } };
+}
+
+/* 板边界「格子下标 × cellPx」的独立重述（29 的整数倍 + 末格补线） */
+function expectBoardOffsets(n, cellPx) {
+  const out = [];
+  for (let k = 29; k <= n; k += 29) out.push(k * cellPx);
+  if (n > 0 && out[out.length - 1] !== n * cellPx) out.push(n * cellPx);
+  return out;
+}
+
 const cv1 = makeMockCanvas();
-const r1 = Render.drawPattern(HP, cv1, { cellPx: 12, showCodes: true, showRuler: false });
+/* padMode:'normal' 是 render.js 保留的向后兼容路径（旧公式 max(40, cellPx*3+20)），
+ * 所有旧几何断言都走它；新默认是 'tight'，几何另有专项断言。 */
+const r1 = Render.drawPattern(HP, cv1, { cellPx: 12, cellLabel: 'code', showRuler: false, padMode: 'normal' });
 eq('drawPattern | 画布宽 = pad*2 + w*cellPx', cv1.width, HP_PAD * 2 + HP.w * HP_CELL);
 eq('drawPattern | 画布高 = pad*2 + h*cellPx', cv1.height, HP_PAD * 2 + HP.h * HP_CELL);
 eq('drawPattern | 换算式 pad = max(40, cellPx*3+20)', HP_PAD, 56);
 eq('drawPattern | cellsDrawn === 非空格子数', r1.cellsDrawn, HP_NONEMPTY);
-eq('drawPattern | codesDrawn === true', r1.codesDrawn, true);
+/* 新标签规则：code 模式最小 cellPx = 20（本图最长色号 2 字符），12px 必然被抑制 */
+eq('drawPattern | cellPx=12 + cellLabel:code → codesDrawn === false（阈值已提到 20）', r1.codesDrawn, false);
+eq('drawPattern | cellPx=12 + cellLabel:code → labelsSuppressed === true', r1.labelsSuppressed, true);
+eq('drawPattern | cellPx=12 + cellLabel:code → labelMinPx === 20', r1.labelMinPx, 20);
 eq('drawPattern | 每格恰好一次填色（数量）', cellFillsOf(cv1).length, HP_NONEMPTY);
 eq('drawPattern | 每格位置与颜色逐格精确匹配', cellFillsOf(cv1), expectedFills(HP, 12, HP_PAD));
 ok(
@@ -589,21 +663,7 @@ ok(
   })
 );
 eq('drawPattern | 纸张底色先铺满画布', cv1._rec.fillRect[0], { x: 0, y: 0, w: cv1.width, h: cv1.height, fillStyle: '#FFFFFF' });
-
-const codeTexts = cv1._rec.fillText.map((t) => t.text);
-eq('drawPattern | showRuler:false 时 fillText 次数 === 非空格子数', cv1._rec.fillText.length, HP_NONEMPTY);
-eq(
-  'drawPattern | 编号文字逐格 === String(cells[i]+1)',
-  codeTexts,
-  Array.from(HP.cells).map((c, i) => (c === EMPTY ? null : String(c + 1))).filter((v) => v !== null)
-);
-eq(
-  'drawPattern | 编号位置 = 格中心',
-  cv1._rec.fillText.map((t) => [t.x, t.y]),
-  Array.from(HP.cells)
-    .map((c, i) => (c === EMPTY ? null : [HP_PAD + (i % 5) * 12 + 6, HP_PAD + Math.floor(i / 5) * 12 + 6.5]))
-    .filter((v) => v !== null)
-);
+eq('drawPattern | 标签被抑制时 fillText 0 次（showRuler:false）', cv1._rec.fillText.length, 0);
 eq('drawPattern | 细网格线一次成路径：2*((w+1)+(h+1)) = 22 个路径操作', cv1._rec.strokes[0].path.length, 22);
 eq('drawPattern | 细网格线线宽 1', cv1._rec.strokes[0].lineWidth, 1);
 eq('drawPattern | 板边界单独 stroke：竖 1 + 横 1 = 2 条', cv1._rec.strokes.length - 1, 2);
@@ -611,29 +671,191 @@ eq('drawPattern | 首条细网格线起点 x = pad + 0.5', cv1._rec.strokes[0].p
 eq('drawPattern | 竖板边界在 x = pad + w*cellPx', cv1._rec.strokes[1].path[0][1], HP_PAD + HP.w * 12);
 eq('drawPattern | 横板边界在 y = pad + h*cellPx', cv1._rec.strokes[2].path[0][2], HP_PAD + HP.h * 12);
 
+/* 旧「编号文字 = String(cells[i]+1)」的规则只在 cellLabel:'index' 下成立，
+ * 而且必须把 cellPx 抬到 index 阈值（17）之上才会真的画出来。 */
+const INDEX_PX = 20;
+const PAD_I = Math.max(40, INDEX_PX * 3 + 20);
+const cv1i = makeMockCanvas();
+const r1i = Render.drawPattern(HP, cv1i, { cellPx: INDEX_PX, cellLabel: 'index', showRuler: false, padMode: 'normal' });
+eq('drawPattern | cellLabel:index + cellPx=20 → codesDrawn === true', r1i.codesDrawn, true);
+eq('drawPattern | cellLabel:index + cellPx=20 → labelsSuppressed === false', r1i.labelsSuppressed, false);
+eq('drawPattern | cellLabel:index → fillText 次数 === 非空格子数', cv1i._rec.fillText.length, HP_NONEMPTY);
+eq(
+  'drawPattern | 编号文字逐格 === String(cells[i]+1)',
+  cv1i._rec.fillText.map((t) => t.text),
+  Array.from(HP.cells).map((c) => (c === EMPTY ? null : String(c + 1))).filter((v) => v !== null)
+);
+eq(
+  'drawPattern | 编号位置 = 格中心',
+  cv1i._rec.fillText.map((t) => [t.x, t.y]),
+  Array.from(HP.cells)
+    .map((c, i) => (c === EMPTY ? null : [PAD_I + (i % 5) * INDEX_PX + INDEX_PX / 2, PAD_I + Math.floor(i / 5) * INDEX_PX + INDEX_PX / 2 + 0.5]))
+    .filter((v) => v !== null)
+);
+
 const cv8 = makeMockCanvas();
-const r8 = Render.drawPattern(HP, cv8, { cellPx: 8, showCodes: true, showRuler: false });
-eq('drawPattern | cellPx=8 → 返回 codesDrawn:false', r8.codesDrawn, false);
+const r8 = Render.drawPattern(HP, cv8, { cellPx: 8, cellLabel: 'index', showRuler: false, padMode: 'normal' });
+eq('drawPattern | cellPx=8 → 返回 codesDrawn:false（index 阈值 17）', r8.codesDrawn, false);
 eq('drawPattern | cellPx=8 → 不写编号（fillText 0 次）', cv8._rec.fillText.length, 0);
 eq('drawPattern | cellPx=8 → 仍然逐格填色', cellFillsOf(cv8).length, HP_NONEMPTY);
 eq('drawPattern | cellPx=8 → pad = max(40, 8*3+20) = 44，画布宽 128', cv8._rec.fillRect[0].w, Math.max(40, 8 * 3 + 20) * 2 + HP.w * 8);
 
 const cv9 = makeMockCanvas();
-const r9 = Render.drawPattern(HP, cv9, { cellPx: 9, showCodes: true, showRuler: false });
-eq('drawPattern | cellPx=9 → codesDrawn:true', r9.codesDrawn, true);
-eq('drawPattern | cellPx=9 → 写编号次数 === 非空格子数', cv9._rec.fillText.length, HP_NONEMPTY);
+const r9 = Render.drawPattern(HP, cv9, { cellPx: 9, cellLabel: 'index', showRuler: false, padMode: 'normal' });
+/* 阈值已提高：9px 在 index 模式（17）下同样画不出来，旧期望 codesDrawn:true 已过期 */
+eq('drawPattern | cellPx=9 → codesDrawn:false（index 阈值 17）', r9.codesDrawn, false);
+eq('drawPattern | cellPx=9 → 写编号次数 === 0', cv9._rec.fillText.length, 0);
 
 const cvBad = { width: 0, height: 0 };
-eq('drawPattern | 无 getContext 的宿主返回空结果而不抛错', Render.drawPattern(HP, cvBad, {}), { codesDrawn: false, cellsDrawn: 0 });
+const rBad = Render.drawPattern(HP, cvBad, {});
+/* 新契约：返回完整结果对象（含 ok/reason/尺寸/阈值），不再是旧的两键对象 */
+eq('drawPattern | 无 getContext 的宿主不抛错且 ok === false', rBad.ok, false);
+eq('drawPattern | 无 getContext 的宿主 reason === "invalid-input"', rBad.reason, 'invalid-input');
+eq('drawPattern | 无 getContext 的宿主 cellsDrawn === 0', rBad.cellsDrawn, 0);
+eq('drawPattern | 无 getContext 的宿主 labelsDrawn === false', rBad.labelsDrawn, false);
+eq('drawPattern | 无 getContext 的宿主 width/height = 0', [rBad.width, rBad.height], [0, 0]);
+eq('drawPattern | 无 getContext 的宿主 width/height 未写进宿主对象', [cvBad.width, cvBad.height], [0, 0]);
+ok('drawPattern | 返回对象含冻结契约的 6 个键', ['ok', 'cellsDrawn', 'labelsDrawn', 'labelsSuppressed', 'labelMinPx', 'width', 'height', 'codesDrawn'].every((k) => k in rBad), Object.keys(rBad).join(','));
+eq('drawPattern | codesDrawn 是 labelsDrawn 的别名', rBad.codesDrawn, rBad.labelsDrawn);
 
-/* 真实 Pattern 的渲染整合（刻度开、编号默认开） */
+/* 真实 Pattern 的渲染整合（刻度开、标签默认 mode = code） */
 const realPat = Pipeline.generateFromRGBA(synth(40, 30, (x, y) => [(x * 17) % 256, (y * 23) % 256, 128]), 40, 30, { boards: 1 });
 const realNonEmpty = Array.from(realPat.cells).filter((c) => c !== EMPTY).length;
 const cvR = makeMockCanvas();
-Render.drawPattern(realPat, cvR, { cellPx: 12 });
+const rR = Render.drawPattern(realPat, cvR, { cellPx: 12, padMode: 'normal' });
 eq('整合 | 真实 Pattern（' + realPat.w + '×' + realPat.h + '）cellsDrawn === 非空格数', cvR._rec.fillRect.length - 1, realNonEmpty);
 eq('整合 | 真实 Pattern 逐格填色位置与颜色精确匹配', cellFillsOf(cvR), expectedFills(realPat, 12, 56));
-eq('整合 | 刻度和编号都画了（fillText = 非空格数 + 刻度数）', cvR._rec.fillText.length, realNonEmpty + 11, 'w=29 有 6 个刻度、h=22 有 5 个刻度');
+/* cellPx=12 下 code 模式被抑制 → 只剩刻度数字：w=29 有 6 个刻度、h=22 有 5 个刻度 */
+eq('整合 | cellPx=12 → 标签被抑制，fillText 只剩刻度 6+5=11 个', cvR._rec.fillText.length, 11);
+eq('整合 | cellPx=12 → labelsSuppressed === true', rR.labelsSuppressed, true);
+/* 显式 cellLabel + cellPx ≥ 20 时才是「非空格数 + 刻度数」 */
+const cvR2 = makeMockCanvas();
+const rR2 = Render.drawPattern(realPat, cvR2, { cellPx: 20, cellLabel: 'index', padMode: 'normal' });
+eq('整合 | cellPx=20 + cellLabel:index → fillText = 非空格数 + 刻度数', cvR2._rec.fillText.length, realNonEmpty + 11, 'w=29 有 6 个刻度、h=22 有 5 个刻度');
+eq('整合 | cellPx=20 + cellLabel:index → labelsDrawn === true', rR2.labelsDrawn, true);
+
+/* ══════════════════════════════════ 新增覆盖：标签模式 / 版式 / 守卫 / 刻度 / 板边界 */
+/* 本次用 HP（5×4，色号 2 字符）作为标签用例的载体：code 阈值 20、index 阈值 17 */
+const LABEL_PX = 24;
+const LABEL_PAD = Math.max(40, LABEL_PX * 3 + 20);          // 92
+const drawHP = (opts) => {
+  const cv = makeMockCanvas();
+  const r = Render.drawPattern(HP, cv, Object.assign({ showRuler: false, padMode: 'normal' }, opts));
+  return { cv, r, texts: cv._rec.fillText.map((t) => t.text), pos: cv._rec.fillText.map((t) => [t.x, t.y]) };
+};
+
+const code24 = drawHP({ cellPx: LABEL_PX, cellLabel: 'code' });
+const index24 = drawHP({ cellPx: LABEL_PX, cellLabel: 'index' });
+const none24 = drawHP({ cellPx: LABEL_PX, cellLabel: 'none' });
+eq('新增 | cellPx=24 + cellLabel:code → codesDrawn true 且填字次数 = 非空格数', [code24.r.codesDrawn, code24.texts.length], [true, HP_NONEMPTY]);
+eq('新增 | cellLabel:code → 逐格文字 === colors[cells[i]].code', code24.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'code').map((o) => o.text));
+eq('新增 | cellLabel:code → 逐格位置 === 格中心', code24.pos, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'code').map((o) => [o.x, o.y]));
+eq('新增 | cellLabel:index → 逐格文字 === String(cells[i]+1)', index24.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'index').map((o) => o.text));
+eq('新增 | cellLabel:index → 逐格位置 === 格中心', index24.pos, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'index').map((o) => [o.x, o.y]));
+eq('新增 | cellLabel:none → 零 fillText', none24.texts.length, 0);
+eq('新增 | cellLabel:none → labelsDrawn/labelsSuppressed/labelMinPx', [none24.r.labelsDrawn, none24.r.labelsSuppressed, none24.r.labelMinPx], [false, false, 0]);
+eq('新增 | cellLabel:none → 仍然逐格填色', cellFillsOf(none24.cv).length, HP_NONEMPTY);
+
+/* 阈值边界：code 19 不画 / 20 画；index 16 不画 / 17 画 */
+const code19 = drawHP({ cellPx: 19, cellLabel: 'code' });
+const code20 = drawHP({ cellPx: 20, cellLabel: 'code' });
+const index16 = drawHP({ cellPx: 16, cellLabel: 'index' });
+const index17 = drawHP({ cellPx: 17, cellLabel: 'index' });
+eq('新增 | 阈值 | code@19 不画（codesDrawn/填字）', [code19.r.codesDrawn, code19.texts.length], [false, 0]);
+eq('新增 | 阈值 | code@20 画（codesDrawn/填字）', [code20.r.codesDrawn, code20.texts.length], [true, HP_NONEMPTY]);
+eq('新增 | 阈值 | code 的 labelsSuppressed / labelMinPx（19 / 20）', [code19.r.labelsSuppressed, code20.r.labelsSuppressed, code19.r.labelMinPx, code20.r.labelMinPx], [true, false, 20, 20]);
+eq('新增 | 阈值 | index@16 不画（codesDrawn/填字）', [index16.r.codesDrawn, index16.texts.length], [false, 0]);
+eq('新增 | 阈值 | index@17 画（codesDrawn/填字）', [index17.r.codesDrawn, index17.texts.length], [true, HP_NONEMPTY]);
+eq('新增 | 阈值 | index 的 labelsSuppressed / labelMinPx（16 / 17）', [index16.r.labelsSuppressed, index17.r.labelsSuppressed, index16.r.labelMinPx, index17.r.labelMinPx], [true, false, 17, 17]);
+
+/* 向后兼容：showCodes 旧键与 cellLabel 新键的优先级 */
+const oldFalse = drawHP({ cellPx: LABEL_PX, cellLabel: undefined, showCodes: false });
+const oldTrue = drawHP({ cellPx: LABEL_PX, cellLabel: undefined, showCodes: true });
+const both = drawHP({ cellPx: LABEL_PX, cellLabel: 'code', showCodes: true });
+const both2 = drawHP({ cellPx: LABEL_PX, cellLabel: 'index', showCodes: false });
+const noKey = drawHP({ cellPx: LABEL_PX });
+eq('新增 | 兼容 | {showCodes:false} → 零标签', oldFalse.texts.length, 0);
+eq('新增 | 兼容 | {showCodes:false} → codesDrawn false', oldFalse.r.codesDrawn, false);
+eq('新增 | 兼容 | {showCodes:true} 单独给出 → 走 index', oldTrue.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'index').map((o) => o.text));
+eq('新增 | 兼容 | 两者同给时 cellLabel 优先（code 赢过 showCodes:true）', both.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'code').map((o) => o.text));
+eq('新增 | 兼容 | 两者同给时 cellLabel 优先（index 赢过 showCodes:false）', both2.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'index').map((o) => o.text));
+eq('新增 | 兼容 | 两个键都不给 → 默认 code（新语义）', noKey.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'code').map((o) => o.text));
+
+/* padMode：normal 复现旧公式；tight 在 116 格 @24px 时白边约 4%，且不大于 normal */
+const BIG = 116;
+const bigPat = makePat(BIG, BIG, 3);
+const dimsOf = (cv) => ({ pad: (cv.width - BIG * LABEL_PX) / 2, w: cv.width, h: cv.height });
+const cvNormal = makeMockCanvas();
+Render.drawPattern(bigPat, cvNormal, { cellPx: LABEL_PX, cellLabel: 'none', padMode: 'normal' });
+const cvTight = makeMockCanvas();
+Render.drawPattern(bigPat, cvTight, { cellPx: LABEL_PX, cellLabel: 'none', padMode: 'tight' });
+const dN = dimsOf(cvNormal);
+const dT = dimsOf(cvTight);
+eq('新增 | padMode:normal 复现旧公式 max(40, cellPx*3+20)', dN.pad, Math.max(40, LABEL_PX * 3 + 20));
+const tightRatio = (dT.w - BIG * LABEL_PX) / dT.w;
+ok('新增 | padMode:tight 白边占比在 3%–6%（实测 ' + (tightRatio * 100).toFixed(2) + '%）', tightRatio >= 0.03 && tightRatio <= 0.06, tightRatio);
+eq('新增 | padMode:tight 的 pad 实测 56（= round(2784×2%)，受刻度下限抬升）', dT.pad, 56);
+ok('新增 | tight 的白边 ≤ normal 的白边', dT.pad <= dN.pad, dT.pad + ' vs ' + dN.pad);
+eq('新增 | 未给 padMode 时默认 tight（与 tight 显式结果一致）', (() => { const cv = makeMockCanvas(); Render.drawPattern(bigPat, cv, { cellPx: LABEL_PX, cellLabel: 'none' }); return cv.width; })(), cvTight.width);
+
+/* annotate：表格落在网格下方（不重叠），且列出每个色号的色号 / HEX / 颗数 */
+const cvAnnOff = makeMockCanvas();
+Render.drawPattern(bigPat, cvAnnOff, { cellPx: LABEL_PX, cellLabel: 'none', padMode: 'tight', annotate: false });
+const cvAnnOn = makeMockCanvas();
+Render.drawPattern(bigPat, cvAnnOn, { cellPx: LABEL_PX, cellLabel: 'none', padMode: 'tight', annotate: true });
+ok('新增 | annotate:true 画布更高（下方追加用量表）', cvAnnOn.height > cvAnnOff.height, cvAnnOff.height + ' → ' + cvAnnOn.height);
+eq('新增 | annotate:false 时画布尺寸与旧路径一致（116×116 正方形）', [cvAnnOff.width, cvAnnOff.height], [cvAnnOn.width, cvAnnOn.width]);
+eq('新增 | annotate:false 与 true 的宽度相同（表格与网格等宽）', cvAnnOff.width, cvAnnOn.width);
+const headFill = cvAnnOn._rec.fillRect.find((r) => r.fillStyle === '#EEF1F5');
+ok('新增 | annotate:true 真的画了表头底色 #EEF1F5', !!headFill, JSON.stringify(headFill || null));
+const gridBottom = dT.pad + BIG * LABEL_PX;
+if (headFill) {
+  ok('新增 | 表格顶 > 网格底（表格不遮挡网格）', headFill.y > gridBottom, headFill.y + ' > ' + gridBottom);
+  eq('新增 | 表格顶 = 网格底 + gap（gap = max(2, round(cellPx*0.5))）', headFill.y, gridBottom + Math.max(2, Math.round(LABEL_PX * 0.5)));
+}
+const annTexts = cvAnnOn._rec.fillText.map((t) => t.text);
+for (const row of bigPat.counts) {
+  ok('新增 | 表格含色号 ' + row.code, annTexts.includes(row.code));
+  ok('新增 | 表格含 HEX ' + row.hex, annTexts.includes(row.hex));
+  ok('新增 | 表格含颗数 ' + row.count + ' 颗', annTexts.includes(row.count + ' 颗'));
+}
+ok('新增 | annotate:false 时零表格文字（不出现任何 HEX）', !cvAnnOff._rec.fillText.some((t) => String(t.text).startsWith('#')), JSON.stringify(cvAnnOff._rec.fillText.map((t) => t.text).slice(0, 5)));
+
+/* 面积守卫：先算后画，超限时连画布尺寸都不设置 */
+const cvGuard = makeMockCanvas();
+const rGuard = Render.drawPattern(bigPat, cvGuard, { cellPx: 256, cellLabel: 'none', padMode: 'normal' });
+eq('新增 | 面积守卫 ok === false', rGuard.ok, false);
+eq('新增 | 面积守卫 reason === "too-large"', rGuard.reason, 'too-large');
+ok('新增 | 面积守卫 needPixels > maxPixels', rGuard.needPixels > rGuard.maxPixels, rGuard.needPixels + ' > ' + rGuard.maxPixels);
+eq('新增 | 面积守卫 maxPixels === 120000000', rGuard.maxPixels, 120000000);
+ok('新增 | 面积守卫仍报告计划尺寸（供 UI 出提示）', rGuard.width > 0 && rGuard.height > 0, rGuard.width + '×' + rGuard.height);
+eq('新增 | 面积守卫 canvas 未被设置尺寸', [cvGuard.width, cvGuard.height], [0, 0]);
+eq('新增 | 面积守卫零绘制调用', [cvGuard._rec.fillRect.length, cvGuard._rec.fillText.length, cvGuard._rec.strokes.length, cvGuard._rec.save, cvGuard._rec.restore], [0, 0, 0, 0, 0]);
+
+/* 刻度恒定每 5 格：与 cellPx 无关 */
+const rulerCounts = [12, 24, 64].map((px) => {
+  const cv = makeMockCanvas();
+  Render.drawPattern(bigPat, cv, { cellPx: px, cellLabel: 'none', padMode: 'normal' });
+  return cv._rec.fillText.length;
+});
+eq('新增 | 116 格刻度标签数 = rulerPositions(116)×2 = 27×2 = 54', rulerCounts[1], 54);
+ok('新增 | 刻度标签数远小于格数（< 60）', rulerCounts[1] < 60, rulerCounts[1]);
+ok('新增 | 刻度数与 cellPx 无关（12 / 24 / 64 相同）', rulerCounts[0] === rulerCounts[1] && rulerCounts[1] === rulerCounts[2], rulerCounts.join(' / '));
+
+/* 板边界线：ceil(宽/29) + ceil(高/29) 条，末格补线正确（100 / 116 都不是 29 的整数倍关系） */
+const BOARD_PX = 4;
+for (const n of [29, 87, 100, 116]) {
+  const pat = makePat(n, n, 2);
+  const cv = makeMockCanvas();
+  Render.drawPattern(pat, cv, { cellPx: BOARD_PX, cellLabel: 'none', padMode: 'normal' });
+  const strokes = cv._rec.strokes;
+  const perSide = Math.ceil(n / 29);
+  const pad = Math.max(40, BOARD_PX * 3 + 20);
+  eq('新增 | 板边界 | ' + n + '×' + n + ' 的线数 = 2×ceil(' + n + '/29) + 刻度 1', strokes.length - 1, 2 * perSide + 1);
+  eq('新增 | 板边界 | ' + n + '×' + n + ' 竖线位置（末格补线）', strokes.slice(1, 1 + perSide).map((s) => s.path[0][1] - pad), expectBoardOffsets(n, BOARD_PX));
+  eq('新增 | 板边界 | ' + n + '×' + n + ' 横线位置（末格补线）', strokes.slice(1 + perSide, 1 + 2 * perSide).map((s) => s.path[0][2] - pad), expectBoardOffsets(n, BOARD_PX));
+}
+eq('新增 | 板边界 | 细网格线仍是第 1 条路径（116×116 的 2×(117+117)）', (() => { const cv = makeMockCanvas(); Render.drawPattern(makePat(116, 116, 2), cv, { cellPx: BOARD_PX, cellLabel: 'none', padMode: 'normal' }); return cv._rec.strokes[0].path.length; })(), 2 * (117 + 117));
 
 /* exportCSV */
 const csvA = Render.exportCSV(HP);
@@ -719,8 +941,8 @@ if (!productExists) {
 
   const openTags = html.match(/<script[^>]*>/gi) || [];
   const closeTags = html.match(/<\/script/gi) || [];
-  eq('恰好 5 个 <script> 开标签', openTags.length, 5);
-  eq('恰好 5 个 </script 闭标签', closeTags.length, 5);
+  eq('恰好 6 个 <script> 开标签', openTags.length, 6);
+  eq('恰好 6 个 </script 闭标签', closeTags.length, 6);
   ok('全部脚本都是内联（开标签无属性）', openTags.every((t) => t.toLowerCase() === '<script>'), openTags.join(' | '));
   ok('无 <script src=...> 外链脚本', !/<script\b[^>]*\ssrc\s*=/i.test(html));
   ok('无 <link 标签', !/<link\b/i.test(html));
@@ -746,23 +968,29 @@ if (!productExists) {
   const reTag = /<script>([\s\S]*?)<\/script>/g;
   let m;
   while ((m = reTag.exec(html)) !== null) bodies.push(m[1]);
-  eq('按 <script> 切出 5 段脚本', bodies.length, 5);
+  eq('按 <script> 切出 6 段脚本', bodies.length, 6);
   ok('内联 JS 段里无 `</' + 'script` 残留字面量（安全阀二次确认）', bodies.every((b) => !/<\/script/i.test(b)));
-  ok('5 段脚本全部位于 <body> 内', html.indexOf('<script>') > html.indexOf('<body>') && html.indexOf('<script>') > html.indexOf('</head>'));
+  ok('6 段脚本全部位于 <body> 内', html.indexOf('<script>') > html.indexOf('<body>') && html.indexOf('<script>') > html.indexOf('</head>'));
 
-  const BANNERS = ['src/palette.js', 'src/color.js', 'src/pipeline.js', 'src/render.js', 'src/app.js'];
+  const BANNERS = ['src/palette.js', 'src/color.js', 'src/pipeline.js', 'src/render.js', 'src/srcedit.js', 'src/app.js'];
   const bannerText = (n) => '/* ===== ' + n + ' ===== */';
   eq(
-    '5 段脚本的横幅（即来源与顺序）为 palette → color → pipeline → render → app',
+    '6 段脚本的横幅（即来源与顺序）为 palette → color → pipeline → render → srcedit → app',
     bodies.map((b, i) => (b.includes(bannerText(BANNERS[i])) ? BANNERS[i] : '(第' + (i + 1) + '段横幅不符)')),
     BANNERS
   );
   ok('每段脚本恰好含 1 个来源横幅（切削点干净，没有串段）', bodies.every((b) => BANNERS.filter((n) => b.includes(bannerText(n))).length === 1));
-  ok('整份 HTML 里 5 个来源横幅按顺序出现', BANNERS.every((n, i) => html.indexOf(bannerText(n)) > (i === 0 ? -1 : html.indexOf(bannerText(BANNERS[i - 1])))));
+  ok('整份 HTML 里 6 个来源横幅按顺序出现', BANNERS.every((n, i) => html.indexOf(bannerText(n)) > (i === 0 ? -1 : html.indexOf(bannerText(BANNERS[i - 1])))));
+  /* 新模块必须真的在产物里（而不是只有文件在 src/ 下）：app.js 靠 window.SourceEdit 决定
+     裁剪 / 旋转是否可用，漏内联会静默退回"直接用原图"。 */
+  ok('产物内确实含 src/srcedit.js 段（不只是 src/ 下有这个文件）', typeof srcText['srcedit.js'] === 'string' && bodies[4].includes(bannerText('src/srcedit.js')));
+  const srceditInline = bodies[4].replace(/^\n\/\* ===== src\/srcedit\.js ===== \*\/\n/, '').replace(/\n$/, '');
+  ok('产物内 srcedit 段与 src/srcedit.js 逐字符相同（原样内联，无改写）', srceditInline === srcText['srcedit.js'].replace(/\s+$/, ''), Buffer.byteLength(srceditInline, 'utf8') + ' vs ' + Buffer.byteLength(srcText['srcedit.js'].replace(/\s+$/, ''), 'utf8'));
 
   // 清掉所有模块全局（含 app.js 可能挂的键），便于后续判断"重新 eval 后新增了什么"
-  for (const k of ['PINDOU_PALETTES', 'ColorKit', 'Pipeline', 'Render', 'PindouUI']) delete globalThis[k];
+  for (const k of ['PINDOU_PALETTES', 'ColorKit', 'Pipeline', 'Render', 'SourceEdit', 'PindouUI']) delete globalThis[k];
   ok('重新 eval 前 4 个模块全局已从 globalThis 清空', ['PINDOU_PALETTES', 'ColorKit', 'Pipeline', 'Render'].every((k) => globalThis[k] === undefined));
+  ok('重新 eval 前 SourceEdit / PindouUI 也已从 globalThis 清空（产物证明不受上一轮污染）', globalThis.SourceEdit === undefined && globalThis.PindouUI === undefined);
   const beforeKeys = new Set(Object.getOwnPropertyNames(globalThis));
   const libErrors = [];
   for (let i = 0; i < 4; i++) {
@@ -777,17 +1005,744 @@ if (!productExists) {
   ok('重新 eval 后 typeof window.Pipeline.generateFromRGBA === "function"', typeof globalThis.window.Pipeline.generateFromRGBA === 'function');
   ok('产物内色表仍是 2 × 221', Object.keys(globalThis.PINDOU_PALETTES).length === 2 && Object.keys(globalThis.PINDOU_PALETTES).every((k) => globalThis.PINDOU_PALETTES[k].colors.length === 221));
 
-  /* 第 5 段（app.js）只断言「能加载、不炸、不破坏上面 4 个全局」——
-   * 它的全局名与函数名属实现细节，另一个子代理正在改，硬断言会误报。 */
-  const libSnap = ['PINDOU_PALETTES', 'ColorKit', 'Pipeline', 'Render'].map((k) => typeof globalThis[k]);
-  const appErr = evalScript(bodies[4]);
-  ok('产物第 5 段（src/app.js）重新 eval 无抛错', appErr === null, appErr ? appErr.message : '');
-  eq('app 段未破坏前 4 个库的全局', ['PINDOU_PALETTES', 'ColorKit', 'Pipeline', 'Render'].map((k) => typeof globalThis[k]), libSnap);
+  /* 第 5 段（srcedit.js）必须挂上 window.SourceEdit，否则界面会安静地退回原图 */
+  const srceditErr = evalScript(bodies[4]);
+  ok('产物第 5 段（src/srcedit.js）重新 eval 无抛错', srceditErr === null, srceditErr ? srceditErr.message : '');
+  ok('重新 eval 后 window.SourceEdit 挂上了', typeof globalThis.SourceEdit === 'object' && globalThis.SourceEdit !== null);
+  ok('重新 eval 后 typeof window.SourceEdit.mount === "function"', typeof globalThis.window.SourceEdit.mount === 'function');
+  /* 行为证明（不是读常量）：产物里的 pipeline MAX_DIM 必须是 116 —— 让它真的生一张 116×116 */
+  const productSrc = synth(116, 116, (x, y) => [(x * 5) % 256, (y * 3) % 256, ((x + y) * 7) % 256]);
+  const patProduct116 = globalThis.Pipeline.generateFromRGBA(productSrc, 116, 116, { gridW: 116, gridH: 116 });
+  eq('产物内 pipeline MAX_DIM = 116（行为证明：116×116 不被夹回）', [patProduct116.w, patProduct116.h], [116, 116]);
+  eq('产物内 pipeline 的 116×116 零告警（没有"夹到"提示）', patProduct116.warnings, []);
+  eq('产物内 pipeline 的 116×116 boardX/Y = 4', [patProduct116.stats.boardX, patProduct116.stats.boardY], [4, 4]);
+
+  /* 第 6 段（app.js）只断言「能加载、不炸、不破坏上面 5 个全局」——
+   * 它的全局名与函数名属实现细节，硬断言会误报。 */
+  const libSnap = ['PINDOU_PALETTES', 'ColorKit', 'Pipeline', 'Render', 'SourceEdit'].map((k) => typeof globalThis[k]);
+  const appErr = evalScript(bodies[5]);
+  ok('产物第 6 段（src/app.js）重新 eval 无抛错', appErr === null, appErr ? appErr.message : '');
+  eq('app 段未破坏前 5 个库的全局', ['PINDOU_PALETTES', 'ColorKit', 'Pipeline', 'Render', 'SourceEdit'].map((k) => typeof globalThis[k]), libSnap);
   const newKeys = Object.getOwnPropertyNames(globalThis).filter((k) => !beforeKeys.has(k));
   info('app 段新增全局：' + (newKeys.join(', ') || '(无)') + ' —— 名字属实现细节，只报不断言');
+  ok('产物内 app 段挂上了 PindouUI（模块级描述符：palettes/pipeline/render 均可用）', !!globalThis.PindouUI && globalThis.PindouUI.modules && globalThis.PindouUI.modules().ok === true, JSON.stringify(globalThis.PindouUI && globalThis.PindouUI.modules ? globalThis.PindouUI.modules() : null));
   const patFromProduct = globalThis.Pipeline.generateFromRGBA(synth(30, 30, (x) => [x * 8 % 256, 200, 60]), 30, 30, { boards: 1 });
   ok('产物内 Pipeline 端到端产出一张合法 Pattern', patFromProduct.colors.length >= 1 && patFromProduct.stats.total === patFromProduct.w * patFromProduct.h, 'colors=' + patFromProduct.colors.length);
 }
+
+/* ═════════════════════════════════════════════════════════════ 汇总 */
+/* ══════════════════════════════════════════ 第 6 组 · 界面契约（app.js + ui.html） */
+startGroup('第 6 组 · 界面契约（app.js / ui.html）');
+
+const UI_HTML = readSrc('ui.html') || '';
+const APP_SRC = srcText['app.js'] || '';
+
+/* ── 控件 id 双向核对：0 重复 / 0 遗漏 / 0 悬空 ───────────────────────── */
+const htmlIds = [...UI_HTML.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
+const appRefList = [...APP_SRC.matchAll(/byId\(\s*'([^']+)'\s*\)/g)].map((m) => m[1])
+  .concat([...APP_SRC.matchAll(/byId\(\s*"([^"]+)"\s*\)/g)].map((m) => m[1]));
+const appRefs = [...new Set(appRefList)];
+eq('ui.html 的 id 无重复', htmlIds.length - new Set(htmlIds).size, 0);
+eq('app.js 的 byId 引用数 === ui.html 的 id 数（双向 0 遗漏）', appRefs.length, htmlIds.length);
+ok('app.js 无悬空 id 引用（每个 byId(...) 都能在 ui.html 里找到）', appRefs.length > 0 && appRefs.every((id) => htmlIds.includes(id)), appRefs.filter((id) => !htmlIds.includes(id)).join(','));
+ok('ui.html 无未被 app.js 引用的死 id', htmlIds.length > 0 && htmlIds.every((id) => appRefs.includes(id)), htmlIds.filter((id) => !appRefs.includes(id)).join(','));
+ok('本轮替换 | 旧的 #showNumbers 已彻底消失（html + app.js 双清）', !htmlIds.includes('showNumbers') && !appRefs.includes('showNumbers'));
+ok('本轮替换 | #cellLabelMode 存在且被引用', htmlIds.includes('cellLabelMode') && appRefs.includes('cellLabelMode'));
+ok('本轮替换 | 旧的 #recolorColor 已彻底消失（html + app.js 双清）', !htmlIds.includes('recolorColor') && !appRefs.includes('recolorColor'));
+ok('本轮替换 | 色板网格那组 id 齐全且都被引用', ['recolorGrid', 'recolorSearch', 'recolorScope', 'recolorEmpty', 'recolorRecentRow', 'recolorCurrent'].every((id) => htmlIds.includes(id) && appRefs.includes(id)));
+
+/* ── 死按钮与覆盖层（纯结构 + CSS 规则，无需 DOM） ───────────────────── */
+const emptyTag = (UI_HTML.match(/<[^>]*\bid="emptyState"[^>]*>/) || [''])[0];
+ok('#emptyState 带 empty-cta 类', /class="[^"]*\bempty-cta\b[^"]*"/.test(emptyTag), emptyTag);
+ok('#emptyState 是 <button>（能真的被点）', /^<button\b/.test(emptyTag), emptyTag);
+ok('.canvas-overlay 仍是 pointer-events:none', /\.canvas-overlay\s*\{[^}]*pointer-events\s*:\s*none/.test(UI_HTML));
+ok('.empty-cta 单独恢复 pointer-events:auto', /\.empty-cta\s*\{[^}]*pointer-events\s*:\s*auto/.test(UI_HTML));
+ok('覆盖层排在画布之后且都在 #canvasScroll 内（绝对定位覆盖层 + none 才等于不拦截画布点击）', UI_HTML.indexOf('id="canvasScroll"') < UI_HTML.indexOf('id="patternCanvas"') && UI_HTML.indexOf('id="patternCanvas"') < UI_HTML.indexOf('class="canvas-overlay"'));
+
+/* ── 最小 DOM 桩：只实现 app.js 真正用到的 API ──────────────────────── */
+function makeRecCtx() {
+  const rec = { fillRect: [], fillText: [], strokeRect: [], strokes: [], paths: 0, save: 0, restore: 0, drawImage: 0, setTransform: 0, clearRect: 0 };
+  const ctx = {
+    fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, lineCap: 'butt',
+    font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic', imageSmoothingEnabled: true,
+    _path: [], _rec: rec,
+    save() { rec.save++; }, restore() { rec.restore++; },
+    setTransform() { rec.setTransform++; }, clearRect() { rec.clearRect++; },
+    fillRect(x, y, w, h) { rec.fillRect.push({ x, y, w, h }); },
+    strokeRect(x, y, w, h) { rec.strokeRect.push({ x, y, w, h }); },
+    drawImage() { rec.drawImage++; },
+    fillText(t, x, y) { rec.fillText.push({ text: String(t), x, y }); },
+    beginPath() { ctx._path = []; rec.paths++; },
+    moveTo(x, y) { ctx._path.push(['M', x, y]); },
+    lineTo(x, y) { ctx._path.push(['L', x, y]); },
+    closePath() { ctx._path.push(['Z']); },
+    stroke() { rec.strokes.push(ctx._path.slice()); ctx._path = []; },
+    fill() { rec.strokes.push([]); }
+  };
+  return ctx;
+}
+function makeFireable(el) {
+  const handlers = {};
+  el._handlers = handlers;
+  el.addEventListener = (t, fn) => { (handlers[t] = handlers[t] || []).push(fn); };
+  el.removeEventListener = (t, fn) => { if (handlers[t]) handlers[t] = handlers[t].filter((f) => f !== fn); };
+  el.dispatchEvent = (evt) => { (handlers[evt.type] || []).slice().forEach((fn) => fn(evt)); return true; };
+  return el;
+}
+function fire(el, type, extra) {
+  const evt = Object.assign({ type, target: el, currentTarget: el, button: 0, pointerId: 1, key: '', altKey: false, shiftKey: false, ctrlKey: false, metaKey: false, preventDefault() {}, stopPropagation() {} }, extra || {});
+  el.dispatchEvent(evt);
+  return evt;
+}
+function makeDomEl(id) {
+  const cls = new Set();
+  const el = makeFireable({
+    id, tagName: 'DIV', value: '', checked: false, disabled: false, hidden: false,
+    textContent: '', innerHTML: '', files: null, width: 0, height: 0,
+    clientWidth: 0, clientHeight: 0, clientLeft: 0, clientTop: 0,
+    style: {}, dataset: {}, children: [], parentNode: null, parentElement: null,
+    _clicks: 0, _attrs: {},
+    classList: { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c), _set: cls },
+    getAttribute(n) { return Object.prototype.hasOwnProperty.call(this._attrs, n) ? this._attrs[n] : null; },
+    setAttribute(n, v) { this._attrs[n] = String(v); },
+    appendChild(c) { this.children.push(c); if (c) c.parentNode = this; return c; },
+    removeChild(c) { this.children = this.children.filter((x) => x !== c); if (c) c.parentNode = null; return c; },
+    querySelectorAll() { return []; },
+    getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }; }
+  });
+  el.click = function () { this._clicks++; fire(this, 'click'); };
+  return el;
+}
+function makeDoc(ids) {
+  const map = {};
+  const created = { canvases: [], anchors: [], others: [] };
+  for (const id of ids) map[id] = makeDomEl(id);
+  for (const id of ['patternCanvas', 'sourceCanvas']) {
+    if (!map[id]) continue;
+    map[id]._ctx = makeRecCtx();
+    map[id].getContext = function () { return this._ctx; };
+  }
+  const doc = makeFireable({
+    readyState: 'complete',
+    body: { appendChild() {}, removeChild() {} },
+    getElementById: (id) => map[id] || null,
+    createElement(tag) {
+      const t = String(tag).toLowerCase();
+      if (t === 'canvas') {
+        const cv = makeDomEl('#created-canvas');
+        cv._ctx = makeRecCtx();
+        cv.getContext = function () { return this._ctx; };
+        created.canvases.push(cv);
+        return cv;
+      }
+      if (t === 'a') {
+        const a = makeDomEl('#created-a');
+        a.click = function () { this._clicks++; };
+        created.anchors.push(a);
+        return a;
+      }
+      const el = makeDomEl('#created-' + t);
+      created.others.push(el);
+      return el;
+    }
+  });
+  return { map, doc, created };
+}
+
+/* ── 在 vm 沙箱里跑真的 app.js（不污染 globalThis / 不碰真 DOM） ──────── */
+const dom = makeDoc(htmlIds);
+const timers = [];
+let timerSeq = 0;
+const sandboxWin = {
+  PINDOU_PALETTES: globalThis.PINDOU_PALETTES,
+  Pipeline: globalThis.Pipeline,
+  Render: null,
+  setTimeout(fn) { const id = ++timerSeq; timers.push({ id, fn, cancelled: false }); return id; },
+  clearTimeout(id) { for (const t of timers) if (t.id === id) t.cancelled = true; },
+  performance: { now: () => 0 },
+  Blob: class StubBlob { constructor(parts, opts) { this.parts = parts; this.type = (opts || {}).type; } },
+  URL: { createObjectURL: () => 'blob:stub/1', revokeObjectURL() {} },
+  localStorage: (function () { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); } }; })()
+};
+const dropTimers = () => { timers.length = 0; };
+const flushTimers = () => { const q = timers.splice(0); for (const t of q) if (!t.cancelled) t.fn(); };
+const drawCalls = [];
+const pngCalls = [];
+let forceTooLarge = false;
+let forceSuppressed = false;
+sandboxWin.Render = Object.assign({}, globalThis.Render, {
+  drawPattern(pat, cv, opts) {
+    drawCalls.push({ cv, opts, pat });
+    if (cv !== dom.map.patternCanvas && forceTooLarge) {
+      return { ok: false, reason: 'too-large', needPixels: 900000000, maxPixels: 120000000, cellsDrawn: 0, labelsDrawn: false, labelsSuppressed: true, labelMinPx: 20, width: 99999, height: 99999, codesDrawn: false };
+    }
+    if (cv !== dom.map.patternCanvas && forceSuppressed) {
+      const r = globalThis.Render.drawPattern(pat, cv, opts);
+      return Object.assign({}, r, { ok: true, labelsSuppressed: true, labelsDrawn: false, codesDrawn: false });
+    }
+    return globalThis.Render.drawPattern(pat, cv, opts);
+  },
+  exportPNG(cv, name) { pngCalls.push({ cv, name }); return undefined; }
+});
+const appCtx = vm.createContext({ window: sandboxWin, document: dom.doc, console: { warn() {}, log() {} } });
+let appLoadErr = null;
+try { vm.runInContext(APP_SRC, appCtx, { filename: 'app.js' }); } catch (e) { appLoadErr = e; }
+eq('app.js 在 DOM 桩沙箱里加载无抛错', appLoadErr, null);
+const ui = sandboxWin.PindouUI;
+ok('沙箱内 window.PindouUI 挂上了', !!ui && typeof ui === 'object');
+ok('PindouUI 暴露了验收需要的全部方法', ['boot', 'modules', 'options', 'undo', 'exportPng', 'applyRecolor', 'pickerGroups', 'renderRecolorGrid', 'selectRecolorCode', 'readRecentColors', 'noteRecentColor', 'exportViewOpts', 'setViewZoom', 'state', 'elements'].every((k) => typeof ui[k] === 'function'), Object.keys(ui).join(','));
+ui.boot();
+const els = ui.elements();
+const st = ui.state();
+eq('boot 后 ui 元素全部解析到（0 个 missing）', st.missingUI.length, 0);
+eq('boot 后 state.booted === true', st.booted, true);
+ok('模块描述符 ok（palettes/pipeline/render 均在；SourceEdit 属可选项，不进 missing）', ui.modules().ok === true, JSON.stringify(ui.modules()));
+ok('SourceEdit 缺失时给出降级提示（不阻塞其它功能）', String(els.srceditHint.textContent).includes('SourceEdit'), els.srceditHint.textContent);
+
+/* ── 尺寸：gridW 200 → 116；预设 100；拼板 4×4 → 116 ─────────────────── */
+els.gridW.value = '200';
+els.gridH.value = '200';
+fire(els.gridW, 'input');
+eq('尺寸 | gridW 输入 200 → options().gridW 夹到 116', ui.options().gridW, 116);
+eq('尺寸 | 输入框里的值也被回写夹到 116', String(els.gridW.value), '116');
+els.sizePreset.value = '100';
+fire(els.sizePreset, 'change');
+eq('尺寸 | 预设 100 → options().gridW === 100', ui.options().gridW, 100);
+eq('尺寸 | 预设 100 是正方形（gridH 也是 100）', ui.options().gridH, 100);
+els.boardsSelect.value = '4';
+fire(els.boardsSelect, 'change');
+eq('尺寸 | 拼板规格 4×4 → 116', ui.options().gridW, 116);
+eq('尺寸 | 拼板规格 4×4 → gridH 也是 116（无源图时按 1:1）', ui.options().gridH, 116);
+
+/* ── 预览缩放与导出解耦 ────────────────────────────────────────────── */
+ui.setViewZoom(0.25);
+eq('预览缩放 | setViewZoom(0.25) 生效', st.viewZoom, 0.25);
+const cellAt25 = ui.exportViewOpts(2).cellPx;
+ui.setViewZoom(4);
+eq('预览缩放 | setViewZoom(4) 生效', st.viewZoom, 4);
+const cellAt4 = ui.exportViewOpts(2).cellPx;
+eq('预览缩放与导出解耦 | 0.25 与 4 两种缩放下导出 cellPx 相同', [cellAt25, cellAt4], [48, 48]);
+eq('导出 cellPx = 24 × 倍数（1/2/4/8 → 24/48/96/192）', [1, 2, 4, 8].map((s) => ui.exportViewOpts(s).cellPx), [24, 48, 96, 192]);
+
+/* ── 导出路径：每次新建离屏 canvas + cellPx + padMode + annotate ────── */
+const pat6 = Pipeline.generateFromRGBA(synth(29, 29, (x, y) => [(x * 11) % 256, (y * 7) % 256, 120]), 29, 29, { gridW: 8, gridH: 8, quantize: { enabled: true, maxColors: 3 } });
+st.pattern = pat6;
+dropTimers();
+const exportCase = (scale, annotate) => {
+  els.exportScale.value = String(scale);
+  els.exportAnnotate.checked = annotate;
+  dom.created.canvases.length = 0;
+  drawCalls.length = 0;
+  pngCalls.length = 0;
+  ui.exportPng();
+  return { off: dom.created.canvases[dom.created.canvases.length - 1], call: drawCalls[drawCalls.length - 1], png: pngCalls.length };
+};
+const e1x = exportCase(1, false);
+eq('导出 | 每次导出新建 1 块离屏 canvas', dom.created.canvases.length, 1);
+ok('导出 | 离屏 canvas !== #patternCanvas（绝不复用预览画布）', e1x.off !== dom.map.patternCanvas);
+eq('导出 | drawPattern 的目标就是那块新离屏 canvas', e1x.call.cv, e1x.off);
+eq('导出 | 倍数 1 → cellPx 24', e1x.call.opts.cellPx, 24);
+eq('导出 | 传 padMode:"tight"', e1x.call.opts.padMode, 'tight');
+eq('导出 | annotate 跟随复选框（未勾 → false）', e1x.call.opts.annotate, false);
+eq('导出 | 成功路径调用了 Render.exportPNG 一次', e1x.png, 1);
+const e2x = exportCase(2, true);
+eq('导出 | 倍数 2 → cellPx 48', e2x.call.opts.cellPx, 48);
+eq('导出 | annotate 跟随复选框（已勾 → true）', e2x.call.opts.annotate, true);
+eq('导出 | 倍数 4 → cellPx 96', exportCase(4, false).call.opts.cellPx, 96);
+eq('导出 | 倍数 8 → cellPx 192', exportCase(8, false).call.opts.cellPx, 192);
+
+/* ── 判断顺序：ok:false 时不能提示成「色号没画出来」─────────────────── */
+forceTooLarge = true;
+dom.created.canvases.length = 0;
+dom.created.anchors.length = 0;
+pngCalls.length = 0;
+st.pattern = pat6;
+ui.exportPng();
+const statusTooLarge = String(els.statusText.textContent);
+ok('判断顺序 | ok:false + reason:too-large → 提示「倍数太大」', statusTooLarge.includes('倍数太大'), statusTooLarge);
+ok('判断顺序 | ok:false 时不出现「色号没画出来」（先看 ok/reason，再看 labelsSuppressed）', !statusTooLarge.includes('色号没画出来'), statusTooLarge);
+ok('判断顺序 | 提示里带上了 needPixels/maxPixels 量级', statusTooLarge.includes('像素'), statusTooLarge);
+eq('面积守卫联动 | 零下载：未调用 Render.exportPNG', pngCalls.length, 0);
+eq('面积守卫联动 | 零下载：未新增 <a>', dom.created.anchors.length, 0);
+forceTooLarge = false;
+/* 反向：ok:true + labelsSuppressed 时才走「色号没画出来」分支，且正常下载 */
+forceSuppressed = true;
+dom.created.anchors.length = 0;
+pngCalls.length = 0;
+ui.exportPng();
+const statusSuppressed = String(els.statusText.textContent);
+ok('判断顺序 | ok:true + labelsSuppressed → 才提示「色号没画出来」', statusSuppressed.includes('色号没画出来'), statusSuppressed);
+eq('判断顺序 | 该分支仍会真的下载（调用 Render.exportPNG）', pngCalls.length, 1);
+forceSuppressed = false;
+
+/* ── 预览恒 annotate:false ─────────────────────────────────────────── */
+st.source = { data: synth(24, 24, (x, y) => [(x * 9) % 256, (y * 5) % 256, 200]), width: 24, height: 24 };
+st.srcW = 24;
+st.srcH = 24;
+drawCalls.length = 0;
+dropTimers();
+ui.regenerate();
+flushTimers();
+const previewCalls = drawCalls.filter((c) => c.cv === dom.map.patternCanvas);
+ok('预览恒 annotate:false | 预览确实渲染过（≥1 次 drawPattern 打到 #patternCanvas）', previewCalls.length >= 1, String(previewCalls.length));
+ok('预览恒 annotate:false | 每次预览 drawPattern 收到的 annotate === false', previewCalls.length > 0 && previewCalls.every((c) => c.opts.annotate === false), JSON.stringify(previewCalls.map((c) => c.opts.annotate)));
+ok('预览 | 每次都显式给出 cellLabel（只给 showCodes 会退回画数字编号）', previewCalls.length > 0 && previewCalls.every((c) => ['code', 'index', 'none'].includes(c.opts.cellLabel)), JSON.stringify(previewCalls.map((c) => c.opts.cellLabel)));
+ok('预览 | padMode 仍是 normal（与导出的 tight 是有意分开的两套白边策略）', previewCalls.length > 0 && previewCalls.every((c) => c.opts.padMode === 'normal'), JSON.stringify(previewCalls.map((c) => c.opts.padMode)));
+eq('预览 | 预览真的产出了图纸（state.pattern 被 doGenerate 换掉）', st.pattern !== pat6, true);
+
+/* ── 撤销：改色 → 撤销；栈空；栈上限 50 ────────────────────────────── */
+st.pattern = pat6;
+const pal6 = globalThis.PINDOU_PALETTES[pat6.paletteId] || globalThis.PINDOU_PALETTES[Object.keys(globalThis.PINDOU_PALETTES)[0]];
+const usedCodes6 = new Set(pat6.colors.map((c) => c.code));
+const otherCode = pal6.colors.map((c) => c.code).filter((c) => !usedCodes6.has(c)).pop();
+ok('撤销 | 测试用目标色号确实不在当前图纸里', !!otherCode && !usedCodes6.has(otherCode), String(otherCode));
+const beforeCells = Array.from(st.pattern.cells);
+const beforeLocked = Array.from(st.pattern.locked);
+const beforeCodes = st.pattern.colors.map((c) => c.code);
+st.history.length = 0;
+ui.applyRecolor(0, otherCode, true);
+eq('撤销 | 改色后第 0 格换成新色号', st.pattern.colors[st.pattern.cells[0]].code, otherCode);
+eq('撤销 | 改色后该格 locked === 1', st.pattern.locked[0], 1);
+eq('撤销 | 改色 push 了 1 个快照', st.history.length, 1);
+eq('撤销 | undo() 返回 true', ui.undo(), true);
+eq('撤销 | cells 回到快照', Array.from(st.pattern.cells), beforeCells);
+eq('撤销 | locked 回到快照', Array.from(st.pattern.locked), beforeLocked);
+eq('撤销 | colors 回到快照', st.pattern.colors.map((c) => c.code), beforeCodes);
+eq('撤销 | 快照已弹出，栈空', st.history.length, 0);
+eq('撤销 | 栈空时 undo() 返回 false（不抛）', ui.undo(), false);
+ok('撤销 | 栈空时给出可读提示', String(els.statusText.textContent).includes('没有可撤销'), els.statusText.textContent);
+st.history.length = 0;
+const alt6 = pal6.colors.slice(0, 2).map((c) => c.code);
+for (let i = 0; i < 60; i++) ui.applyRecolor(0, alt6[i % 2], false);
+eq('撤销 | 栈上限 50 生效（连续 push 60 次后仍为 50）', st.history.length, 50);
+
+/* ── 选色器：本图色号 ↔ 全部；HEX 搜索；空态；recent ────────────────── */
+els.recolorScope.value = 'used';
+fire(els.recolorScope, 'change');
+const gUsed = ui.pickerGroups();
+eq('选色器 | 默认只列本图色号（1 组，key = used）', [gUsed.length, gUsed[0].key], [1, 'used']);
+ok('选色器 | 本图色号的每一项都带颗数', gUsed[0].items.every((i) => typeof i.count === 'number' && i.count > 0), JSON.stringify(gUsed[0].items.slice(0, 2)));
+ok('选色器 | 本图色号数 > 0 且 ≤ 图纸 colors 数', gUsed[0].items.length > 0 && gUsed[0].items.length <= st.pattern.colors.length, gUsed[0].items.length + ' / ' + st.pattern.colors.length);
+els.recolorScope.value = 'all';
+fire(els.recolorScope, 'change');
+const gAll = ui.pickerGroups();
+eq('选色器 | 切到「全部色号」后列出整张色卡 221 色', gAll.reduce((s, g) => s + g.items.length, 0), 221);
+ok('选色器 | 全部色号按 group 分组（≥ 9 组 A–H/M）', gAll.length >= 9, gAll.length);
+const target6 = pal6.colors[0];
+els.recolorSearch.value = target6.hex.toUpperCase();
+fire(els.recolorSearch, 'input');
+const hitUp = ui.pickerGroups().some((g) => g.items.some((i) => i.code === target6.code));
+els.recolorSearch.value = target6.hex.toLowerCase();
+fire(els.recolorSearch, 'input');
+const hitLo = ui.pickerGroups().some((g) => g.items.some((i) => i.code === target6.code));
+ok('选色器 | HEX 大写搜索命中（' + target6.hex.toUpperCase() + ' → ' + target6.code + '）', hitUp);
+ok('选色器 | HEX 小写搜索命中（' + target6.hex.toLowerCase() + ' → ' + target6.code + '）', hitLo);
+let pickerThrew = '';
+try {
+  els.recolorSearch.value = 'zz-no-such-color';
+  fire(els.recolorSearch, 'input');
+} catch (e) { pickerThrew = e.message; }
+eq('选色器 | 无匹配搜索不抛异常', pickerThrew, '');
+eq('选色器 | 无匹配时网格为空', String(els.recolorGrid.innerHTML), '');
+eq('选色器 | 无匹配时空态可见且文案为「无匹配」', [els.recolorEmpty.hidden, String(els.recolorEmpty.textContent)], [false, '无匹配']);
+ui.selectRecolorCode(target6.code);
+eq('选色器 | 选中后 state.recolor.selected 更新', st.recolor.selected, target6.code);
+ok('选色器 | 当前目标色号提示同时含色号与 HEX', String(els.recolorCurrent.textContent).includes(target6.code) && String(els.recolorCurrent.textContent).includes(target6.hex), els.recolorCurrent.textContent);
+eq('选色器 | 选过的色号进入「最近用过」队首', st.recolor.recent[0], target6.code);
+
+/* ── localStorage 抛错时静默降级 ──────────────────────────────────── */
+const lsBackup = sandboxWin.localStorage;
+sandboxWin.localStorage = { getItem() { throw new Error('localStorage 被禁用'); }, setItem() { throw new Error('localStorage 被禁用'); } };
+let lsReadThrew = '';
+let lsRead = null;
+let lsWriteThrew = '';
+try { lsRead = ui.readRecentColors(); } catch (e) { lsReadThrew = e.message; }
+try { ui.noteRecentColor('A1'); } catch (e) { lsWriteThrew = e.message; }
+eq('localStorage 抛错 | readRecentColors() 静默降级为 []', [lsReadThrew, lsRead], ['', []]);
+eq('localStorage 抛错 | noteRecentColor() 不抛异常', lsWriteThrew, '');
+eq('localStorage 抛错 | 仍降级为「仅本次会话有效」', st.recolor.recent[0], 'A1');
+sandboxWin.localStorage = lsBackup;
+
+/* ── 死按钮：#emptyState 真的能唤起文件选择 ─────────────────────────── */
+const clicksBefore = els.fileInput._clicks;
+fire(els.emptyState, 'click');
+eq('死按钮 | #emptyState 点击触发 #fileInput.click() 一次', els.fileInput._clicks - clicksBefore, 1);
+const clicksBefore2 = els.fileInput._clicks;
+fire(els.btnPickFile, 'click');
+eq('死按钮 | #btnPickFile 也触发 #fileInput.click()', els.fileInput._clicks - clicksBefore2, 1);
+
+/* ── 降级：vm 沙箱只给 window = {}（无 DOM、无任何模块） ─────────────── */
+const bareWin = {};
+let bareErr = null;
+try {
+  const bareCtx = vm.createContext({ window: bareWin, console: { warn() {}, log() {} } });
+  vm.runInContext(APP_SRC, bareCtx, { filename: 'app.js' });
+} catch (e) { bareErr = e; }
+eq('降级 | 只给 window={} 加载 app.js 不抛异常', bareErr, null);
+ok('降级 | 仍然挂上 window.PindouUI', !!bareWin.PindouUI && typeof bareWin.PindouUI === 'object');
+eq('降级 | modules() 如实报告 3 个核心模块缺失', bareWin.PindouUI.modules().missing.length, 3);
+eq('降级 | modules().ok === false', bareWin.PindouUI.modules().ok, false);
+let bareBootThrew = '';
+try { bareWin.PindouUI.boot(); } catch (e) { bareBootThrew = e.message; }
+eq('降级 | 无 DOM 时 boot() 是空操作且不抛', bareBootThrew, '');
+eq('降级 | 无 DOM 时 state().booted === false（确实没启动）', bareWin.PindouUI.state().booted, false);
+
+/* ══════════════════════════════════════════ 第 7 组 · 原图编辑（srcedit.js） */
+startGroup('第 7 组 · 原图编辑（SourceEdit）');
+
+/* 桩 canvas 必须模拟 ui.html 的 .source-canvas（width:100%;height:auto）：
+   clientHeight 跟随 backing store 的固有比例，否则 viewScale 会在测试侧被算错
+   （模块是对的，坑在测试侧 —— 已踩过）。 */
+function makeEditWorld(clientW) {
+  const created = { canvases: [] };
+  const canvasHandlers = {};
+  const canvas = {
+    width: 0, height: 0, style: {}, parentElement: null,
+    _cw: clientW,
+    get clientWidth() { return this._cw; },
+    get clientHeight() { return this.width > 0 ? Math.round(this._cw * this.height / this.width) : 0; },
+    get clientLeft() { return 0; },
+    get clientTop() { return 0; },
+    getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }; },
+    getContext() { return this._ctx; },
+    addEventListener(t, fn) { (canvasHandlers[t] = canvasHandlers[t] || []).push(fn); },
+    removeEventListener(t, fn) { if (canvasHandlers[t]) canvasHandlers[t] = canvasHandlers[t].filter((f) => f !== fn); },
+    dispatchEvent(evt) { (canvasHandlers[evt.type] || []).slice().forEach((fn) => fn(evt)); return true; }
+  };
+  canvas._ctx = makeRecCtx();
+  const winHandlers = {};
+  const win = {
+    devicePixelRatio: 1,
+    addEventListener(t, fn) { (winHandlers[t] = winHandlers[t] || []).push(fn); },
+    removeEventListener(t, fn) { if (winHandlers[t]) winHandlers[t] = winHandlers[t].filter((f) => f !== fn); },
+    dispatchEvent(evt) { (winHandlers[evt.type] || []).slice().forEach((fn) => fn(evt)); return true; },
+    document: {
+      createElement(tag) {
+        if (String(tag).toLowerCase() !== 'canvas') return {};
+        const cv = { width: 0, height: 0, _ctx: makeRecCtx(), getContext() { return this._ctx; } };
+        created.canvases.push(cv);
+        return cv;
+      }
+    }
+  };
+  let loadErr = null;
+  try { vm.runInContext(srcText['srcedit.js'], vm.createContext({ window: win, console: { warn() {}, log() {} } }), { filename: 'srcedit.js' }); } catch (e) { loadErr = e; }
+  return { win, canvas, created, loadErr };
+}
+function editFire(target, type, x, y) {
+  target.dispatchEvent({ type, button: 0, pointerId: 1, clientX: x, clientY: y, target, currentTarget: target, preventDefault() {}, stopPropagation() {} });
+}
+
+const world = makeEditWorld(400);
+eq('srcedit | 在 vm 沙箱里加载无抛错', world.loadErr, null);
+const SE = world.win.SourceEdit;
+ok('srcedit | window.SourceEdit 挂上且 mount 是函数', !!SE && typeof SE.mount === 'function');
+let notifyCount = 0;
+const api = SE.mount(world.canvas, { onChange() { notifyCount++; } });
+ok('srcedit | mount 返回带全部契约方法的 api', ['setSource', 'getResultCanvas', 'getState', 'rotate', 'flip', 'setAspect', 'reset', 'hasTransform'].every((k) => typeof api[k] === 'function'), Object.keys(api).join(','));
+const st0 = api.getState();
+eq('srcedit | 初始 crop === null / hasCrop === false', [st0.crop, st0.hasCrop], [null, false]);
+eq('srcedit | 初始 rotation === 0 且两个翻转都关', [st0.rotation, st0.flipH, st0.flipV], [0, false, false]);
+eq('srcedit | 初始 aspect === "free" / hasTransform() === false', [st0.aspect, api.hasTransform()], ['free', false]);
+eq('srcedit | 无源图时 getResultCanvas() 返回 null', api.getResultCanvas(), null);
+
+/* 坐标系：clientWidth 固定 400，故 frame 坐标 f ↔ clientX = f * (400 / frameW)。
+   换算必须用**当前帧的宽度**，且不做 round：否则小图上「1 帧像素」会退化到小于
+   CLICK_SLOP(3) 的位移，pointerup 会被模块判成「点击」→ 走 fallbackRect 分支，
+   断言就会在「没测拖拽」的情况下通过（本套件踩过这个坑）。 */
+const SRCW = 200;
+const SRCH = 100;
+const VIEW_W = 400;
+const src200 = { naturalWidth: SRCW, naturalHeight: SRCH };
+const dragIn = (frameW, from, to, steps) => {
+  const s = VIEW_W / frameW;
+  const X = (f) => f * s;
+  editFire(world.canvas, 'pointerdown', X(from[0]), X(from[1]));
+  const n = steps || 1;
+  for (let i = 1; i <= n; i++) {
+    const t = i / n;
+    editFire(world.win, 'pointermove', X(from[0] + (to[0] - from[0]) * t), X(from[1] + (to[1] - from[1]) * t));
+  }
+  editFire(world.win, 'pointerup', X(to[0]), X(to[1]));
+};
+const drag = (from, to, steps) => dragIn(SRCW, from, to, steps);
+const c200 = (f) => f * (VIEW_W / SRCW);   /* 仅 200×100 帧的 frame→client 换算（供手动派发事件的用例） */
+const reseed = () => { api.setSource(src200); api.setAspect('free'); notifyCount = 0; };
+const boundsOk = (c) => !!c && c.x >= 0 && c.y >= 0 && c.x + c.w <= SRCW && c.y + c.h <= SRCH && c.w >= 8 && c.h >= 8;
+
+/* 初始状态与载入源图 */
+reseed();
+ok('srcedit | setSource 有效源图返回 true', api.setSource(src200) === true);
+api.setSource(src200);
+eq('srcedit | 载入源图后 getResultCanvas() = 原图 200×100', [api.getResultCanvas().width, api.getResultCanvas().height], [SRCW, SRCH]);
+
+/* 正向拖拽 */
+reseed();
+drag([10, 10], [60, 40]);
+eq('srcedit | 正向拖拽 → 框为 {10,10,50,30}', api.getState().crop, { x: 10, y: 10, w: 50, h: 30 });
+ok('srcedit | 正向拖拽后 hasCrop === true', api.getState().hasCrop === true);
+
+/* 反向拖拽（两轴都反向）：宽高必须为正 */
+reseed();
+drag([60, 40], [10, 10]);
+const rev = api.getState().crop;
+ok('srcedit | 反向拖拽（两轴都反向）→ w > 0 且 h > 0', rev.w > 0 && rev.h > 0, JSON.stringify(rev));
+eq('srcedit | 反向拖拽得到与正向相同的框', rev, { x: 10, y: 10, w: 50, h: 30 });
+
+/* 起止越界被夹取 */
+reseed();
+drag([100, 50], [500, 500]);
+eq('srcedit | 终点越界 → 夹到右下角 {100,50,100,50}', api.getState().crop, { x: 100, y: 50, w: 100, h: 50 });
+reseed();
+drag([150, 80], [0, 0]);
+eq('srcedit | 终点越到负坐标 → 夹到左上角 {0,0,150,80}', api.getState().crop, { x: 0, y: 0, w: 150, h: 80 });
+reseed();
+drag([190, 90], [195, 95]);
+eq('srcedit | 起点贴右下角的最小拖拽仍是合法框（正向）', api.getState().crop, { x: 190, y: 90, w: 8, h: 8 });
+reseed();
+drag([100, 50], [103, 50]);
+eq('srcedit | 最小尺寸下限实测 8×8', [api.getState().crop.w, api.getState().crop.h], [8, 8]);
+
+/* 8 个柄的「对边不动」不变量 */
+const SEED = { x: 20, y: 15, w: 40, h: 30 };
+const HANDLES = [
+  { name: 'nw', p: [20, 15], to: [10, 10], inv: (c) => c.x + c.w === 60 && c.y + c.h === 45 },
+  { name: 'n', p: [40, 15], to: [40, 5], inv: (c) => c.x === 20 && c.w === 40 && c.y + c.h === 45 },
+  { name: 'ne', p: [60, 15], to: [70, 10], inv: (c) => c.x === 20 && c.y + c.h === 45 },
+  { name: 'e', p: [60, 30], to: [80, 30], inv: (c) => c.x === 20 && c.y === 15 && c.h === 30 },
+  { name: 'se', p: [60, 45], to: [75, 60], inv: (c) => c.x === 20 && c.y === 15 },
+  { name: 's', p: [40, 45], to: [40, 60], inv: (c) => c.x === 20 && c.y === 15 && c.w === 40 },
+  { name: 'sw', p: [20, 45], to: [10, 60], inv: (c) => c.x + c.w === 60 && c.y === 15 },
+  { name: 'w', p: [20, 30], to: [10, 30], inv: (c) => c.x + c.w === 60 && c.y === 15 && c.h === 30 }
+];
+for (const h of HANDLES) {
+  reseed();
+  drag([SEED.x, SEED.y], [SEED.x + SEED.w, SEED.y + SEED.h]);
+  const seeded = api.getState().crop;
+  ok('srcedit | 柄 ' + h.name + ' | 种子框存在', !!seeded, JSON.stringify(seeded));
+  eq('srcedit | 柄 ' + h.name + ' | 种子框 === {20,15,40,30}', seeded, SEED);
+  if (!seeded) continue;
+  drag(h.p, h.to);
+  const c = api.getState().crop;
+  ok('srcedit | 柄 ' + h.name + ' | 对边不动（拖到 ' + h.to.join(',') + '）', !!c && h.inv(c), JSON.stringify(c));
+  ok('srcedit | 柄 ' + h.name + ' | 拖后框仍在图内且 ≥ 8×8', boundsOk(c), JSON.stringify(c));
+}
+
+/* setAspect('square')：|w-h| ≤ 1 且不越界（含拖出画布的方向） */
+reseed();
+drag([SEED.x, SEED.y], [SEED.x + SEED.w, SEED.y + SEED.h]);
+eq('srcedit | setAspect("square") 返回 true', api.setAspect('square'), true);
+eq('srcedit | 切换正方形后 aspect === "square"', api.getState().aspect, 'square');
+const sqBefore = api.getState().crop;
+ok('srcedit | 切换时以中心为锚就地变方（|w-h| ≤ 1）', Math.abs(sqBefore.w - sqBefore.h) <= 1, JSON.stringify(sqBefore));
+const SQ_TARGETS = [[0, 0], [250, 10], [10, 90], [150, 95], [300, 300], [-30, 50]];
+/* square 模式的完整不变量（srcedit.js 文件头「坐标系与几何约定」）：恒有
+   |w-h| ≤ 1、w ≥ ms、h ≥ ms、0 ≤ x/y 且 x+w ≤ fw、y+h ≤ fh，其中 ms = max(1, min(8, fw, fh))。
+   下限必须按**该用例自己的帧尺寸**算（小图时 ms < 8），不能写死 8。 */
+const msOf = (fw, fh) => Math.max(1, Math.min(8, fw, fh));
+const inFrame = (c, fw, fh) => !!c && c.x >= 0 && c.y >= 0 && c.x + c.w <= fw && c.y + c.h <= fh;
+const squareOk = (c, fw, fh) => inFrame(c, fw, fh) && Math.abs(c.w - c.h) <= 1 && c.w >= msOf(fw, fh) && c.h >= msOf(fw, fh);
+let sqMinSeen = Infinity;
+const sqSeen = [];
+for (const t of SQ_TARGETS) {
+  const cur = api.getState().crop;
+  ok('srcedit | 正方形 | 拖拽起点（当前 nw 柄）存在', !!cur, JSON.stringify(cur));
+  if (!cur) continue;
+  drag([cur.x, cur.y], t);
+  const c = api.getState().crop;
+  ok('srcedit | 正方形 | 拖到 (' + t.join(',') + ') 后框存在', !!c, JSON.stringify(c));
+  if (!c) continue;
+  ok('srcedit | 正方形 | 拖到 (' + t.join(',') + ') 后 |w-h| ≤ 1', Math.abs(c.w - c.h) <= 1, JSON.stringify(c));
+  ok('srcedit | 正方形 | 拖到 (' + t.join(',') + ') 后在图内', inFrame(c, SRCW, SRCH), JSON.stringify(c));
+  ok('srcedit | 正方形 | 拖到 (' + t.join(',') + ') 后 w ≥ ms 且 h ≥ ms（ms=' + msOf(SRCW, SRCH) + '）', c.w >= msOf(SRCW, SRCH) && c.h >= msOf(SRCW, SRCH), JSON.stringify(c));
+  sqSeen.push(c.w + '×' + c.h);
+  sqMinSeen = Math.min(sqMinSeen, c.w, c.h);
+}
+eq('srcedit | 正方形拖拽后 aspect 仍是 "square"', api.getState().aspect, 'square');
+
+/* ── 新增：极端贴边序列（SE 贴右下角 → NW 再越过它）—— 必守 ms，且可复跑 ── */
+const extremeSequence = () => {
+  reseed();
+  drag([SEED.x, SEED.y], [SEED.x + SEED.w, SEED.y + SEED.h]);
+  api.setAspect('square');                              /* {20,10,40,40}（中心不变） */
+  const sq = api.getState().crop;
+  drag([sq.x + sq.w, sq.y + sq.h], [SRCW, SRCH]);       /* SE 柄拖到右下角贴边 */
+  const pinned = api.getState().crop;
+  drag([pinned.x, pinned.y], [SRCW, SRCH]);             /* NW 柄再越过贴边锚点（沿锚点方向可用空间=0） */
+  return { sq, pinned, after: api.getState().crop };
+};
+const extA = extremeSequence();
+ok('srcedit | 极端贴边 | 切方后框存在', !!extA.sq, JSON.stringify(extA.sq));
+eq('srcedit | 极端贴边 | 切方后就地变方 {20,10,40,40}（中心不变）', extA.sq, { x: 20, y: 10, w: 40, h: 40 });
+ok('srcedit | 极端贴边 | SE 贴右下角后框存在', !!extA.pinned, JSON.stringify(extA.pinned));
+eq('srcedit | 极端贴边 | SE 拖到右下角 → {20,10,90,90}（右下角贴边）', extA.pinned, { x: 20, y: 10, w: 90, h: 90 });
+ok('srcedit | 极端贴边 | 越过锚点后框存在', !!extA.after, JSON.stringify(extA.after));
+eq('srcedit | 极端贴边 | NW 越过贴边锚点 → 保下限 {110,92,8,8}（不缩成 1×1，锚点最多挪到贴边）', extA.after, { x: 110, y: 92, w: 8, h: 8 });
+ok('srcedit | 极端贴边 | 结果满足全部不变量（1:1 / ≥ms / 在图内）', squareOk(extA.after, SRCW, SRCH), JSON.stringify(extA.after));
+const extB = extremeSequence();
+eq('srcedit | 极端贴边 | 同序列重跑逐字段一致', JSON.stringify(extB), JSON.stringify(extA));
+eq('srcedit | 极端贴边 | 重跑的两个中间态也逐字段一致', [JSON.stringify(extB.sq), JSON.stringify(extB.pinned)], [JSON.stringify(extA.sq), JSON.stringify(extA.pinned)]);
+sqMinSeen = Math.min(sqMinSeen, extA.after.w, extA.after.h);
+
+/* ── 新增：极小图的下限按 min(8, fw, fh) 跟随 ─────────────────────────── */
+const tinyCase = (fw, fh) => {
+  api.setSource({ naturalWidth: fw, naturalHeight: fh });
+  api.setAspect('square');
+  dragIn(fw, [0, 0], [fw, fh]);                       /* 满拖，正好取到整图 */
+  const exact = api.getState().crop;
+  dragIn(fw, [0, 0], [fw * 10 + 50, fh * 10 + 50]);   /* 再满拖一次（远超图外）应得到同一个框 */
+  return { exact, overshoot: api.getState().crop };
+};
+const t5 = tinyCase(5, 5);
+ok('srcedit | 极小图 | 5×5 满拖后框存在', !!t5.exact, JSON.stringify(t5.exact));
+eq('srcedit | 极小图 | 5×5（ms = min(8,5,5) = 5）→ {0,0,5,5}', t5.exact, { x: 0, y: 0, w: 5, h: 5 });
+ok('srcedit | 极小图 | 5×5 满足 1:1 / ≥ms / 在图内', squareOk(t5.exact, 5, 5), JSON.stringify(t5.exact));
+eq('srcedit | 极小图 | 5×5 拖出图外与满拖得到同一框', t5.overshoot, t5.exact);
+const t1 = tinyCase(1, 1);
+ok('srcedit | 极小图 | 1×1 满拖后框存在', !!t1.exact, JSON.stringify(t1.exact));
+eq('srcedit | 极小图 | 1×1（ms = min(8,1,1) = 1）→ {0,0,1,1}', t1.exact, { x: 0, y: 0, w: 1, h: 1 });
+eq('srcedit | 极小图 | 1×1 拖出图外与满拖得到同一框', t1.overshoot, t1.exact);
+/* 这一次是自由的 1 帧像素拖拽（不是「点击 → fallbackRect」）：12 帧宽下 1 帧 = 33.3 CSS px，
+   远超 CLICK_SLOP，模块必然走 resizeCorner 并把短边下限夹到 ms = min(8,12,4) = 4。 */
+api.setSource({ naturalWidth: 12, naturalHeight: 4 });
+api.setAspect('free');
+dragIn(12, [0, 0], [1, 1]);
+eq('srcedit | 极小图 | 12×4（ms = min(8,12,4) = 4）自由比例下小拖亦不小于 ms → {0,0,4,4}', api.getState().crop, { x: 0, y: 0, w: 4, h: 4 });
+api.setAspect('free');
+
+/* 判别「真拖拽」与「点击 → fallbackRect」：kind:'new' 且位移未过 CLICK_SLOP(3) 时，
+   模块在 pointermove 里直接 return，crop 仍为 null；只有真拖拽才会在 move 阶段就建框。
+   极小图上「1 帧像素」= 很大一段 CSS 距离，故这里显式验证 move 阶段已建框 ——
+   否则 1×1 的 {0,0,1,1} 与点击兜底的结果相同，断言会在没测到拖拽的情况下通过。 */
+const midDragProof = (fw, fh) => {
+  api.setSource({ naturalWidth: fw, naturalHeight: fh });
+  api.setAspect('square');
+  const s = VIEW_W / fw;
+  editFire(world.canvas, 'pointerdown', 0, 0);
+  editFire(world.win, 'pointermove', fw * s, fh * s);
+  const mid = api.getState().crop;
+  editFire(world.win, 'pointerup', fw * s, fh * s);
+  return { mid, after: api.getState().crop };
+};
+const m1 = midDragProof(1, 1);
+ok('srcedit | 极小图 | 1×1 在 pointermove 阶段就已建框（证明走的是拖拽分支，不是点击兜底）', !!m1.mid, JSON.stringify(m1.mid));
+eq('srcedit | 极小图 | 1×1 move 阶段与 pointerup 之后一致', [m1.mid, m1.after], [{ x: 0, y: 0, w: 1, h: 1 }, { x: 0, y: 0, w: 1, h: 1 }]);
+const m5 = midDragProof(5, 5);
+ok('srcedit | 极小图 | 5×5 在 pointermove 阶段就已建框', !!m5.mid, JSON.stringify(m5.mid));
+eq('srcedit | 极小图 | 5×5 move 阶段框 = {0,0,5,5}', m5.mid, { x: 0, y: 0, w: 5, h: 5 });
+api.setAspect('free');
+
+/* rotate / flip 的恒等与合法参数 */
+reseed();
+for (let i = 0; i < 4; i++) api.rotate(90);
+const stR4 = api.getState();
+eq('srcedit | rotate(90)×4 === 恒等（rotation 0 / 无翻转 / 无裁剪）', [stR4.rotation, stR4.flipH, stR4.flipV, stR4.crop], [0, false, false, null]);
+eq('srcedit | rotate(90)×4 后 hasTransform() === false', api.hasTransform(), false);
+reseed();
+drag([20, 15], [60, 45]);
+ok('srcedit | 旋转前确实有裁剪框（种子断言）', !!api.getState().crop);
+api.rotate(90);
+const stR1 = api.getState();
+eq('srcedit | rotate(90) → rotation 90 且 crop 被清空（冻结语义）', [stR1.rotation, stR1.crop, stR1.hasCrop], [90, null, false]);
+eq('srcedit | rotate(90) 后结果画布宽高互换（200×100 → 100×200）', [api.getResultCanvas().width, api.getResultCanvas().height], [SRCH, SRCW]);
+api.rotate(-90);
+eq('srcedit | rotate(90) 再 rotate(-90) 回到原尺寸', [api.getResultCanvas().width, api.getResultCanvas().height], [SRCW, SRCH]);
+reseed();
+eq('srcedit | flip("h") 两次 === 恒等', [api.flip('h'), api.flip('h'), api.hasTransform()], [true, true, false]);
+eq('srcedit | flip("v") 两次 === 恒等', [api.flip('v'), api.flip('v'), api.hasTransform()], [true, true, false]);
+const stFlip = api.getState();
+eq('srcedit | 两次翻转后 rotation / flipH / flipV 全归零', [stFlip.rotation, stFlip.flipH, stFlip.flipV], [0, false, false]);
+
+/* 非法参数：返回 false 且状态逐字段不变 */
+const snapBefore = JSON.stringify(api.getState());
+eq('srcedit | rotate(45) 返回 false', api.rotate(45), false);
+eq('srcedit | flip("x") 返回 false', api.flip('x'), false);
+eq('srcedit | setAspect("wide") 返回 false', api.setAspect('wide'), false);
+eq('srcedit | 三次非法调用后状态逐字段不变', JSON.stringify(api.getState()), snapBefore);
+ok('srcedit | getLastError() 记录了最近一次被拒绝的原因', typeof api.getLastError() === 'string' && api.getLastError().length > 0, String(api.getLastError()));
+
+/* getResultCanvas 的尺寸语义 */
+reseed();
+eq('srcedit | 无裁剪无旋转 → 结果尺寸 = 原图', [api.getResultCanvas().width, api.getResultCanvas().height], [SRCW, SRCH]);
+drag([20, 15], [60, 45]);
+eq('srcedit | 有裁剪 → 结果尺寸 = 裁剪框尺寸', [api.getResultCanvas().width, api.getResultCanvas().height], [40, 30]);
+eq('srcedit | reset() 返回 true', api.reset(), true);
+eq('srcedit | reset() → 回原图尺寸且 crop 清空', [api.getResultCanvas().width, api.getResultCanvas().height, api.getState().crop], [SRCW, SRCH, null]);
+
+/* 缓存：状态未变 → 同一对象；状态一变 → 新对象 */
+reseed();
+const cA = api.getResultCanvas();
+const cB = api.getResultCanvas();
+ok('srcedit | 缓存 | 状态未变时两次调用返回同一对象', !!cA && cA === cB);
+api.rotate(90);
+const cC = api.getResultCanvas();
+ok('srcedit | 缓存 | rotate 后返回新对象（旧引用不被悄悄改写）', cC !== cA && cC !== cB);
+eq('srcedit | 缓存 | rotate 后新对象尺寸正确', [cC.width, cC.height], [SRCH, SRCW]);
+api.rotate(-90);
+const cD = api.getResultCanvas();
+ok('srcedit | 缓存 | 转回原状态也换新对象（按状态签名而非形状判定）', cD !== cA && cD !== cC);
+eq('srcedit | 缓存 | 转回后尺寸正确', [cD.width, cD.height], [SRCW, SRCH]);
+
+/* 拖拽期间零光栅化 */
+reseed();
+world.created.canvases.length = 0;
+notifyCount = 0;
+editFire(world.canvas, 'pointerdown', c200(20), c200(15));
+for (let i = 1; i <= 5; i++) editFire(world.win, 'pointermove', c200(20 + i * 8), c200(15 + i * 6));
+eq('srcedit | 拖拽期间零光栅化（5 次 pointermove 未创建任何结果 canvas）', world.created.canvases.length, 0);
+eq('srcedit | 拖拽期间零 onChange（pointermove 不通知）', notifyCount, 0);
+eq('srcedit | 拖拽期间 crop 已随指针更新（预览态）', api.getState().crop, { x: 20, y: 15, w: 40, h: 30 });
+editFire(world.win, 'pointerup', c200(60), c200(45));
+eq('srcedit | pointerup 本身也不自动光栅化（惰性生成）', world.created.canvases.length, 0);
+eq('srcedit | pointerup 触发恰好 1 次 onChange', notifyCount, 1);
+eq('srcedit | pointerup 后得框 = 起止点构成的框', api.getState().crop, { x: 20, y: 15, w: 40, h: 30 });
+api.getResultCanvas();
+eq('srcedit | 惰性生成：首次 getResultCanvas() 才创建 1 块结果 canvas', world.created.canvases.length, 1);
+api.getResultCanvas();
+eq('srcedit | 生成后该状态命中缓存（再调不新建）', world.created.canvases.length, 1);
+
+/* setSource：0 尺寸必须被拒绝且保留上一个有效源 */
+reseed();
+drag([20, 15], [60, 45]);
+const beforeInvalid = JSON.stringify(api.getState());
+const cBeforeInvalid = api.getResultCanvas();
+let invalidThrew = '';
+let invalidRet = null;
+try { invalidRet = api.setSource({ naturalWidth: 0, naturalHeight: 0, width: 0, height: 0 }); } catch (e) { invalidThrew = e.message; }
+eq('srcedit | setSource(0 尺寸) 返回 false 且不抛异常', [invalidThrew, invalidRet], ['', false]);
+eq('srcedit | setSource(0 尺寸) 保留上一个有效源（状态逐字段不变）', JSON.stringify(api.getState()), beforeInvalid);
+const cAfterInvalid = api.getResultCanvas();
+ok('srcedit | setSource(0 尺寸) 后结果尺寸仍是有限正数（不是 null）', !!cAfterInvalid && Number.isFinite(cAfterInvalid.width) && cAfterInvalid.width > 0 && Number.isFinite(cAfterInvalid.height) && cAfterInvalid.height > 0, JSON.stringify(cAfterInvalid ? { w: cAfterInvalid.width, h: cAfterInvalid.height } : null));
+eq('srcedit | setSource(0 尺寸) 后缓存对象未被换掉', cAfterInvalid, cBeforeInvalid);
+ok('srcedit | setSource(0 尺寸) 给出了可读的 lastError', String(api.getLastError()).includes('尺寸为 0'), String(api.getLastError()));
+eq('srcedit | setSource(null) 清空源图并返回 true', api.setSource(null), true);
+eq('srcedit | 清空源图后 getResultCanvas() 返回 null', api.getResultCanvas(), null);
+
+/* mount(null) / mount({})：可安全调用的空操作 api */
+const inert = SE.mount(null);
+ok('srcedit | mount(null) 返回对象（不是 undefined）', !!inert && typeof inert === 'object');
+const inertErrs = [];
+const safe = (label, fn) => { try { return fn(); } catch (e) { inertErrs.push(label + ' → ' + e.message); return undefined; } };
+eq('srcedit | mount(null) | getResultCanvas() → null', safe('getResultCanvas', () => inert.getResultCanvas()), null);
+eq('srcedit | mount(null) | setSource({}) → false', safe('setSource', () => inert.setSource({})), false);
+eq('srcedit | mount(null) | rotate/flip/setAspect/reset → false', [safe('rotate', () => inert.rotate(90)), safe('flip', () => inert.flip('h')), safe('setAspect', () => inert.setAspect('square')), safe('reset', () => inert.reset())], [false, false, false, false]);
+eq('srcedit | mount(null) | hasTransform() → false', safe('hasTransform', () => inert.hasTransform()), false);
+eq('srcedit | mount(null) | getState() 返回初始状态', safe('getState', () => inert.getState()), { rotation: 0, flipH: false, flipV: false, crop: null, hasCrop: false, aspect: 'free' });
+safe('destroy', () => inert.destroy());
+eq('srcedit | mount(null) | 所有方法调用零异常', inertErrs, []);
+ok('srcedit | mount({})（无 getContext）同样降级为惰性 api', !!SE.mount({}) && typeof SE.mount({}).getResultCanvas === 'function');
+
+/* square 模式的尺寸下限（修复后的事实，可核对）：
+   resizeCorner 的 square 分支是 `s = Math.max(Math.min(s, lim), ms)`，其中
+   lim = max(0, min(limX, limY))、ms = max(1, min(MIN_SIZE(8), fw, fh))：边长先夹进边界允许范围，
+   再把下界抬到 ms；被抬过 lim 的部分由 rectFromCorner→fitRect 整体平移回图内，
+   因此锚点最多被挪到贴边处（「尺寸下限优先于锚点固定」，见 srcedit.js 文件头）。
+   即 square 模式下 w === h 与 w,h >= ms 同时成立 —— 本组的 square 用例（6 个拖拽目标 +
+   极端贴边序列 + 极小图 5×5 / 1×1）都按这个不变量断言，其中极小图按 ms = min(8, fw, fh) 跟随。 */
+info('srcedit square 下限策略：6 个拖拽目标实测 ' + sqSeen.join(' → ') + '（帧 200×100 → ms = 8）；'
+  + '极端贴边序列 40×40 → 90×90 → 8×8 且锚点被平移到 {110,92}、不缩框；'
+  + '极小图 5×5 → 5×5（ms=5）、1×1 → 1×1（ms=1）、12×4 → 4×4（ms=4）。'
+  + '全部满足 1:1 与 ≥ms 同时成立，本轮观测最小边长 side = ' + sqMinSeen + 'px。');
 
 /* ═════════════════════════════════════════════════════════════ 汇总 */
 console.log('\n════════════ 分组小结 ════════════');
@@ -797,7 +1752,7 @@ for (const g of groupStats) {
 console.log('');
 if (fail === 0) {
   console.log('VERDICT: ALL GREEN — ' + assertions + ' 条断言全部通过（' + groupStats.length + ' 组）');
-  console.log('未覆盖：视觉渲染外观、鼠标/键盘交互、真实浏览器下载与打印 —— 本脚本无浏览器，属人工验收。');
+  console.log('未覆盖：真实浏览器里的像素级视觉外观（字体度量/抗锯齿/打印分页）、真实下载与打印、滚轮与触摸输入 —— 本脚本无浏览器，属人工验收。');
   process.exit(0);
 } else {
   console.log('VERDICT: FAILURES=' + fail + ' -> ' + assertions + ' 条断言中 ' + pass + ' 过 / ' + fail + ' 败');

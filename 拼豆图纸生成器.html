@@ -53,7 +53,7 @@
   .hint{margin:6px 0 0;font-size:11.8px;line-height:1.5;color:var(--muted)}
   .muted{color:var(--muted)}
   input[type="range"]{width:100%;accent-color:var(--accent);margin:2px 0 4px}
-  input[type="number"],select{
+  input[type="number"],input[type="text"],select{
     width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);
     border-radius:6px;padding:5px 7px;font-size:12.8px;font-family:inherit
   }
@@ -65,11 +65,18 @@
     padding:7px 12px;font-size:12.8px;cursor:pointer;transition:border-color .15s,background .15s
   }
   .btn:hover{border-color:var(--accent);background:#232936}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn:disabled:hover{border-color:var(--line);background:var(--panel2)}
   .btn-primary{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
   .btn-primary:hover{background:#79b0f7;border-color:#79b0f7}
   .btn-ghost{background:transparent}
   .group-actions .btn{width:100%;margin-top:8px}
   .group-actions .btn:first-of-type{margin-top:2px}
+  .btn-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0 0}
+  .btn-grid .btn{width:100%;margin-top:0}
+  .zoom-btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:4px 0 0}
+  .zoom-btns .btn{width:100%}
+  .zoom-btns .btn:last-child{grid-column:1 / -1}
 
   .canvas-panel{position:relative;min-width:0}
   .canvas-panel.drag-active{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-soft),0 0 0 3px var(--accent-soft)}
@@ -95,6 +102,9 @@
   .block h2{margin-bottom:8px;color:var(--accent)}
   .source-wrap{position:relative}
   .source-canvas{display:block;width:100%;max-width:100%;height:auto;background:#0c0e12;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated}
+  .source-canvas.crop-mode{cursor:crosshair}
+  .src-tools{margin-top:10px}
+  .src-reset{width:100%;margin-top:8px}
   .summary{display:flex;flex-direction:column;gap:5px}
   .summary-row{display:flex;justify-content:space-between;gap:10px;font-size:12.6px;border-bottom:1px dotted var(--line);padding-bottom:4px}
   .summary-k{color:var(--muted)}
@@ -107,6 +117,22 @@
   .legend-hex{color:var(--muted);font-size:11.4px}
   .legend-count{margin-left:auto;color:var(--text);font-variant-numeric:tabular-nums;white-space:nowrap}
 
+  .sw-grid-wrap{max-height:212px;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px;margin-top:6px}
+  .sw-group{margin:0 0 8px}
+  .sw-group:last-child{margin-bottom:0}
+  .sw-group-label{font-size:11.2px;color:var(--muted);margin:0 0 4px;font-weight:600}
+  .sw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(36px,1fr));gap:4px}
+  .sw{
+    appearance:none;-webkit-appearance:none;border:1px solid rgba(255,255,255,.20);border-radius:5px;
+    height:26px;padding:0;cursor:pointer;font-size:9.5px;font-weight:700;line-height:1;
+    display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:inherit
+  }
+  .sw:hover{border-color:var(--text)}
+  .sw-on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft),inset 0 0 0 1px rgba(0,0,0,.35)}
+  .sw-sm{height:22px;font-size:9px}
+  .sw-recent{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:4px;min-height:22px}
+  .sw-recent .sw{width:36px;flex:0 0 auto}
+
   .disclaimer{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:var(--radius);padding:9px 12px;font-size:12.6px;color:#e4d9c1}
   .disclaimer-tag{display:inline-block;color:var(--warn);font-weight:600;margin-right:6px}
 
@@ -118,6 +144,7 @@
   @media (max-width:640px){
     #app{padding:10px 10px 18px}
     .legend-grid{grid-template-columns:1fr}
+    .sw-grid{grid-template-columns:repeat(auto-fill,minmax(32px,1fr))}
   }
 </style>
 
@@ -185,14 +212,24 @@
           <option value="1" selected>1 × 1 板（上限 29 格）</option>
           <option value="2">2 × 2 板（上限 58 格）</option>
           <option value="3">3 × 3 板（上限 87 格）</option>
+          <option value="4">4 × 4 板（上限 116 格）</option>
           <option value="custom">自定义格数</option>
         </select>
+        <label class="row" for="sizePreset"><span>尺寸预设</span></label>
+        <select id="sizePreset">
+          <option value="custom" selected>自定义</option>
+          <option value="29">29 × 29</option>
+          <option value="58">58 × 58</option>
+          <option value="87">87 × 87</option>
+          <option value="100">100 × 100</option>
+          <option value="116">116 × 116</option>
+        </select>
         <div class="grid2">
-          <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="87" step="1" value="29" /></label>
-          <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="87" step="1" value="29" /></label>
+          <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="116" step="1" value="29" /></label>
+          <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="116" step="1" value="29" /></label>
         </div>
         <label class="check"><input id="lockAspect" type="checkbox" checked /> 保持原图宽高比</label>
-        <p class="hint">单边上限硬限制 87 格（3 × 3 板），超出会被自动压回。</p>
+        <p class="hint">单边上限硬限制 116 格（4 × 4 板），超出会被自动压回。尺寸预设固定为正方形（如 100 × 100）。</p>
       </section>
 
       <section class="group">
@@ -203,27 +240,71 @@
 
       <section class="group">
         <h2>7 · 图纸显示</h2>
-        <label class="check"><input id="showNumbers" type="checkbox" checked /> 显示数字编号（色号）</label>
-        <label class="check"><input id="showRuler" type="checkbox" /> 显示坐标刻度</label>
-        <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">12px</output></label>
-        <input id="cellSize" type="range" min="4" max="28" step="1" value="12" />
+        <label class="row" for="cellLabelMode"><span>格内显示</span></label>
+        <select id="cellLabelMode">
+          <option value="code" selected>色号（A1）</option>
+          <option value="index">编号（1,2,3…）</option>
+          <option value="none">不显示</option>
+        </select>
+        <label class="check"><input id="showRuler" type="checkbox" checked /> 显示坐标刻度</label>
+        <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">24px</output></label>
+        <input id="cellSize" type="range" min="8" max="48" step="1" value="24" />
+        <p id="cellLabelHint" class="hint">当前 24px，格内显示色号（如 A1）。</p>
       </section>
 
       <section class="group">
-        <h2>8 · 改色模式</h2>
+        <h2>8 · 预览缩放</h2>
+        <label class="row" for="viewZoom"><span>预览缩放（不影响导出）</span><output id="viewZoomVal">100%</output></label>
+        <input id="viewZoom" type="range" min="0.25" max="4" step="0.05" value="1" />
+        <div class="zoom-btns">
+          <button id="viewZoomOut" class="btn" type="button">− 缩小</button>
+          <button id="viewZoomIn" class="btn" type="button">+ 放大</button>
+          <button id="viewZoomFit" class="btn" type="button">适应窗口</button>
+        </div>
+        <p class="hint">缩放只改变屏幕显示大小，不影响画布真实像素与导出分辨率。在图纸上滚动鼠标滚轮可以以光标为锚点缩放。</p>
+      </section>
+
+      <section class="group">
+        <h2>9 · 改色模式</h2>
         <label class="check"><input id="recolorMode" type="checkbox" /> 开启改色模式（点击图纸格子改色）</label>
-        <label class="row" for="recolorColor"><span>目标色号</span></label>
-        <select id="recolorColor"></select>
+        <label class="row" for="recolorScope"><span>色板范围</span></label>
+        <select id="recolorScope">
+          <option value="used" selected>只显示本图用到的色号（按颗数排序）</option>
+          <option value="all">全部 221 色（按 A–H/M 分组）</option>
+        </select>
+        <label class="row" for="recolorSearch"><span>搜索色号 / HEX</span></label>
+        <input id="recolorSearch" type="text" placeholder="例如 A1 或 #FAF5CD" autocomplete="off" spellcheck="false" />
+        <div id="recolorGrid" class="sw-grid-wrap"></div>
+        <p id="recolorEmpty" class="hint" hidden>无匹配</p>
+        <label class="row"><span>最近用过</span></label>
+        <div id="recolorRecentRow" class="sw-recent"></div>
+        <p id="recolorCurrent" class="hint">当前目标色号：未选择</p>
         <label class="check"><input id="lockToggle" type="checkbox" checked /> 改色时锁定该格（重算时不被覆盖）</label>
-        <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
+        <div class="btn-grid">
+          <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
+          <button id="btnUndo" class="btn btn-ghost" type="button" disabled>撤销</button>
+        </div>
         <p id="lockInfo" class="hint">已锁定 0 格</p>
-        <p class="hint">提示：按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格。</p>
+        <p class="hint">提示：按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格。撤销快捷键 Ctrl+Z（Mac 为 ⌘+Z）。</p>
       </section>
 
       <section class="group group-actions">
-        <h2>9 · 操作</h2>
+        <h2>10 · 操作</h2>
         <button id="btnRegenerate" class="btn btn-primary" type="button">重新生成</button>
         <button id="btnResetAdjust" class="btn" type="button">重置微调</button>
+      </section>
+
+      <section class="group group-actions">
+        <h2>11 · 导出</h2>
+        <label class="row" for="exportScale"><span>分辨率倍数</span></label>
+        <select id="exportScale">
+          <option value="1">1×（格子 24px）</option>
+          <option value="2" selected>2×（格子 48px）</option>
+          <option value="4">4×（格子 96px）</option>
+          <option value="8">8×（格子 192px）</option>
+        </select>
+        <label class="check"><input id="exportAnnotate" type="checkbox" checked /> 附色号用量清单（画进图里）</label>
+        <p id="exportHint" class="hint">导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随第 7 组的「显示坐标刻度」。</p>
         <button id="btnExportPng" class="btn" type="button">导出图纸 PNG</button>
         <button id="btnExportCompare" class="btn" type="button">导出对照图 PNG</button>
         <button id="btnExportCsv" class="btn" type="button">导出用量清单 CSV</button>
@@ -239,22 +320,34 @@
         </div>
         <div id="progressWrap" class="progress" hidden><div id="progressBar" class="progress-bar"></div></div>
       </div>
-      <div class="canvas-scroll">
+      <div id="canvasScroll" class="canvas-scroll">
         <canvas id="patternCanvas" class="pattern-canvas" width="640" height="420"></canvas>
         <div class="canvas-overlay">
           <p id="patternHint" class="canvas-hint">尚未载入图片<br /><span class="muted">点击上方「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴</span></p>
-          <button id="emptyState" class="btn btn-primary" type="button">选择本地图片…</button>
+          <button id="emptyState" class="btn btn-primary empty-cta" type="button">选择本地图片…</button>
         </div>
       </div>
-      <p class="hint">参数调整会自动重算（防抖 200ms）。开启第 8 组「改色模式」后，点击图纸格子即可把它改成目标色号。</p>
+      <p class="hint">参数调整会自动重算（防抖 200ms）。开启第 9 组「改色模式」后，点击图纸格子即可把它改成目标色号。</p>
     </main>
 
     <aside class="panel side">
       <section class="block">
-        <h2>原图对照</h2>
+        <h2>原图调整</h2>
         <div class="source-wrap">
           <canvas id="sourceCanvas" class="source-canvas" width="240" height="180"></canvas>
           <p id="sourceHint" class="canvas-hint small">尚未载入图片</p>
+        </div>
+        <div class="src-tools">
+          <label class="check"><input id="srcCropMode" type="checkbox" /> 裁剪模式（在原图上线框选）</label>
+          <label class="check"><input id="srcAspectSquare" type="checkbox" /> 正方形裁剪框</label>
+          <div class="btn-grid">
+            <button id="srcRotateL" class="btn" type="button">↺ 左转 90°</button>
+            <button id="srcRotateR" class="btn" type="button">↻ 右转 90°</button>
+            <button id="srcFlipH" class="btn" type="button">水平翻转</button>
+            <button id="srcFlipV" class="btn" type="button">垂直翻转</button>
+          </div>
+          <button id="srcReset" class="btn btn-ghost src-reset" type="button">重置原图调整</button>
+          <p id="srceditHint" class="hint">原图调整模块状态未知</p>
         </div>
       </section>
       <section class="block">
@@ -1326,7 +1419,7 @@ window.PINDOU_PALETTES = {
 
   var BEAD_MM = 2.6;            // 单颗拼豆外径（毫米）
   var BOARD_CELLS = 29;         // 一块板 29×29 格
-  var MAX_DIM = 87;             // 3 板 = 87 格
+  var MAX_DIM = 116;            // 4 板 = 116 格（与 ui.html 的 max="116" / 4×4 板档一致）
   var EMPTY = 65535;            // cells 里的空格标记
   var ALPHA_MIN = 128;          // alpha < 128 视为透明
   var MAX_SRC_PIXELS = 1200 * 1200;  // generate() 读取源图的像素上限（防止把 4000×3000 全量读进来）
@@ -1343,10 +1436,10 @@ window.PINDOU_PALETTES = {
    *   quantize.enabled true 默认必须「拼得完」：随机噪声图用最近邻会命中 172/221 个色号，
    *                         真实照片也常上百色，而没有人手上有 172 种拼豆。默认开减色。
    *   quantize.maxColors 24 一板 29×29 = 841 颗；常用拼豆作品通常 10–25 色，24 落在
-   *                         「表现力够 + 买得到豆」的甜点上：87×87 满配时每色平均仍有
-   *                         ~315 颗，足以表现渐变；同时与 UI 的 maxColors 默认值一致。
+   *                         「表现力够 + 买得到豆」的甜点上：116×116 满配时每色平均仍有
+   *                         ~560 颗，足以表现渐变；同时与 UI 的 maxColors 默认值一致。
    *   paletteId             默认主谱系 mard-221-getcolors（palette.js 的第一个 key）。
-   *   gridW/gridH null      未给时按 boards + 原图宽高比推导；给出则优先并夹到 [1,87]。
+   *   gridW/gridH null      未给时按 boards + 原图宽高比推导；给出则优先并夹到 [1,116]。
    *   boards 1              一板起步，最省豆。
    * 说明：opts 里出现约定外的附加字段（如 app.js 的 keepLocks / locks）一律忽略，不报错。
    */
@@ -1512,10 +1605,10 @@ window.PINDOU_PALETTES = {
   }
 
   /**
-   * 尺寸推导。长边上限 = 29 * boards（29/58/87）。
-   * - gridW/gridH 都未给：长边取上限，短边按原图宽高比推导后夹到 [1,87]（极端比例不强行方形）。
+   * 尺寸推导。长边上限 = 29 * boards（29/58/87；boards 自身夹在 1..3），单边硬上限 MAX_DIM = 116。
+   * - gridW/gridH 都未给：长边取上限，短边按原图宽高比推导后夹到 [1,116]（极端比例不强行方形）。
    * - 只给一边：另一边按 lockAspect 推导（true = 按原图比例；false = 取与已给一边相同的格数）。
-   * - 两边都给：优先采用，各自夹到 [1,87]（是否等比拉伸由调用方决定，管线不擅自改用户输入）。
+   * - 两边都给：优先采用，各自夹到 [1,116]（是否等比拉伸由调用方决定，管线不擅自改用户输入）。
    */
   function deriveDims(sw, sh, o, warnings) {
     var w = o.gridW, h = o.gridH;
@@ -1533,7 +1626,7 @@ window.PINDOU_PALETTES = {
     } else {
       var cw = clampInt(w, 1, MAX_DIM), ch = clampInt(h, 1, MAX_DIM);
       if (cw !== Math.round(w) || ch !== Math.round(h)) {
-        warnings.push('gridW/gridH 已夹到合法范围 [1,87]：' + w + '×' + h + ' → ' + cw + '×' + ch);
+        warnings.push('gridW/gridH 已夹到合法范围 [1,' + MAX_DIM + ']：' + w + '×' + h + ' → ' + cw + '×' + ch);
       }
       w = cw; h = ch;
     }
@@ -1965,16 +2058,28 @@ window.PINDOU_PALETTES = {
  * src/render.js —— 拼豆图纸渲染层（零依赖 / 零外部资源）
  *
  * 职责：
- *   1) drawPattern  把 Pattern 画成可打印的白底图纸（网格 + 29 格板边界 + 刻度 + 编号）
+ *   1) drawPattern  把 Pattern 画成可打印的白底图纸（网格 + 29 格板边界 + 刻度 + 色号标签 + 可选用量表）
  *   2) drawCompare  原图 / 图纸 等高并排对照
  *   3) exportPNG    canvas -> PNG 下载
  *   4) exportCSV    Pattern -> CSV 字符串（UTF-8 BOM，由调用方负责下载）
  *   5) legendHTML   Pattern -> 图例 HTML 片段
  *
+ * viewOpts（全部可选）：
+ *   cellPx          每格像素（4..256，默认 12）—— 导出放大由调用方给
+ *   cellLabel       'code'(默认) 画真色号 A1/A10/M15 | 'index' 画图纸编号 | 'none' 不画
+ *   showCodes       旧键：false 等价于 cellLabel:'none'；true 且未给 cellLabel 时视为 'index'
+ *   padMode         'tight'(默认) 白边约 4%，受刻度文字下限约束 | 'normal' 旧的 max(40, cellPx*3+20)
+ *   annotate        true 时在网格下方追加「色号 | 色块 | HEX | 颗数」用量表
+ *   showRuler       默认 true，每 5 格一个刻度（29 格板边界额外补标）
+ *   highlightLocked 默认 false，锁定的格子画一个角标
+ *
  * 硬约束：
- *   - 只读 Pattern（不重排 colors、不改 cells）
- *   - 编号规则：图纸上的数字 = cells[i] + 1（colors 下标从 0 开始，编号从 1 开始）
+ *   - 只读 Pattern（不重排 colors、不改 cells、不改 counts）
  *   - 图纸画布永远是白底（可打印文档），深色主题只属于 UI
+ *   - cells[i] === 65535 的格子零填色；越界下标一律跳过
+ *   - 不逐格建渐变/阴影；颜色与文字色按色号预计算
+ *   - 大画布先算面积再落笔：超过 MAX_CANVAS_PIXELS 直接返回 ok:false
+ *     （浏览器画布超限会静默空白，明确失败比空白好）
  *   - 无 import / export / require，全部通过 window.Render 挂载
  */
 (function () {
@@ -1984,12 +2089,28 @@ window.PINDOU_PALETTES = {
 
   var EMPTY = 65535;         // cells 里的空格 / 不用豆标记
   var BOARD = 29;            // 一块拼豆板的边长（格）
-  var MIN_CODE_PX = 9;       // cellPx 小于此值不写编号（4px 数字是噪声不是信息）
   var MIN_CELL_PX = 4;
-  var MAX_CELL_PX = 40;
+  var MAX_CELL_PX = 256;     // 导出倍率会放大格子；真正的护栏是 MAX_CANVAS_PIXELS
   var DEFAULT_CELL_PX = 12;
-  var MIN_PAD = 40;          // 刻度区最小边距
+  var MIN_PAD = 40;          // padMode:'normal' 的刻度区最小边距（向后兼容）
+  var MAX_CANVAS_PIXELS = 120000000;  // 约 1.2 亿像素，超出即拒绝绘制
   var GRID_HALF = 0.5;       // 1px 线落在像素中心，避免糊边
+
+  // 标签可读性：字号 = round(cellPx*0.42)，且必须同时满足「最小可读字号」与「装得下」
+  var LABEL_FONT_RATIO = 0.42;
+  var LABEL_FONT_MIN = 7;              // 字号落在这个区间之外就不画
+  var LABEL_FONT_MAX = 40;
+  var LABEL_MIN_READABLE = { code: 8, index: 7 };
+  var LABEL_CHAR_W = 0.62;             // 等宽字体单字符宽度估算（相对字号）
+  var LABEL_FIT = 0.9;                 // 文本宽度上限 = cellPx * 0.9（留 10% 余量）
+
+  // 版式
+  var PAD_TIGHT_RATIO = 0.02;          // tight：每边目标 2%（合计约 4%）
+  var RULER_FONT_RATIO = 0.5;
+  var RULER_FONT_MIN = 9;
+  var RULER_FONT_MAX = 40;
+  var ANNOTATE_FONT_RATIO = 0.45;
+  var TABLE_HEAD = ['色号', '色块', 'HEX', '颗数'];
 
   var HEX_FULL = /^#[0-9a-fA-F]{6}$/;
   var HEX_SHORT = /^#[0-9a-fA-F]{3}$/;
@@ -2006,7 +2127,11 @@ window.PINDOU_PALETTES = {
     rulerBoardText: '#39424F',
     title: '#2B3240',
     placeholder: '#EEF1F5',
-    placeholderText: '#8A94A6'
+    placeholderText: '#8A94A6',
+    tableHead: '#EEF1F5',    // 用量表表头底
+    tableLine: '#DCE0E6',    // 用量表分隔线
+    tableBorder: '#98A2B3',  // 用量表外框
+    swatchEdge: '#8A94A6'    // 色块描边
   };
 
   /* ------------------------------------------------------------ 小工具 */
@@ -2020,13 +2145,31 @@ window.PINDOU_PALETTES = {
     return clamp(Math.round(v), MIN_CELL_PX, MAX_CELL_PX);
   }
 
+  function isValidHex(v) { return typeof v === 'string' && (HEX_FULL.test(v) || HEX_SHORT.test(v)); }
+
+  function textOf(v) { return (v === null || v === undefined) ? '' : String(v); }
+
+  function safeHex(v) { return isValidHex(v) ? v : '#000000'; }
+
+  // 旧键 showCodes 与新键 cellLabel 的兼容规则：cellLabel 优先
+  function normCellLabel(o) {
+    var v = o.cellLabel;
+    if (v === 'code' || v === 'index' || v === 'none') return v;
+    if (o.showCodes === false) return 'none';
+    if (o.showCodes === true) return 'index';
+    return 'code';                                  // 新默认
+  }
+
   function normalizeOpts(viewOpts) {
     var o = viewOpts || {};
     return {
-      showCodes: o.showCodes !== false,          // 默认 true
-      showRuler: o.showRuler !== false,          // 默认 true
-      cellPx: clampCellPx(o.cellPx),             // 默认 12，夹到 4..40
-      highlightLocked: o.highlightLocked === true // 默认 false
+      cellLabel: normCellLabel(o),
+      showCodes: o.showCodes !== false,             // 默认 true（仅用于向后兼容语义）
+      padMode: o.padMode === 'normal' ? 'normal' : 'tight',   // 新默认 tight
+      annotate: o.annotate === true,                // 默认 false
+      showRuler: o.showRuler !== false,             // 默认 true
+      cellPx: clampCellPx(o.cellPx),                // 默认 12，夹到 4..256
+      highlightLocked: o.highlightLocked === true   // 默认 false
     };
   }
 
@@ -2070,22 +2213,200 @@ window.PINDOU_PALETTES = {
     return s;
   }
 
+  // 文本宽度估算：中日韩 / 全角按整字宽，其余按等宽 0.62 字宽
+  function estTextW(text, fontPx) {
+    var s = textOf(text), w = 0, i, cu;
+    for (i = 0; i < s.length; i++) {
+      cu = s.charCodeAt(i);
+      w += cu > 0x2E80 ? fontPx : LABEL_CHAR_W * fontPx;
+    }
+    return w;
+  }
+
+  /* ------------------------------------------------- 标签：长度 / 可读性 */
+
+  // 本图实际用到的色号扫描：最长色号长度（code）与最大色号下标（index）都从这里取，不写死
+  function usedScan(pattern) {
+    var colors = (pattern && pattern.colors) || [];
+    var cells = (pattern && pattern.cells) || [];
+    var n = colors.length;
+    var w = Math.max(0, Math.floor((pattern && pattern.w) || 0));
+    var h = Math.max(0, Math.floor((pattern && pattern.h) || 0));
+    var total = Math.min(cells.length, w * h);
+    var maxIdx = -1, maxCodeLen = 0, used = 0, i, idx, code;
+    for (i = 0; i < total; i++) {
+      idx = cells[i];
+      if (idx === EMPTY) continue;
+      if (!isNum(idx) || idx < 0 || idx >= n) continue;
+      used++;
+      if (idx > maxIdx) maxIdx = idx;
+      code = colors[idx] ? colors[idx].code : null;
+      if (typeof code === 'string' || typeof code === 'number') {
+        if (String(code).length > maxCodeLen) maxCodeLen = String(code).length;
+      }
+    }
+    return { used: used, maxIdx: maxIdx, maxCodeLen: maxCodeLen };
+  }
+
+  // 某模式下文本最长的长度：'code' = 实际用到的色号里最长的；'index' = String(最大下标+1).length
+  function labelTextLen(mode, scan) {
+    if (mode === 'index') return scan.maxIdx < 0 ? 1 : String(scan.maxIdx + 1).length;
+    return scan.maxCodeLen > 0 ? scan.maxCodeLen : 1;
+  }
+
+  // 该 cellPx 下能否画标签：约束 A（最小可读字号）+ 约束 B（装得下，留 10% 余量）
+  // 注意顺序：B 判定必须在「夹到宽度上限」之前 —— 否则夹到上限后判定恒为等号，B 等于失效，
+  // 长色号会被缩成蚂蚁字硬塞进格子（正是「画了等于没画」）。装不下就干脆不画。
+  function labelFit(cellPx, mode, len) {
+    var minReadable = mode === 'index' ? LABEL_MIN_READABLE.index : LABEL_MIN_READABLE.code;
+    var exact = cellPx * LABEL_FONT_RATIO;
+    if (exact < LABEL_FONT_MIN || exact > LABEL_FONT_MAX) return { draw: false, fontPx: 0, mode: mode };
+    if (exact < minReadable) return { draw: false, fontPx: 0, mode: mode };
+    var fontPx = clamp(Math.round(exact), LABEL_FONT_MIN, LABEL_FONT_MAX);
+    if (fontPx * LABEL_CHAR_W * len > cellPx * LABEL_FIT) return { draw: false, fontPx: 0, mode: mode };
+    var widthLimit = cellPx * LABEL_FIT / (LABEL_CHAR_W * len);   // 装得下所允许的最大字号
+    if (fontPx > widthLimit) fontPx = widthLimit;                 // 兜底夹紧，绝不越出格子
+    return { draw: true, fontPx: fontPx, mode: mode };
+  }
+
+  // 想画标签所需的最小 cellPx（供 UI 提示）：扫描出第一个真正画得出的格子尺寸
+  function labelMinCellPx(mode, len) {
+    var c;
+    for (c = MIN_CELL_PX; c <= MAX_CELL_PX; c++) {
+      if (labelFit(c, mode, len).draw) return c;
+    }
+    return MAX_CELL_PX + 1;    // 该文本长度下无解（例如 4 字以上色号装不进任何格子）
+  }
+
+  function labelStat(pattern, opts, scan) {
+    var mode = opts.cellLabel;
+    if (mode === 'none') {
+      return { mode: mode, len: 0, minPx: 0, fit: { draw: false, fontPx: 0, mode: mode }, suppressed: false };
+    }
+    var len = labelTextLen(mode, scan);
+    var fit = labelFit(opts.cellPx, mode, len);
+    return { mode: mode, len: len, minPx: labelMinCellPx(mode, len), fit: fit, suppressed: !fit.draw };
+  }
+
   /* ------------------------------------------------------------ 版式计算 */
+
+  function rulerMetrics(cellPx) {
+    var fontPx = clamp(Math.round(cellPx * RULER_FONT_RATIO), RULER_FONT_MIN, RULER_FONT_MAX);
+    return { fontPx: fontPx, gap: Math.max(2, Math.round(fontPx * 0.35)) };
+  }
+
+  // tight：pad 目标 = 网格长边 * 2%，但下限必须放得下刻度线 + 刻度数字
+  function padOf(opts, gridW, gridH, ruler, maxDigits) {
+    if (opts.padMode !== 'tight') return Math.max(MIN_PAD, opts.cellPx * 3 + 20);
+    var target = Math.round(Math.max(gridW, gridH) * PAD_TIGHT_RATIO);
+    var minPad = Math.ceil(ruler.fontPx * 1.6) + 4;                                  // 刻度行高
+    var needTop = ruler.gap + Math.ceil(ruler.fontPx * 0.78) + 2;                    // 上方数字（按 ascent 估）
+    var needSide = ruler.gap + Math.ceil(LABEL_CHAR_W * ruler.fontPx * maxDigits) + 2; // 左侧数字宽度
+    return Math.max(target, minPad, needTop, needSide);
+  }
+
+  // 用量清单：优先读 pattern.counts（管线已按颗数降序），缺失时才退回 tally() 现场统计
+  function usageRows(pattern) {
+    var counts = (pattern && pattern.counts) || null;
+    var colors = (pattern && pattern.colors) || [];
+    var rows = [], i, c, n;
+    if (counts && counts.length) {
+      for (i = 0; i < counts.length; i++) {
+        c = counts[i] || {};
+        n = Number(c.count);
+        if (!isNum(n) || n <= 0) continue;
+        rows.push({ code: c.code, hex: c.hex, count: n });
+      }
+      if (rows.length) return rows;
+    }
+    var t = tally(pattern);
+    for (i = 0; i < colors.length; i++) {
+      if (!t.perIndex[i]) continue;
+      rows.push({ code: colors[i] && colors[i].code, hex: colors[i] && colors[i].hex, count: t.perIndex[i] });
+    }
+    rows.sort(function (a, b) { return b.count - a.count; });
+    return rows;
+  }
+
+  // 列宽按比例拉伸到目标总宽（最后一列吃下取整误差）
+  function stretchCols(nat, total) {
+    var sum = 0, i, out = [], prev = 0, edge, cum = 0;
+    for (i = 0; i < nat.length; i++) sum += nat[i];
+    if (sum <= 0 || total <= sum) return nat.slice();
+    for (i = 0; i < nat.length; i++) {
+      cum += nat[i];
+      edge = (i === nat.length - 1) ? total : Math.round(total * cum / sum);
+      out.push(edge - prev);
+      prev = edge;
+    }
+    return out;
+  }
+
+  // 网格下方用量表的版式（尺寸只在这里算一次，绘制与面积守卫共用）
+  function annotateLayout(pattern, opts, gridW) {
+    var rows = usageRows(pattern);
+    var fontPx = clamp(Math.round(opts.cellPx * ANNOTATE_FONT_RATIO), 9, 40);
+    var rowH = Math.max(fontPx + 6, Math.round(fontPx * 1.9));
+    var cellPad = Math.max(6, Math.round(fontPx * 0.6));
+    var swatch = Math.max(8, Math.round(fontPx * 0.9));
+    var wCode = estTextW(TABLE_HEAD[0], fontPx), wSwatch = estTextW(TABLE_HEAD[1], fontPx);
+    var wHex = estTextW(TABLE_HEAD[2], fontPx), wCount = estTextW(TABLE_HEAD[3], fontPx);
+    var i, r;
+    for (i = 0; i < rows.length; i++) {
+      r = rows[i];
+      wCode = Math.max(wCode, estTextW(textOf(r.code), fontPx));
+      wHex = Math.max(wHex, estTextW(safeHex(r.hex), fontPx));
+      wCount = Math.max(wCount, estTextW(r.count + ' 颗', fontPx));
+    }
+    var nat = [
+      Math.ceil(wCode) + cellPad * 2,
+      Math.ceil(Math.max(wSwatch, swatch)) + cellPad * 2,
+      Math.ceil(wHex) + cellPad * 2,
+      Math.ceil(wCount) + cellPad * 2
+    ];
+    var natW = nat[0] + nat[1] + nat[2] + nat[3];
+    var tableW = Math.max(natW, gridW);            // 至少与网格同宽，超出就撑开（网格随后居中）
+    return {
+      rows: rows,
+      fontPx: fontPx,
+      rowH: rowH,
+      cellPad: cellPad,
+      swatch: swatch,
+      cols: stretchCols(nat, tableW),
+      tableW: tableW,
+      tableH: rowH * (rows.length + 1),            // 表头 + 数据行
+      gap: Math.max(2, Math.round(opts.cellPx * 0.5))
+    };
+  }
 
   function layoutOf(pattern, opts) {
     var w = Math.max(0, Math.floor((pattern && pattern.w) || 0));
     var h = Math.max(0, Math.floor((pattern && pattern.h) || 0));
     var cellPx = opts.cellPx;
-    var pad = Math.max(MIN_PAD, cellPx * 3 + 20);
+    var gridW = w * cellPx, gridH = h * cellPx;
+    var ruler = rulerMetrics(cellPx);
+    var maxDigits = String(Math.max(w, h, 1)).length;
+    var pad = padOf(opts, gridW, gridH, ruler, maxDigits);
+    var table = opts.annotate ? annotateLayout(pattern, opts, gridW) : null;
+    var contentW = Math.max(gridW, table ? table.tableW : 0);
+    if (table) {
+      table.dx = Math.round((contentW - table.tableW) / 2);   // 相对网格原点
+      table.dy = gridH + table.gap;                            // 表格在网格下方，绝不重叠
+    }
     return {
       w: w,
       h: h,
       cellPx: cellPx,
       pad: pad,
-      gridW: w * cellPx,
-      gridH: h * cellPx,
-      width: pad * 2 + w * cellPx,
-      height: pad * 2 + h * cellPx
+      gridW: gridW,
+      gridH: gridH,
+      contentW: contentW,
+      gridDX: Math.round((contentW - gridW) / 2),              // 表格更宽时网格整体居中
+      rulerFontPx: ruler.fontPx,
+      rulerGap: ruler.gap,
+      table: table,
+      width: pad * 2 + contentW,
+      height: pad * 2 + gridH + (table ? table.gap + table.tableH : 0)
     };
   }
 
@@ -2097,7 +2418,7 @@ window.PINDOU_PALETTES = {
     return out;
   }
 
-  // 刻度文字位置：每 5 格一个数字；29 的板边界额外补标（二者重合时只标一次）
+  // 刻度文字位置：恒定每 5 格一个数字（与 cellPx 无关）；29 的板边界额外补标（重合时只标一次）
   function rulerPositions(n) {
     var boards = boardPositions(n), boardSet = {}, seen = {}, out = [], i, k;
     for (i = 0; i < boards.length; i++) boardSet[boards[i]] = 1;
@@ -2134,25 +2455,31 @@ window.PINDOU_PALETTES = {
 
   /* ------------------------------------------------------------- 绘制：格 */
 
+  // 每个色号只算一次 hex / 文字色，避免逐格解析与逐格建样式
+  function paletteCache(pattern) {
+    var colors = (pattern && pattern.colors) || [];
+    var hexes = [], inks = [], n = colors.length, i, hex;
+    for (i = 0; i < n; i++) {
+      hex = colors[i] && isValidHex(colors[i].hex) ? colors[i].hex : null;
+      hexes.push(hex);
+      inks.push(textColorFor(colors[i] && colors[i].hex));
+    }
+    return { hexes: hexes, inks: inks };
+  }
+
   function cellPos(i, w, cellPx, ox, oy) {
     return [ox + (i % w) * cellPx, oy + Math.floor(i / w) * cellPx];
   }
 
-  function paintCells(ctx, pattern, opts, lay, ox, oy) {
-    var colors = (pattern && pattern.colors) || [];
+  function paintCells(ctx, pattern, opts, lay, ox, oy, pal) {
     var cells = (pattern && pattern.cells) || [];
     var locked = (pattern && pattern.locked) || null;
-    var n = colors.length;
+    var hexes = pal.hexes, inks = pal.inks;
+    var n = hexes.length;
     var cellPx = lay.cellPx;
     var total = Math.min(cells.length, lay.w * lay.h);
-    var hexes = [], inks = [], i, idx, p, x, y, s;
+    var i, idx, p, x, y, s;
     var drawn = 0, markers = 0;
-
-    // 每个色号只算一次 hex / 文字色，避免逐格解析
-    for (i = 0; i < n; i++) {
-      hexes.push(colors[i] && typeof colors[i].hex === 'string' ? colors[i].hex : null);
-      inks.push(textColorFor(hexes[i]));
-    }
 
     for (i = 0; i < total; i++) {
       idx = cells[i];
@@ -2160,9 +2487,8 @@ window.PINDOU_PALETTES = {
       if (!isNum(idx) || idx < 0 || idx >= n) continue;
       if (!hexes[idx]) continue;
       p = cellPos(i, lay.w, cellPx, ox, oy);
-      x = p[0]; y = p[1];
       ctx.fillStyle = hexes[idx];
-      ctx.fillRect(x, y, cellPx, cellPx);
+      ctx.fillRect(p[0], p[1], cellPx, cellPx);
       drawn++;
     }
 
@@ -2186,7 +2512,7 @@ window.PINDOU_PALETTES = {
       }
     }
 
-    return { codesDrawn: opts.showCodes && cellPx >= MIN_CODE_PX, cellsDrawn: drawn, markers: markers };
+    return { cellsDrawn: drawn, markers: markers };
   }
 
   function paintGrid(ctx, pattern, lay, ox, oy) {
@@ -2231,27 +2557,36 @@ window.PINDOU_PALETTES = {
     return { v: vb.length, h: hb.length };
   }
 
-  function paintCodes(ctx, pattern, lay, ox, oy) {
+  // 逐格标签：'code' 写真色号（A1/A10/M15），'index' 写图纸编号（cells[i]+1）
+  function paintCodes(ctx, pattern, lay, ox, oy, fit, pal) {
     var colors = (pattern && pattern.colors) || [];
     var cells = (pattern && pattern.cells) || [];
-    var n = colors.length;
+    var hexes = pal.hexes, inks = pal.inks;
+    var n = hexes.length;
     var cellPx = lay.cellPx;
     var total = Math.min(cells.length, lay.w * lay.h);
-    var size = Math.max(5, Math.round(cellPx * 0.5));
-    var inks = [], i, idx, p, drawn = 0;
+    var texts = [], i, idx, p, code, drawn = 0;
 
-    for (i = 0; i < n; i++) inks.push(textColorFor(colors[i] && colors[i].hex));
+    for (i = 0; i < colors.length; i++) {
+      if (fit.mode === 'index') {
+        texts.push(String(i + 1));
+      } else {
+        code = colors[i] ? colors[i].code : null;
+        texts.push((typeof code === 'string' || typeof code === 'number') && String(code) !== '' ? String(code) : null);
+      }
+    }
 
-    ctx.font = '600 ' + size + 'px ' + FONT_MONO;
+    ctx.font = '600 ' + fit.fontPx + 'px ' + FONT_MONO;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (i = 0; i < total; i++) {
       idx = cells[i];
       if (idx === EMPTY) continue;
       if (!isNum(idx) || idx < 0 || idx >= n) continue;
+      if (!hexes[idx] || !texts[idx]) continue;         // 没填色的格子不写标签
       p = cellPos(i, lay.w, cellPx, ox, oy);
       ctx.fillStyle = inks[idx];
-      ctx.fillText(String(idx + 1), p[0] + cellPx / 2, p[1] + cellPx / 2 + 0.5);
+      ctx.fillText(texts[idx], p[0] + cellPx / 2, p[1] + cellPx / 2 + 0.5);
       drawn++;
     }
     return drawn;
@@ -2259,33 +2594,35 @@ window.PINDOU_PALETTES = {
 
   function paintRuler(ctx, lay, ox, oy) {
     var w = lay.w, h = lay.h, cellPx = lay.cellPx;
-    var size = clamp(Math.round(cellPx * 0.9), 9, 14);
-    var pos, i, k, x, y, len, board;
+    var size = lay.rulerFontPx;
+    var gap = lay.rulerGap;
+    var long = Math.max(7, Math.round(size * 0.9));
+    var short = Math.max(4, Math.round(size * 0.5));
+    var pos, i, k, x, y, len;
 
-    // 顶部刻度线
+    // 刻度线
     ctx.strokeStyle = C.rulerLine;
     ctx.lineWidth = 1;
     ctx.beginPath();
     pos = rulerPositions(w);
     for (i = 0; i < pos.length; i++) {
       k = pos[i].at;
-      len = (k % 10 === 0 || pos[i].board) ? 12 : 7;
+      len = (k % 10 === 0 || pos[i].board) ? long : short;
       x = ox + k * cellPx + GRID_HALF;
       ctx.moveTo(x, oy - GRID_HALF);
       ctx.lineTo(x, oy - len);
     }
-    // 左侧刻度线
     pos = rulerPositions(h);
     for (i = 0; i < pos.length; i++) {
       k = pos[i].at;
-      len = (k % 10 === 0 || pos[i].board) ? 12 : 7;
+      len = (k % 10 === 0 || pos[i].board) ? long : short;
       y = oy + k * cellPx + GRID_HALF;
       ctx.moveTo(ox - GRID_HALF, y);
       ctx.lineTo(ox - len, y);
     }
     ctx.stroke();
 
-    // 刻度数字（1 基：标在格子起始边界上）
+    // 刻度数字：每 5 格一个（外加 29 的板边界），恒定，不随 cellPx 变密
     ctx.font = size + 'px ' + FONT_SANS;
     pos = rulerPositions(w);
     ctx.textAlign = 'center';
@@ -2293,7 +2630,7 @@ window.PINDOU_PALETTES = {
     for (i = 0; i < pos.length; i++) {
       k = pos[i].at;
       ctx.fillStyle = pos[i].board ? C.rulerBoardText : C.rulerText;
-      ctx.fillText(String(k), ox + k * cellPx, oy - 16);
+      ctx.fillText(String(k), ox + k * cellPx, oy - gap);
     }
     pos = rulerPositions(h);
     ctx.textAlign = 'right';
@@ -2301,19 +2638,101 @@ window.PINDOU_PALETTES = {
     for (i = 0; i < pos.length; i++) {
       k = pos[i].at;
       ctx.fillStyle = pos[i].board ? C.rulerBoardText : C.rulerText;
-      ctx.fillText(String(k), ox - 16, oy + k * cellPx);
+      ctx.fillText(String(k), ox - gap, oy + k * cellPx);
     }
+  }
+
+  /* ------------------------------------------------------- 绘制：用量表 */
+
+  function paintTable(ctx, lay, ox, oy) {
+    var t = lay.table;
+    if (!t) return 0;
+    var rows = t.rows, cols = t.cols, f = t.fontPx;
+    var x = ox + t.dx, y = oy + t.dy, w = t.tableW, h = t.tableH;
+    var headMid = y + t.rowH / 2;
+    var bx, ty, i, r, sx, sy;
+
+    // 表头底 + 行/列分隔线
+    ctx.fillStyle = C.tableHead;
+    ctx.fillRect(x, y, w, t.rowH);
+    ctx.strokeStyle = C.tableLine;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (i = 1; i <= rows.length; i++) {
+      ty = y + i * t.rowH + GRID_HALF;
+      ctx.moveTo(x, ty);
+      ctx.lineTo(x + w, ty);
+    }
+    bx = x;
+    for (i = 0; i < cols.length - 1; i++) {
+      bx += cols[i];
+      ctx.moveTo(bx + GRID_HALF, y);
+      ctx.lineTo(bx + GRID_HALF, y + h);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = C.tableBorder;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + GRID_HALF, y + GRID_HALF, w, h);
+
+    // 表头文字
+    ctx.fillStyle = C.title;
+    ctx.font = '600 ' + f + 'px ' + FONT_SANS;
+    ctx.textBaseline = 'middle';
+    bx = x;
+    ctx.textAlign = 'left';
+    ctx.fillText(TABLE_HEAD[0], bx + t.cellPad, headMid);
+    bx += cols[0];
+    ctx.textAlign = 'center';
+    ctx.fillText(TABLE_HEAD[1], bx + cols[1] / 2, headMid);
+    bx += cols[1];
+    ctx.textAlign = 'left';
+    ctx.fillText(TABLE_HEAD[2], bx + t.cellPad, headMid);
+    bx += cols[2];
+    ctx.textAlign = 'right';
+    ctx.fillText(TABLE_HEAD[3], bx + cols[3] - t.cellPad, headMid);
+
+    // 数据行：色号 | 色块 | HEX | 颗数
+    ctx.font = f + 'px ' + FONT_MONO;
+    for (i = 0; i < rows.length; i++) {
+      r = rows[i];
+      ty = y + (i + 1) * t.rowH + t.rowH / 2;
+      bx = x;
+      ctx.fillStyle = C.title;
+      ctx.textAlign = 'left';
+      ctx.fillText(textOf(r.code), bx + t.cellPad, ty);
+      bx += cols[0];
+
+      sx = bx + (cols[1] - t.swatch) / 2;
+      sy = ty - t.swatch / 2;
+      ctx.fillStyle = safeHex(r.hex);
+      ctx.fillRect(sx, sy, t.swatch, t.swatch);
+      ctx.strokeStyle = C.swatchEdge;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx + GRID_HALF, sy + GRID_HALF, t.swatch, t.swatch);
+      bx += cols[1];
+
+      ctx.fillStyle = C.title;
+      ctx.textAlign = 'left';
+      ctx.fillText(safeHex(r.hex), bx + t.cellPad, ty);
+      bx += cols[2];
+      ctx.textAlign = 'right';
+      ctx.fillText(textOf(r.count) + ' 颗', bx + cols[3] - t.cellPad, ty);
+    }
+    return rows.length;
   }
 
   /* --------------------------------------------------- 绘制：图纸（核心） */
 
   // 在 (ox, oy) = 网格左上角处绘制一张完整图纸；调用方负责白底与画布尺寸
-  function paintPatternAt(ctx, pattern, opts, lay, ox, oy) {
-    var res = paintCells(ctx, pattern, opts, lay, ox, oy);
+  function paintPatternAt(ctx, pattern, opts, lay, ox, oy, stat) {
+    var pal = paletteCache(pattern);
+    var res = paintCells(ctx, pattern, opts, lay, ox, oy, pal);
     paintGrid(ctx, pattern, lay, ox, oy);
-    if (res.codesDrawn) paintCodes(ctx, pattern, lay, ox, oy);
+    var labels = 0;
+    if (stat && stat.fit && stat.fit.draw) labels = paintCodes(ctx, pattern, lay, ox, oy, stat.fit, pal);
     if (opts.showRuler) paintRuler(ctx, lay, ox, oy);
-    return res;
+    if (lay.table) paintTable(ctx, lay, ox, oy);
+    return { cellsDrawn: res.cellsDrawn, markers: res.markers, labelsDrawn: labels };
   }
 
   function fillPaper(ctx, w, h) {
@@ -2321,23 +2740,77 @@ window.PINDOU_PALETTES = {
     ctx.fillRect(0, 0, w, h);
   }
 
+  // 冻结的返回契约（app.js 依赖）：codesDrawn 是 labelsDrawn 的向后兼容别名
+  function makeResult(o) {
+    var r = {
+      ok: o.ok === true,
+      cellsDrawn: o.cellsDrawn || 0,
+      labelsDrawn: o.labelsDrawn === true,
+      labelsSuppressed: o.labelsSuppressed === true,
+      labelMinPx: o.labelMinPx || 0,
+      width: o.width || 0,
+      height: o.height || 0
+    };
+    if (o.reason) r.reason = o.reason;
+    if (o.needPixels !== undefined) {
+      r.needPixels = o.needPixels;
+      r.maxPixels = o.maxPixels;
+    }
+    r.codesDrawn = r.labelsDrawn;
+    return r;
+  }
+
   /* ------------------------------------------------------------- 公开 API */
 
   function drawPattern(pattern, canvas, viewOpts) {
-    var blank = { codesDrawn: false, cellsDrawn: 0 };
-    if (!pattern || !canvas || typeof canvas.getContext !== 'function') return blank;
     var opts = normalizeOpts(viewOpts);
+    var stat = labelStat(pattern, opts, usedScan(pattern));
+    var base = {
+      cellsDrawn: 0, labelsDrawn: false, labelMinPx: stat.minPx,
+      labelsSuppressed: stat.suppressed, width: 0, height: 0
+    };
+
+    if (!pattern || !canvas || typeof canvas.getContext !== 'function') {
+      base.ok = false; base.reason = 'invalid-input';
+      return makeResult(base);
+    }
+
     var lay = layoutOf(pattern, opts);
+    var need = lay.width * lay.height;
+    base.width = lay.width;
+    base.height = lay.height;
+
+    // 面积守卫：先算后画；超限时连画布尺寸都不设置，避免浏览器静默空白
+    if (!(need <= MAX_CANVAS_PIXELS)) {
+      base.ok = false;
+      base.reason = 'too-large';
+      base.width = lay.width;
+      base.height = lay.height;
+      base.needPixels = need;
+      base.maxPixels = MAX_CANVAS_PIXELS;
+      return makeResult(base);
+    }
+
     canvas.width = lay.width;
     canvas.height = lay.height;
     var ctx = canvas.getContext('2d');
-    if (!ctx) return blank;
+    if (!ctx) {
+      base.ok = false; base.reason = 'invalid-input';
+      base.width = 0; base.height = 0;
+      return makeResult(base);
+    }
 
     ctx.save();
     fillPaper(ctx, lay.width, lay.height);
-    var res = paintPatternAt(ctx, pattern, opts, lay, lay.pad, lay.pad);
+    var res = paintPatternAt(ctx, pattern, opts, lay, lay.pad + lay.gridDX, lay.pad, stat);
     ctx.restore();
-    return { codesDrawn: res.codesDrawn, cellsDrawn: res.cellsDrawn };
+
+    base.ok = true;
+    base.cellsDrawn = res.cellsDrawn;
+    base.labelsDrawn = res.labelsDrawn > 0;
+    base.labelsSuppressed = stat.suppressed && res.cellsDrawn > 0;
+    base.labelMinPx = stat.minPx;
+    return makeResult(base);
   }
 
   function sourceSize(src) {
@@ -2349,9 +2822,17 @@ window.PINDOU_PALETTES = {
   }
 
   function drawCompare(pattern, sourceImage, canvas, viewOpts) {
-    var blank = { codesDrawn: false, cellsDrawn: 0 };
-    if (!pattern || !canvas || typeof canvas.getContext !== 'function') return blank;
     var opts = normalizeOpts(viewOpts);
+    var stat = labelStat(pattern, opts, usedScan(pattern));
+    var base = {
+      cellsDrawn: 0, labelsDrawn: false, labelMinPx: stat.minPx,
+      labelsSuppressed: stat.suppressed, width: 0, height: 0
+    };
+    if (!pattern || !canvas || typeof canvas.getContext !== 'function') {
+      base.ok = false; base.reason = 'invalid-input';
+      return makeResult(base);
+    }
+
     var lay = layoutOf(pattern, opts);
 
     var titleH = 28;
@@ -2374,10 +2855,25 @@ window.PINDOU_PALETTES = {
     var W = gridX + lay.width + padX;
     var H = padY * 2 + titleH + lay.height;
 
+    var need = W * H;
+    base.width = W;
+    base.height = H;
+    if (!(need <= MAX_CANVAS_PIXELS)) {           // 同一道面积守卫
+      base.ok = false;
+      base.reason = 'too-large';
+      base.needPixels = need;
+      base.maxPixels = MAX_CANVAS_PIXELS;
+      return makeResult(base);
+    }
+
     canvas.width = W;
     canvas.height = H;
     var ctx = canvas.getContext('2d');
-    if (!ctx) return blank;
+    if (!ctx) {
+      base.ok = false; base.reason = 'invalid-input';
+      base.width = 0; base.height = 0;
+      return makeResult(base);
+    }
 
     ctx.save();
     fillPaper(ctx, W, H);
@@ -2405,9 +2901,15 @@ window.PINDOU_PALETTES = {
     }
 
     // 右：图纸（复用同一套绘制逻辑，不复制粘贴）
-    var res = paintPatternAt(ctx, pattern, opts, lay, gridX + lay.pad, gridY + lay.pad);
+    var res = paintPatternAt(ctx, pattern, opts, lay, gridX + lay.pad + lay.gridDX, gridY + lay.pad, stat);
     ctx.restore();
-    return { codesDrawn: res.codesDrawn, cellsDrawn: res.cellsDrawn, width: W, height: H };
+
+    base.ok = true;
+    base.cellsDrawn = res.cellsDrawn;
+    base.labelsDrawn = res.labelsDrawn > 0;
+    base.labelsSuppressed = stat.suppressed && res.cellsDrawn > 0;
+    base.labelMinPx = stat.minPx;
+    return makeResult(base);
   }
 
   function drawImagePlaceholder(ctx, x, y, w, h) {
@@ -2554,12 +3056,919 @@ window.PINDOU_PALETTES = {
 })();
 </script>
 <script>
+/* ===== src/srcedit.js ===== */
+/*!
+ * src/srcedit.js —— 原图编辑层：交互式裁剪 + 旋转 / 翻转（零依赖 / 零外部资源）
+ *
+ * 职责：
+ *   1) mount(canvasEl, opts) 接管一块 canvas，按容器宽度等比显示原图（contain，不拉伸）
+ *   2) 在原图预览上交互式裁剪：8 个调整柄缩放、框内拖拽平移、框外拖拽重新框选
+ *   3) rotate / flip 作用于「基准图」，getResultCanvas() 产出「原图 → 旋转翻转 → 裁剪」的像素
+ *
+ * ── 旋转 / 翻转之后裁剪框的语义（冻结决策，getState() 如实反映）────────────
+ * 语义：rotate() / flip() 改变的是**基准图**，并且**任何一次旋转或翻转都把裁剪框清空为
+ *      null**（getState() 返回 crop === null、hasCrop === false）：变换后在一张新的基准图上
+ *      重新框选，而不是把旧框的坐标搬进新坐标系。
+ * 为什么这么选（两条路都合规，这里选可预测的那条）：
+ *   · 搬迁旧框必须先回答「框算在旋转前还是旋转后的坐标系」，以及 90°/270° 宽高互换后旧框
+ *     该贴哪条边 —— 没有唯一正确答案，用户无法预期结果；
+ *   · 清空是幂等的：旋转/翻转 ≡ 换一张基准图，裁剪从零开始；
+ *   · 旧框若不重算就留下，在 90°/270° 下会出现「框跑到图外」与负宽高的脏状态，清空从源头
+ *     上排除了这类状态。
+ *   · reset() 只清裁剪与旋转/翻转，**不改变 aspect**（比例是 app.js 的 UI 模式，不是图像变换；
+ *     reset 顺手改掉它会让 app.js 的比例控件与真实状态失同步）。
+ *
+ * ── 坐标系与几何约定 ───────────────────────────────────────────────────────
+ *   · 「基准图」= 传入的 imageLike，尺寸 bw × bh（只读像素，永不修改入参）
+ *   · 「变换帧」= 基准图经旋转/翻转后的图，尺寸 fw × fh（90°/270° 时 bw 与 bh 互换）
+ *   · crop 永远用**变换帧的整数像素坐标**表示：{x,y,w,h} 全为整数，且**恒有**
+ *       0 <= x、0 <= y、x+w <= fw、y+h <= fh、w >= ms、h >= ms，
+ *       其中 ms = max(1, min(MIN_SIZE(8), fw, fh))；square 模式下还恒有 w === h。
+ *       这四条是不变量：任何拖拽序列都不可能产出违反它们的框（有回归断言守着）。
+ *   · **尺寸下限优先于锚点固定**：方框贴边时「对角锚点不动」与「边长 >= ms」会真的冲突 ——
+ *     例如把 8×8 框的左上柄朝右下方拖，而对角已贴住右/下边，沿锚点方向可用的空间不足 8px。
+ *     冲突时选**保下限 + 挪锚点**：边长先按边界允许范围夹取、再把下界抬到 ms，框朝图内长大，
+ *     最后由 fitRect 整体平移回图内（锚点因此最多被挪到贴边处，绝不会缩成 1×1）。
+ *     为什么不选「拒绝这次缩放」：那会让指针在贴边方向上完全无响应、用户以为界面卡住；
+ *     挪锚点的结果与「把柄往图内松开一点」视觉连续，且两条路的确定性相同。
+ *   · 变换用「有符号置换矩阵」L（元素只有 0/±1）+ 平移描述，所以 90° 整数倍旋转与镜像都是
+ *     像素精确的：不重采样、不插值、不引入半像素误差
+ *   · 操作累加：每次 rotate/flip 都是在**当前视图**上再做一次（左乘）。等价于
+ *     view = F(flipH, flipV) ∘ R(rotation)（先旋转后镜像），与常见图像编辑器一致 ——
+ *     因此「水平翻转」按钮永远是把当前看到的画面左右镜像，而不是把原图的左右镜像。
+ *   · 由矩阵反推 getState() 的 rotation/flipH/flipV 时用固定规范化规则：翻转次数最少 → 旋转
+ *     角度最小 → 优先 flipV=false。同一个矩阵可能有多种等价表示（如「flipV」= 「flipH + 旋转
+ *     180°」），规范化保证同一状态永远报同一组数字。副作用需知：先翻转再旋转 90° 后，
+ *     getState() 可能报成「flipH + 旋转 90°」——像素与行为都正确，只是标记轴换了名字。
+ *
+ * ── 契约（app.js 按此调用，签名冻结）──────────────────────────────────────
+ *   window.SourceEdit = { mount(canvasEl, opts) -> api }
+ *   opts:  { onChange: function(state){} }        // 状态变化后调用，供 app.js 刷新自己的 UI
+ *   api:   setSource(imageLike) / getResultCanvas() / getState() / rotate(deltaDeg)
+ *          flip(axis) / setAspect(mode) / reset() / hasTransform()
+ *   state: { rotation, flipH, flipV, crop, hasCrop, aspect }（每次返回新对象，crop 也是副本）
+ *   返回值：rotate/flip/setAspect/reset/setSource 返回 boolean（是否真的改变了状态）；
+ *           getResultCanvas() 返回 HTMLCanvasElement 或 null
+ *   契约之外的附加方法（纯增量，不影响上面任何签名）：
+ *     getLastError() -> string|null   最近一次被拒绝的原因（如图片加载失败、rotate(45)）
+ *     destroy()      -> void          解除 window 监听与观察器，释放引用
+ *     relayout()     -> void          容器宽度变化后主动重排预览（侧栏折叠等场景；已自动挂
+ *                                     ResizeObserver + window resize，一般不用手动调）
+ *   onChange 触发策略（恰好每次状态变化一次，拖拽中途不触发）：
+ *     setSource 成功（重置裁剪与旋转）、rotate、flip、setAspect、reset、以及**拖拽结束时**
+ *     裁剪框确实变了 —— 各触发一次；pointermove 期间一次都不触发；被拒绝的调用不触发。
+ *
+ * ── 性能 ──────────────────────────────────────────────────────────────────
+ *   · pointermove 只重画预览（原图 + 遮罩 + 框），不做任何全量像素处理
+ *   · getResultCanvas() 惰性生成 + 按「状态签名」缓存：状态没变时返回**同一个** canvas 对象；
+ *     状态一变就换一块新 canvas（不原地改写旧对象，避免调用方手里的引用被悄悄改内容）
+ *
+ * ── 硬约束 ────────────────────────────────────────────────────────────────
+ *   零外部资源；无 import/export/require；只挂 window.SourceEdit；不写死任何色表数据；
+ *   不修改 imageLike 与调用方对象；无 document 的环境下被加载不抛异常。
+ */
+
+(function () {
+  'use strict';
+
+  /* ══════════════════════════════════════════════════════════════════ 环境 ══ */
+
+  var G = (typeof window !== 'undefined' && window) ? window
+    : ((typeof globalThis !== 'undefined' && globalThis) ? globalThis : null);
+
+  /* ══════════════════════════════════════════════════════════════════ 常量 ══ */
+
+  var MIN_SIZE = 8;              // 裁剪框最小边长（变换帧像素）
+  var HANDLE_HIT = 11;           // 调整柄不可见热区（CSS px 半径，>=10 才点得中）
+  var HANDLE_DRAW = 7;           // 调整柄绘制边长（CSS px）
+  var CLICK_SLOP = 3;            // 位移小于该值（CSS px）视为「点击」而非「拖拽」
+  var FALLBACK_RATIO = 0.8;      // 首次点击建框：整图 80% 居中
+  var PREVIEW_MIN_W = 80;        // 预览 CSS 宽度下限
+  var PREVIEW_MAX_W = 1600;      // 预览 CSS 宽度上限（超大 canvas 的内存保护）
+  var DPR_MAX = 2;
+  var BG_FILL = '#0c0e12';       // 与 ui.html 的 .source-canvas 背景一致
+  var MASK_FILL = 'rgba(0,0,0,0.58)';
+  var BOX_STROKE = '#5b9bf3';    // 与 ui.html 的 --accent 一致
+  var BOX_SHADOW = 'rgba(0,0,0,0.85)';
+  var HANDLE_FILL = '#ffffff';
+  var HANDLE_EDGE = '#101216';
+  var CURSORS = ['nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize',
+    'nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize'];
+
+  /* ══════════════════════════════════════════════════ 有符号置换矩阵运算 ══ */
+
+  /* 矩阵按 [a,b,c,d] 存：x' = a*x + b*y，y' = c*x + d*y */
+  function mul(A, B) {
+    return [
+      A[0] * B[0] + A[1] * B[2], A[0] * B[1] + A[1] * B[3],
+      A[2] * B[0] + A[3] * B[2], A[2] * B[1] + A[3] * B[3]
+    ];
+  }
+
+  var L_IDENT = [1, 0, 0, 1];
+  var OP_ROT_CW = [0, -1, 1, 0];      // 屏幕坐标（y 向下）里的顺时针 90°
+  var OP_ROT_CCW = [0, 1, -1, 0];
+  var OP_FLIP_H = [-1, 0, 0, 1];      // 镜像水平方向（作用于当前视图）
+  var OP_FLIP_V = [1, 0, 0, -1];
+
+  function sameMatrix(A, B) {
+    return A[0] === B[0] && A[1] === B[1] && A[2] === B[2] && A[3] === B[3];
+  }
+
+  /* 由 L 与基准图尺寸算出「变换帧」尺寸与平移（把变换后的图平移到 (0,0) 起） */
+  function frameOf(L, bw, bh) {
+    var xs = [0, L[0] * bw, L[1] * bh, L[0] * bw + L[1] * bh];
+    var ys = [0, L[2] * bw, L[3] * bh, L[2] * bw + L[3] * bh];
+    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+    return { tx: -minX, ty: -minY, fw: maxX - minX, fh: maxY - minY };
+  }
+
+  /* 矩阵 → {rotation, flipH, flipV} 的固定规范化表（16 组候选，按规则取唯一解） */
+  var DECOMP = (function () {
+    var rots = [
+      L_IDENT,
+      OP_ROT_CW,
+      mul(OP_ROT_CW, OP_ROT_CW),
+      mul(OP_ROT_CW, mul(OP_ROT_CW, OP_ROT_CW))
+    ];
+    var list = [];
+    for (var r = 0; r < 4; r++) {
+      for (var h = 0; h < 2; h++) {
+        for (var v = 0; v < 2; v++) {
+          var m = rots[r];
+          if (h) m = mul(OP_FLIP_H, m);
+          if (v) m = mul(OP_FLIP_V, m);
+          list.push({ m: m, rotation: r * 90, flipH: !!h, flipV: !!v, cost: h + v });
+        }
+      }
+    }
+    return list;
+  })();
+
+  /* 规范化：翻转次数最少 → 旋转角度最小 → 优先 flipV=false（同一矩阵唯一解） */
+  function decompose(L) {
+    var best = null;
+    for (var i = 0; i < DECOMP.length; i++) {
+      var e = DECOMP[i];
+      if (!sameMatrix(e.m, L)) continue;
+      if (!best) { best = e; continue; }
+      if (e.cost !== best.cost) { if (e.cost < best.cost) best = e; continue; }
+      if (e.rotation !== best.rotation) { if (e.rotation < best.rotation) best = e; continue; }
+      if (best.flipV && !e.flipV) best = e;
+    }
+    return best
+      ? { rotation: best.rotation, flipH: best.flipH, flipV: best.flipV }
+      : { rotation: 0, flipH: false, flipV: false };
+  }
+
+  /* ══════════════════════════════════════════════════════════════ 工具函数 ══ */
+
+  function num(v) {
+    return (typeof v === 'number' && v === v && v !== Infinity && v !== -Infinity) ? v : 0;
+  }
+
+  function clamp(v, lo, hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+  }
+
+  /* 取文档对象：无 document 环境（Node 里 eval）返回 null 而不是抛异常 */
+  function getDocument() {
+    if (G && G.document) return G.document;
+    if (typeof document !== 'undefined' && document) return document;
+    return null;
+  }
+
+  /*
+   * 读基准图尺寸。HTMLImageElement 走 naturalWidth/naturalHeight（naturalWidth === 0
+   * 表示加载失败 / 尚未解码 → 明确拒绝）；canvas / ImageBitmap 走 width/height。
+   * 返回 [w,h] 或 null。
+   */
+  function sourceSize(imageLike) {
+    if (!imageLike || typeof imageLike !== 'object') return null;
+    var isImgLike = (typeof imageLike.naturalWidth !== 'undefined') ||
+      (typeof imageLike.naturalHeight !== 'undefined');
+    if (isImgLike) {
+      var nw = Math.floor(num(imageLike.naturalWidth));
+      var nh = Math.floor(num(imageLike.naturalHeight));
+      if (nw > 0 && nh > 0) return [nw, nh];
+      return null;
+    }
+    var w = Math.floor(num(imageLike.width));
+    var h = Math.floor(num(imageLike.height));
+    if (w > 0 && h > 0) return [w, h];
+    return null;
+  }
+
+  function initialState() {
+    return { rotation: 0, flipH: false, flipV: false, crop: null, hasCrop: false, aspect: 'free' };
+  }
+
+  function bind(target, type, fn) {
+    if (!target || typeof target.addEventListener !== 'function') return false;
+    target.addEventListener(type, fn, false);
+    return true;
+  }
+
+  function unbind(target, type, fn) {
+    if (target && typeof target.removeEventListener === 'function') target.removeEventListener(type, fn, false);
+  }
+
+  /* ═══════════════════════════════════════════════════ 降级：什么都不做的 api ══ */
+
+  function createInertApi(reason) {
+    var why = reason || 'mount() 失败：未拿到可用的 2d 上下文（canvasEl 为空 / 无 getContext）';
+    return {
+      setSource: function () { return false; },
+      getResultCanvas: function () { return null; },
+      getState: function () { return initialState(); },
+      rotate: function () { return false; },
+      flip: function () { return false; },
+      setAspect: function () { return false; },
+      reset: function () { return false; },
+      hasTransform: function () { return false; },
+      getLastError: function () { return why; },
+      destroy: function () {}
+    };
+  }
+
+  /* ══════════════════════════════════════════════════════════════ 实例工厂 ══ */
+
+  function createInstance(canvasEl, opts, ctx) {
+    var onChange = (opts && typeof opts.onChange === 'function') ? opts.onChange : null;
+
+    /* ---- 状态 ---- */
+    var src = null, srcW = 0, srcH = 0, srcId = 0;
+    var L = L_IDENT;
+    var frame = frameOf(L, 0, 0);
+    var crop = null;                 // {x,y,w,h}：变换帧整数像素
+    var aspect = 'free';
+    var cacheSig = '';
+    var cacheCanvas = null;
+    var lastError = null;
+    var warned = {};
+    var drag = null;
+    var hoverCursor = '';
+    var alive = true;
+
+    /* ---- 预览布局状态 ---- */
+    var cssW = 320, cssH = 240, dpr = 1, viewScale = 1;
+
+    function warn(msg) {
+      lastError = msg;
+      if (warned[msg]) return;
+      warned[msg] = true;
+      if (typeof console !== 'undefined' && console && console.warn) console.warn('[SourceEdit] ' + msg);
+    }
+
+    /* --------------------------------------------------------------- 几何 */
+
+    /* 圆整 + 夹进图内：宽高先贴边，再整体平移，绝不产生负宽高或越界 */
+    function fitRect(x, y, w, h) {
+      w = Math.round(w); h = Math.round(h);
+      w = Math.max(1, Math.min(w, frame.fw));
+      h = Math.max(1, Math.min(h, frame.fh));
+      x = Math.round(x); y = Math.round(y);
+      x = clamp(x, 0, frame.fw - w);
+      y = clamp(y, 0, frame.fh - h);
+      return { x: x, y: y, w: w, h: h };
+    }
+
+    function minSide() {
+      return Math.max(1, Math.min(MIN_SIZE, frame.fw, frame.fh));
+    }
+
+    /* 以锚点角 + 方向 + 边长构造框（平滑处理贴边：必要时整体平移回图内） */
+    function rectFromCorner(ax, ay, sx, sy, w, h) {
+      return fitRect(sx > 0 ? ax : ax - w, sy > 0 ? ay : ay - h, w, h);
+    }
+
+    /* 角柄 / 新建框：锚点 = 固定角，移动点 = 指针（含反向拖拽自动换向、越界夹取） */
+    function resizeCorner(ax, ay, mx, my) {
+      /* 先把移动点夹进图像范围：这样宽高必然为正、锚点不动、框不会越界。
+       * 夹取不改变方向（ax 在 [0,fw] 内，夹取只会把 mx 拉向 ax 所在的同一侧）。 */
+      mx = clamp(mx, 0, frame.fw);
+      my = clamp(my, 0, frame.fh);
+      var sx = mx >= ax ? 1 : -1, sy = my >= ay ? 1 : -1;
+      var ms = minSide();
+      if (aspect === 'square') {
+        var s = Math.max(Math.abs(mx - ax), Math.abs(my - ay));
+        var limX = sx > 0 ? (frame.fw - ax) : ax;
+        var limY = sy > 0 ? (frame.fh - ay) : ay;
+        var lim = Math.max(0, Math.min(limX, limY));
+        /* 下限优先于锚点固定（见文件头「尺寸下限优先于锚点固定」）：
+         * 先把边长夹到边界允许的范围，再把下界抬到 ms —— 绝不再出现 min(ms, lim) 把下界拉到 lim
+         * 从而产出 1×1 的框。抬过 lim 时框朝图内长大，由 rectFromCorner→fitRect 整体平移回图内，
+         * 所以锚点最多被挪到贴边处。 */
+        s = Math.max(Math.min(s, lim), ms);
+        return rectFromCorner(ax, ay, sx, sy, s, s);
+      }
+      var w = Math.max(Math.abs(mx - ax), ms);
+      var h = Math.max(Math.abs(my - ay), ms);
+      return rectFromCorner(ax, ay, sx, sy, w, h);
+    }
+
+    /* 边柄：锚定对边，垂直方向按当前中心定位（square 时保持 1:1） */
+    function resizeEdge(idx, before, mx, my) {
+      var ms = minSide();
+      var cx = before.x + before.w / 2, cy = before.y + before.h / 2;
+      var side;
+      if (idx === 3) {                                     /* 右边 */
+        if (aspect === 'square') {
+          side = clamp(mx - before.x, ms, frame.fw - before.x);
+          side = Math.min(side, frame.fh);
+          return fitRect(before.x, Math.round(cy - side / 2), side, side);
+        }
+        return fitRect(before.x, before.y, clamp(mx, before.x + ms, frame.fw) - before.x, before.h);
+      }
+      if (idx === 7) {                                     /* 左边 */
+        if (aspect === 'square') {
+          side = clamp(before.x + before.w - mx, ms, before.x + before.w);
+          side = Math.min(side, frame.fh);
+          return fitRect(before.x + before.w - side, Math.round(cy - side / 2), side, side);
+        }
+        var nx = clamp(mx, 0, before.x + before.w - ms);
+        return fitRect(nx, before.y, before.x + before.w - nx, before.h);
+      }
+      if (idx === 5) {                                     /* 下边 */
+        if (aspect === 'square') {
+          side = clamp(my - before.y, ms, frame.fh - before.y);
+          side = Math.min(side, frame.fw);
+          return fitRect(Math.round(cx - side / 2), before.y, side, side);
+        }
+        return fitRect(before.x, before.y, before.w, clamp(my, before.y + ms, frame.fh) - before.y);
+      }
+      if (idx === 1) {                                     /* 上边 */
+        if (aspect === 'square') {
+          side = clamp(before.y + before.h - my, ms, before.y + before.h);
+          side = Math.min(side, frame.fw);
+          return fitRect(Math.round(cx - side / 2), before.y + before.h - side, side, side);
+        }
+        var ny = clamp(my, 0, before.y + before.h - ms);
+        return fitRect(before.x, ny, before.w, before.y + before.h - ny);
+      }
+      return before;
+    }
+
+    /* 整框平移：只改位置，宽高不变（square 也就一直保持正方形） */
+    function moveRect(before, dx, dy) {
+      return fitRect(before.x + dx, before.y + dy, before.w, before.h);
+    }
+
+    /* 首次点击 / 点击建框：整图 80% 居中（square 时取正方形） */
+    function fallbackRect() {
+      var w = Math.round(frame.fw * FALLBACK_RATIO);
+      var h = Math.round(frame.fh * FALLBACK_RATIO);
+      var ms = minSide();
+      if (aspect === 'square') { var s = Math.max(Math.min(w, h), ms); w = s; h = s; }
+      w = Math.max(w, ms); h = Math.max(h, ms);
+      return fitRect(Math.round((frame.fw - w) / 2), Math.round((frame.fh - h) / 2), w, h);
+    }
+
+    /* 切到 square：以中心为锚就地变正方形（边长取较大边，夹进图内） */
+    function squareFromCenter(r) {
+      var ms = minSide();
+      var side = Math.max(r.w, r.h, ms);
+      side = Math.min(side, frame.fw, frame.fh);
+      var cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      return fitRect(Math.round(cx - side / 2), Math.round(cy - side / 2), side, side);
+    }
+
+    /* --------------------------------------------------------- 预览布局 */
+
+    function measureWidth() {
+      var w = 0;
+      if (canvasEl.clientWidth > 0) w = canvasEl.clientWidth;
+      if (!w && canvasEl.parentElement && canvasEl.parentElement.clientWidth > 0) {
+        w = canvasEl.parentElement.clientWidth;
+      }
+      if (!w && typeof canvasEl.getBoundingClientRect === 'function') {
+        try {
+          var r = canvasEl.getBoundingClientRect();
+          if (r && r.width > 0) w = r.width;
+        } catch (err) { /* 取不到就继续兜底 */ }
+      }
+      if (!w && canvasEl.width > 0) w = canvasEl.width;
+      if (!w) w = 320;
+      return Math.round(clamp(w, PREVIEW_MIN_W, PREVIEW_MAX_W));
+    }
+
+    function layout() {
+      if (!alive || !ctx || !canvasEl) return;
+      var w, h;
+      if (src && frame.fw > 0 && frame.fh > 0) {
+        w = measureWidth();
+        h = Math.max(1, Math.round(w * frame.fh / frame.fw));
+        viewScale = w / frame.fw;
+      } else {
+        w = Math.min(measureWidth(), 320);
+        h = Math.max(1, Math.round(w * 3 / 4));
+        viewScale = 1;
+      }
+      dpr = (G && num(G.devicePixelRatio) > 1) ? Math.min(num(G.devicePixelRatio), DPR_MAX) : 1;
+      var pxW = Math.max(1, Math.round(w * dpr)), pxH = Math.max(1, Math.round(h * dpr));
+      cssW = w; cssH = h;
+      if (canvasEl.width !== pxW || canvasEl.height !== pxH) {
+        canvasEl.width = pxW;
+        canvasEl.height = pxH;
+      }
+      if (!src && canvasEl.style && hoverCursor !== '') {
+        hoverCursor = '';
+        canvasEl.style.cursor = '';              /* 无源图：交还光标控制权给 UI 层的 CSS */
+      }
+      drawPreview();
+    }
+
+    /* ----------------------------------------------------------- 预览绘制 */
+
+    function handlePoints(x, y, w, h) {
+      return [
+        { x: x, y: y },                       /* 0 nw */
+        { x: x + w / 2, y: y },               /* 1 n  */
+        { x: x + w, y: y },                   /* 2 ne */
+        { x: x + w, y: y + h / 2 },           /* 3 e  */
+        { x: x + w, y: y + h },               /* 4 se */
+        { x: x + w / 2, y: y + h },           /* 5 s  */
+        { x: x, y: y + h },                   /* 6 sw */
+        { x: x, y: y + h / 2 }                /* 7 w  */
+      ];
+    }
+
+    function cropCssRect() {
+      return {
+        x: crop.x * viewScale, y: crop.y * viewScale,
+        w: crop.w * viewScale, h: crop.h * viewScale
+      };
+    }
+
+    function drawOverlay() {
+      var r = cropCssRect();
+      var x = r.x, y = r.y, w = r.w, h = r.h;
+      /* 框外加深色遮罩：四条带，一眼看出裁掉了什么 */
+      ctx.fillStyle = MASK_FILL;
+      ctx.fillRect(0, 0, cssW, Math.max(0, y));
+      ctx.fillRect(0, y + h, cssW, Math.max(0, cssH - (y + h)));
+      ctx.fillRect(0, y, Math.max(0, x), h);
+      ctx.fillRect(x + w, y, Math.max(0, cssW - (x + w)), h);
+      /* 框：深色外描边保证浅色图上也有对比 */
+      ctx.strokeStyle = BOX_SHADOW;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x - 1.5, y - 1.5, w + 3, h + 3);
+      ctx.strokeStyle = BOX_STROKE;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x, y, w, h);
+      /* 8 个调整柄 */
+      var pts = handlePoints(x, y, w, h);
+      for (var i = 0; i < pts.length; i++) {
+        var px = Math.round(pts[i].x - HANDLE_DRAW / 2);
+        var py = Math.round(pts[i].y - HANDLE_DRAW / 2);
+        ctx.fillStyle = HANDLE_FILL;
+        ctx.fillRect(px, py, HANDLE_DRAW, HANDLE_DRAW);
+        ctx.strokeStyle = HANDLE_EDGE;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px + 0.5, py + 0.5, HANDLE_DRAW - 1, HANDLE_DRAW - 1);
+      }
+    }
+
+    function drawPreview() {
+      if (!ctx || !canvasEl) return;
+      var pxW = canvasEl.width, pxH = canvasEl.height;
+      try {
+        if (typeof ctx.setTransform !== 'function') return;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (typeof ctx.clearRect === 'function') ctx.clearRect(0, 0, pxW, pxH);
+        if (typeof ctx.fillRect === 'function') {
+          ctx.fillStyle = BG_FILL;
+          ctx.fillRect(0, 0, pxW, pxH);
+        }
+        if (!src || typeof ctx.drawImage !== 'function') return;
+        var s = viewScale * dpr;
+        if ('imageSmoothingEnabled' in ctx) ctx.imageSmoothingEnabled = false;
+        /* 基准图 → 变换帧：setTransform(a,b,c,d,e,f)。fold 了预览缩放与 dpr */
+        ctx.setTransform(L[0] * s, L[2] * s, L[1] * s, L[3] * s, frame.tx * s, frame.ty * s);
+        ctx.drawImage(src, 0, 0);
+        /* 覆盖层回到 CSS 像素空间绘制，保证描边与手柄在任何缩放/DPR 下都是固定视觉粗细 */
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (crop) drawOverlay();
+      } catch (err) {
+        warn('预览绘制失败：' + (err && err.message ? err.message : String(err)));
+      }
+    }
+
+    /* ------------------------------------------------------- 指针坐标换算 */
+
+    function cssPoint(e) {
+      var rect = null;
+      if (typeof canvasEl.getBoundingClientRect === 'function') {
+        try { rect = canvasEl.getBoundingClientRect(); } catch (err) { rect = null; }
+      }
+      var bl = num(canvasEl.clientLeft), bt = num(canvasEl.clientTop);
+      var dispW = canvasEl.clientWidth > 0 ? canvasEl.clientWidth : (rect && rect.width > 0 ? rect.width : cssW);
+      var dispH = canvasEl.clientHeight > 0 ? canvasEl.clientHeight : (rect && rect.height > 0 ? rect.height : cssH);
+      var left = (rect ? rect.left : 0) + bl, top = (rect ? rect.top : 0) + bt;
+      var ex = num(e && e.clientX), ey = num(e && e.clientY);
+      var kx = dispW > 0 ? cssW / dispW : 1, ky = dispH > 0 ? cssH / dispH : 1;
+      return { x: (ex - left) * kx, y: (ey - top) * ky };
+    }
+
+    /* 命中判定：内区平移 → 柄缩放（角柄优先）→ 框内平移 → 框外新建 */
+    function hitTest(p) {
+      var r = cropCssRect();
+      var hs = HANDLE_HIT;
+      var ix = r.x + hs * 0.5, iy = r.y + hs * 0.5;
+      var iw = Math.max(0, r.w - hs), ih = Math.max(0, r.h - hs);
+      if (iw > 0 && ih > 0 && p.x > ix && p.x < ix + iw && p.y > iy && p.y < iy + ih) {
+        return { kind: 'move', idx: -1 };
+      }
+      var pts = handlePoints(r.x, r.y, r.w, r.h);
+      var order = [0, 2, 4, 6, 1, 3, 5, 7];
+      for (var i = 0; i < order.length; i++) {
+        var k = order[i];
+        if (Math.abs(p.x - pts[k].x) <= hs && Math.abs(p.y - pts[k].y) <= hs) {
+          return { kind: 'handle', idx: k };
+        }
+      }
+      if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) {
+        return { kind: 'move', idx: -1 };
+      }
+      return { kind: 'new', idx: -1 };
+    }
+
+    /* 角柄的锚点 = 对角固定点（变换帧整数像素） */
+    function anchorForHandle(idx) {
+      if (idx === 0) return { x: crop.x + crop.w, y: crop.y + crop.h };
+      if (idx === 2) return { x: crop.x, y: crop.y + crop.h };
+      if (idx === 4) return { x: crop.x, y: crop.y };
+      if (idx === 6) return { x: crop.x + crop.w, y: crop.y };
+      return { x: crop.x, y: crop.y };
+    }
+
+    function updateCursor(p) {
+      if (!canvasEl.style) return;
+      /* 无源图时写空串：清掉内联覆盖，让 ui.html 自己的 .source-canvas.crop-mode{cursor:crosshair}
+       * 这类样式规则重新生效（本模块不抢 UI 层的样式所有权）。 */
+      var next = '';
+      if (src) {
+        if (!crop) next = 'crosshair';
+        else {
+          var hit = hitTest(p);
+          next = hit.kind === 'handle' ? CURSORS[hit.idx]
+            : (hit.kind === 'move' ? 'move' : 'crosshair');
+        }
+      }
+      if (next !== hoverCursor) {
+        hoverCursor = next;
+        canvasEl.style.cursor = next;
+      }
+    }
+
+    /* --------------------------------------------------------------- 通知 */
+
+    function notify() {
+      if (!onChange) return;
+      try { onChange(getState()); }
+      catch (err) { warn('onChange 回调抛错：' + (err && err.message ? err.message : String(err))); }
+    }
+
+    /* --------------------------------------------------------- 指针交互 */
+
+    function isPrimary(e) {
+      return !(e && typeof e.button === 'number' && e.button > 0);
+    }
+
+    function onDown(e) {
+      if (!src || !alive) return;
+      if (!isPrimary(e)) return;
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+      var p = cssPoint(e);
+      var c = { x: p.x / viewScale, y: p.y / viewScale };
+      var hit = crop ? hitTest(p) : { kind: 'new', idx: -1 };
+      drag = {
+        kind: hit.kind, idx: hit.idx,
+        startX: c.x, startY: c.y,
+        startCssX: p.x, startCssY: p.y,
+        before: crop ? { x: crop.x, y: crop.y, w: crop.w, h: crop.h } : null,
+        anchorX: c.x, anchorY: c.y,
+        moved: false
+      };
+      if (hit.kind === 'handle') {
+        var a = anchorForHandle(hit.idx);
+        drag.anchorX = a.x; drag.anchorY = a.y;
+      }
+      if (typeof canvasEl.setPointerCapture === 'function' && e && e.pointerId !== undefined) {
+        try { canvasEl.setPointerCapture(e.pointerId); } catch (err) { /* 不支持就算了 */ }
+      }
+    }
+
+    /* 拖拽中的几何更新（纯预览，不产出结果图、不触发 onChange） */
+    function applyDrag(d, c) {
+      if (d.kind === 'move') return moveRect(d.before, c.x - d.startX, c.y - d.startY);
+      if (d.kind === 'handle' && (d.idx === 1 || d.idx === 3 || d.idx === 5 || d.idx === 7)) {
+        return resizeEdge(d.idx, d.before, c.x, c.y);
+      }
+      return resizeCorner(d.anchorX, d.anchorY, c.x, c.y);
+    }
+
+    function onMove(e) {
+      if (!alive) return;
+      var p = cssPoint(e);
+      if (!drag) { if (src) updateCursor(p); return; }
+      var c = { x: p.x / viewScale, y: p.y / viewScale };
+      if (!drag.moved) {
+        var ddx = p.x - drag.startCssX, ddy = p.y - drag.startCssY;
+        if (ddx * ddx + ddy * ddy >= CLICK_SLOP * CLICK_SLOP) drag.moved = true;
+      }
+      if (drag.kind === 'new' && !drag.moved) return;   /* 还没形成拖拽，先不建框 */
+      crop = applyDrag(drag, c);
+      drawPreview();
+    }
+
+    function onUp() {
+      if (!alive || !drag) return;
+      var d = drag;
+      drag = null;
+      if (d.kind === 'new' && !d.moved) crop = fallbackRect();      /* 点击（位移未过阈值）= 兜底框 */
+      if (crop) crop = fitRect(crop.x, crop.y, crop.w, crop.h);
+      var changed = (!!d.before !== !!crop) ||
+        (d.before && crop && (d.before.x !== crop.x || d.before.y !== crop.y ||
+          d.before.w !== crop.w || d.before.h !== crop.h));
+      drawPreview();
+      if (changed) notify();
+    }
+
+    /* --------------------------------------------------------- 状态签名 */
+
+    function signature() {
+      var c = crop ? (crop.x + ',' + crop.y + ',' + crop.w + ',' + crop.h) : 'full';
+      return srcId + '|' + L[0] + ',' + L[1] + ',' + L[2] + ',' + L[3] + '|' +
+        frame.tx + ',' + frame.ty + '|' + frame.fw + 'x' + frame.fh + '|' + c;
+    }
+
+    /* --------------------------------------------------------- 公开方法 */
+
+    function resetTransform() {
+      L = L_IDENT;
+      frame = frameOf(L, srcW, srcH);
+      crop = null;
+    }
+
+    function setSource(imageLike) {
+      if (!alive) return false;
+      if (imageLike === null || imageLike === undefined) {
+        if (!src) return false;
+        src = null; srcW = 0; srcH = 0; srcId += 1;
+        resetTransform();
+        cacheSig = ''; cacheCanvas = null;
+        layout();
+        notify();
+        return true;
+      }
+      var size = sourceSize(imageLike);
+      if (!size) {
+        warn('源图不可用：尺寸为 0（图片可能加载失败或尚未解码），已忽略本次 setSource');
+        return false;
+      }
+      src = imageLike;
+      srcW = size[0]; srcH = size[1];
+      srcId += 1;
+      resetTransform();                                    /* 换原图 → 重置裁剪与旋转 */
+      cacheSig = ''; cacheCanvas = null;
+      drag = null;
+      lastError = null;
+      layout();
+      notify();
+      return true;
+    }
+
+    function rotate(deltaDeg) {
+      if (!alive || !src) return false;
+      var d = num(deltaDeg);
+      if (d !== 90 && d !== -90 && d !== 270 && d !== -270) {
+        warn('rotate() 只接受 ±90 的整数倍，收到 ' + String(deltaDeg) + '，已拒绝');
+        return false;
+      }
+      L = mul(d > 0 ? OP_ROT_CW : OP_ROT_CCW, L);
+      frame = frameOf(L, srcW, srcH);
+      crop = null;                                         /* 语义：变换后重新框选（见文件头） */
+      cacheSig = '';
+      drag = null;
+      layout();
+      notify();
+      return true;
+    }
+
+    function flip(axis) {
+      if (!alive || !src) return false;
+      if (axis !== 'h' && axis !== 'v') {
+        warn("flip() 只接受 'h' 或 'v'，收到 " + String(axis) + "，已拒绝");
+        return false;
+      }
+      L = mul(axis === 'h' ? OP_FLIP_H : OP_FLIP_V, L);
+      frame = frameOf(L, srcW, srcH);
+      crop = null;                                         /* 语义：变换后重新框选（见文件头） */
+      cacheSig = '';
+      drag = null;
+      layout();
+      notify();
+      return true;
+    }
+
+    function setAspect(mode) {
+      if (!alive) return false;
+      if (mode !== 'free' && mode !== 'square') {
+        warn("setAspect() 只接受 'free' 或 'square'，收到 " + String(mode) + "，已拒绝");
+        return false;
+      }
+      if (mode === aspect) return false;
+      aspect = mode;
+      if (mode === 'square' && crop) {
+        crop = squareFromCenter(crop);                     /* 就地调整，中心不变 */
+        cacheSig = '';
+      }
+      drawPreview();
+      notify();
+      return true;
+    }
+
+    function reset() {
+      if (!alive) return false;
+      var changed = !!crop || !sameMatrix(L, L_IDENT);
+      resetTransform();                                    /* aspect 不动（见文件头） */
+      cacheSig = '';
+      drag = null;
+      if (!changed) { drawPreview(); return false; }
+      layout();
+      notify();
+      return true;
+    }
+
+    function getState() {
+      var d = decompose(L);
+      return {
+        rotation: d.rotation,
+        flipH: d.flipH,
+        flipV: d.flipV,
+        crop: crop ? { x: crop.x, y: crop.y, w: crop.w, h: crop.h } : null,
+        hasCrop: !!crop,
+        aspect: aspect
+      };
+    }
+
+    function hasTransform() {
+      return !!(crop || !sameMatrix(L, L_IDENT));
+    }
+
+    function getResultCanvas() {
+      if (!alive || !src) return null;
+      var sig = signature();
+      if (cacheCanvas && cacheSig === sig) return cacheCanvas;
+      var doc = getDocument();
+      if (!doc || typeof doc.createElement !== 'function') {
+        warn('getResultCanvas() 失败：当前环境没有可用的 document.createElement');
+        return null;
+      }
+      var cw = crop ? crop.w : frame.fw;
+      var ch = crop ? crop.h : frame.fh;
+      if (!(cw > 0) || !(ch > 0)) return null;
+      var out;
+      try { out = doc.createElement('canvas'); } catch (err) { out = null; }
+      if (!out || typeof out.getContext !== 'function') {
+        warn('getResultCanvas() 失败：无法创建 canvas');
+        return null;
+      }
+      var octx = null;
+      try { octx = out.getContext('2d'); } catch (err) { octx = null; }
+      if (!octx || typeof octx.drawImage !== 'function') {
+        warn('getResultCanvas() 失败：新 canvas 没有可用的 2d 上下文');
+        return null;
+      }
+      out.width = cw;
+      out.height = ch;
+      /* 状态一变就换新 canvas：调用方手里的旧引用不会被悄悄改写 */
+      cacheCanvas = out;
+      cacheSig = sig;
+      var ox = crop ? crop.x : 0, oy = crop ? crop.y : 0;
+      if ('imageSmoothingEnabled' in octx) octx.imageSmoothingEnabled = false;
+      try {
+        octx.setTransform(1, 0, 0, 1, 0, 0);
+        if (typeof octx.clearRect === 'function') octx.clearRect(0, 0, cw, ch);
+        octx.setTransform(L[0], L[2], L[1], L[3], frame.tx - ox, frame.ty - oy);
+        octx.drawImage(src, 0, 0);
+        octx.setTransform(1, 0, 0, 1, 0, 0);
+      } catch (err) {
+        warn('结果图绘制失败：' + (err && err.message ? err.message : String(err)));
+      }
+      return out;
+    }
+
+    function getLastError() {
+      return lastError;
+    }
+
+    function destroy() {
+      if (!alive) return;
+      alive = false;
+      detach();
+      src = null; srcW = 0; srcH = 0;
+      resetTransform();
+      cacheSig = ''; cacheCanvas = null;
+      drag = null;
+    }
+
+    /* --------------------------------------------------------- 事件绑定 */
+
+    var observers = [];
+    var detachers = [];
+
+    function detach() {
+      for (var i = 0; i < detachers.length; i++) detachers[i]();
+      detachers.length = 0;
+      for (var j = 0; j < observers.length; j++) {
+        try { observers[j].disconnect(); } catch (err) { /* 忽略 */ }
+      }
+      observers.length = 0;
+    }
+
+    bind(canvasEl, 'pointerdown', onDown);
+    detachers.push(function () { unbind(canvasEl, 'pointerdown', onDown); });
+    /* move/up 挂在 window 上：pointer 快速拖出画布也不会丢失 */
+    if (G) {
+      bind(G, 'pointermove', onMove);
+      detachers.push(function () { unbind(G, 'pointermove', onMove); });
+      bind(G, 'pointerup', onUp);
+      detachers.push(function () { unbind(G, 'pointerup', onUp); });
+      bind(G, 'pointercancel', onUp);
+      detachers.push(function () { unbind(G, 'pointercancel', onUp); });
+      bind(G, 'resize', layout);
+      detachers.push(function () { unbind(G, 'resize', layout); });
+      if (G.ResizeObserver && typeof G.ResizeObserver === 'function') {
+        try {
+          var ro = new G.ResizeObserver(function () { layout(); });
+          ro.observe(canvasEl);
+          observers.push(ro);
+        } catch (err) { /* 不支持就算了，window resize 仍能兜住 */ }
+      }
+    }
+    if (canvasEl.style) {
+      try { canvasEl.style.touchAction = 'none'; } catch (err) { /* 忽略 */ }
+    }
+
+    layout();
+
+    return {
+      setSource: setSource,
+      getResultCanvas: getResultCanvas,
+      getState: getState,
+      rotate: rotate,
+      flip: flip,
+      setAspect: setAspect,
+      reset: reset,
+      hasTransform: hasTransform,
+      getLastError: getLastError,
+      destroy: destroy,
+      /* 供 app.js 在容器宽度变化后（如侧栏折叠）主动重排预览；非契约必需 */
+      relayout: layout
+    };
+  }
+
+  /* ══════════════════════════════════════════════════════════════ 挂载入口 ══ */
+
+  /* 同一块 canvas 重复 mount 时先卸掉上一实例的 window 监听，避免监听泄漏 */
+  var mounted = [];
+
+  function teardownFor(el) {
+    for (var i = mounted.length - 1; i >= 0; i--) {
+      if (mounted[i].el === el) {
+        try { mounted[i].api.destroy(); } catch (err) { /* 忽略 */ }
+        mounted.splice(i, 1);
+      }
+    }
+  }
+
+  function mount(canvasEl, opts) {
+    if (!canvasEl || typeof canvasEl.getContext !== 'function') return createInertApi();
+    var ctx = null;
+    try { ctx = canvasEl.getContext('2d'); } catch (err) { ctx = null; }
+    if (!ctx || typeof ctx !== 'object') return createInertApi();
+    teardownFor(canvasEl);
+    var api = createInstance(canvasEl, opts, ctx);
+    mounted.push({ el: canvasEl, api: api });
+    return api;
+  }
+
+  var API = { mount: mount };
+
+  if (G) G.SourceEdit = API;
+})();
+</script>
+<script>
 /* ===== src/app.js ===== */
 /* 拼豆图纸生成器 · 界面交互逻辑
  * 纯脚本体：无模块语法，无外部资源，无框架。
  * 由 build.mjs 内联到单文件 HTML 的 body 末尾（在 palette / color / pipeline / render 之后）。
  * 依赖的全局契约：window.PINDOU_PALETTES、window.Pipeline、window.Render。
- * 三者缺失时界面仍完整渲染，并给出明确提示，不抛未捕获异常。
+ * 可选增强契约：window.SourceEdit（原图裁剪 / 旋转 / 翻转），缺失时直接使用原图。
+ * 四者缺失时界面仍完整渲染，并给出明确提示，不抛未捕获异常。
  */
 (function () {
   'use strict';
@@ -2568,13 +3977,35 @@ window.PINDOU_PALETTES = {
     : ((typeof globalThis !== 'undefined') ? globalThis : {});
   var doc = (typeof document !== 'undefined') ? document : null;
 
-  var MAX_DIM = 87;          /* 单边硬上限：3 × 3 板 */
+  var MAX_DIM = 116;         /* 单边硬上限：4 × 4 板（= 4×4 块 29 孔板） */
   var BOARD_STEP = 29;       /* 每块拼板 29 × 29 格 */
-  var BOARD_MAX = 3;
+  var BOARD_MAX = 4;
   var EMPTY_CELL = 65535;    /* Pattern.cells 里的空格标记，与 pipeline.js / render.js 保持一致 */
   var DEBOUNCE_MS = 200;
   var RULER_PAD = 16;        /* 内置降级渲染器的四周对称留白 */
-  var SRC_MAX_EDGE = 1600;   /* 像素源长边上限：≥87 格图纸完全够用，且 getImageData 更快 */
+  var SRC_MAX_EDGE = 1600;   /* 像素源长边上限：≥116 格图纸完全够用，且 getImageData 更快 */
+
+  var MIN_CELL_PX = 8;       /* 格子像素滑杆下限 */
+  var MAX_CELL_PX = 48;      /* 格子像素滑杆上限（render.js 已放宽到 256，48 是「看一眼」的舒适上限） */
+  var DEFAULT_CELL_PX = 24;
+  var LABEL_MIN_PX = 9;      /* 内置降级渲染器写字的最小格子像素 */
+  /* render.js 实测阈值（code 模式 20px、index 模式 17px）。它会在 drawPattern 的返回值里
+     自报 labelMinPx，这里只是「还没渲染过」时的兜底：提示文案绝不能和真实渲染层错开。 */
+  var LABEL_MIN_FALLBACK = { code: 20, index: 17 };
+
+  var ZOOM_MIN = 0.25;
+  var ZOOM_MAX = 4;
+  var ZOOM_DEFAULT = 1;
+  var ZOOM_STEP_FACTOR = 1.25;
+
+  var EXPORT_BASE_CELL = 24;            /* 导出基准格子像素：实际 = 24 × 倍数 */
+  var EXPORT_SCALES = [1, 2, 4, 8];
+
+  var HISTORY_MAX = 50;                 /* 撤销栈深上限：超了丢最旧的 */
+  var RECENT_MAX = 12;                  /* 最近用过的色号个数 */
+  var RECENT_KEY = 'pindou.recentColors.v1';
+  var PICKER_SCOPE_USED = 'used';
+  var PICKER_SCOPE_ALL = 'all';
 
   var DISCLAIMER = 'RGB 为屏幕参考值，非品牌官方色值；严谨对色请以实物色卡为准。';
 
@@ -2585,9 +4016,10 @@ window.PINDOU_PALETTES = {
     brightness: 0, contrast: 0, saturation: 0, autoWB: false, autoLevels: false,
     method: 'nearest', bayerN: '4', ditherStrength: 30,
     quantizeEnabled: true, maxColors: 24,
-    boards: '1', lockAspect: true,
-    showNumbers: true, showRuler: false, cellSize: 12,
-    recolorMode: false, lockToggle: true
+    boards: '1', sizePreset: 'custom', lockAspect: true,
+    cellLabel: 'code', showRuler: true, cellSize: DEFAULT_CELL_PX, viewZoom: ZOOM_DEFAULT,
+    recolorMode: false, recolorScope: PICKER_SCOPE_USED, lockToggle: true,
+    exportScale: '2', exportAnnotate: true
   };
 
   /* ---------------------------------------------------------------- 状态 */
@@ -2601,12 +4033,21 @@ window.PINDOU_PALETTES = {
     dragActive: false,
     missingUI: [],
     source: null,        /* <img> / ImageBitmap / canvas：交给 Pipeline.generate 的像素源 */
-    srcW: 0, srcH: 0,    /* 原图自然尺寸（用于宽高比） */
+    srcW: 0, srcH: 0,    /* 原图自然尺寸（未被裁剪时的宽高比来源） */
     pixW: 0, pixH: 0,    /* 实际写入 sourceCanvas 的像素尺寸（长边受 SRC_MAX_EDGE 限制） */
     srcCtx: null,        /* sourceCanvas 的 2d 上下文：getImageData 取像素 */
+    srcEdit: null,       /* SourceEdit.mount() 返回的 api；缺失时为 null */
+    srcCropMode: false,
     pattern: null,
     renderFallback: false,
-    viewOpts: { cellSize: 12, showNumbers: true, showRuler: false, showGrid: true },
+    renderTooLarge: false,
+    labelMinPx: {},      /* 渲染层自报的格内文字阈值：{ code: 20, index: 17 } */
+    viewOpts: { cellPx: DEFAULT_CELL_PX, cellLabel: 'code', showCodes: true, showRuler: true, showGrid: true, annotate: false },
+    /* 预览缩放：只影响 canvas 的 CSS 尺寸，不影响 canvas.width（== 导出与命中判定用的真实像素） */
+    viewZoom: ZOOM_DEFAULT,
+    viewZoomApplied: ZOOM_DEFAULT,
+    history: [],         /* 撤销栈：[{w,h,cells,locked,colors}] 深拷贝快照；重新生成 / 换图时清空 */
+    recolor: { scope: PICKER_SCOPE_USED, search: '', selected: '', recent: [] },
     status: { text: '', kind: 'info' },
     lastMs: 0,
     lockCount: 0,
@@ -2670,15 +4111,56 @@ window.PINDOU_PALETTES = {
     return (Math.round(n * 10) / 10).toFixed(1);
   }
 
+  function fmtPx(n) {
+    var v = Number(n);
+    if (!isFinite(v) || v <= 0) return '—';
+    if (v >= 1e6) return (Math.round(v / 1e5) / 10) + 'M';
+    return String(Math.round(v));
+  }
+
+  function isArr(v) { return Object.prototype.toString.call(v) === '[object Array]'; }
+
   function setText(el, t) { if (el) el.textContent = String(t); }
   function setVal(el, v) { if (el) el.value = v; }
   function setChecked(el, v) { if (el) el.checked = !!v; }
+  function setDisabled(el, v) { if (el) el.disabled = !!v; }
 
   function on(el, type, fn) {
     if (el && typeof el.addEventListener === 'function') el.addEventListener(type, fn);
   }
 
   function hasClassList(el) { return !!(el && el.classList && typeof el.classList.add === 'function'); }
+
+  function addCls(el, c) { if (hasClassList(el) && el.classList.add) el.classList.add(c); }
+  function removeCls(el, c) { if (hasClassList(el) && el.classList.remove) el.classList.remove(c); }
+  function toggleCls(el, c, on2) { if (on2) addCls(el, c); else removeCls(el, c); }
+
+  /* localStorage 在 file:// 下可能直接抛异常（隐私模式 / 禁用 cookie）。
+     存取都包在 try/catch 里：失败时静默降级为「仅本次会话有效」，绝不上抛。 */
+  function storageGet(key) {
+    try {
+      var ls = win.localStorage;
+      if (!ls || typeof ls.getItem !== 'function') return null;
+      return ls.getItem(key);
+    } catch (e) { return null; }
+  }
+
+  function storageSet(key, value) {
+    try {
+      var ls = win.localStorage;
+      if (!ls || typeof ls.setItem !== 'function') return false;
+      ls.setItem(key, value);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function isTypingTarget(t) {
+    if (!t) return false;
+    var tag = t.tagName ? String(t.tagName).toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    if (t.isContentEditable === true) return true;
+    return false;
+  }
 
   /* ------------------------------------------------------- 模块可用性探测 */
 
@@ -2687,11 +4169,13 @@ window.PINDOU_PALETTES = {
     var palettes = !!(P && typeof P === 'object' && typeof Object.keys === 'function' && Object.keys(P).length > 0);
     var pipeline = !!(win.Pipeline && (typeof win.Pipeline.generateFromRGBA === 'function' || typeof win.Pipeline.generate === 'function'));
     var render = !!(win.Render && (typeof win.Render.drawPattern === 'function' || typeof win.Render.legendHTML === 'function'));
+    var srcEdit = !!(win.SourceEdit && typeof win.SourceEdit.mount === 'function');
     var missing = [];
     if (!palettes) missing.push('色卡数据 window.PINDOU_PALETTES');
     if (!pipeline) missing.push('转换引擎 window.Pipeline');
     if (!render) missing.push('渲染模块 window.Render');
-    return { palettes: palettes, pipeline: pipeline, render: render, ok: missing.length === 0, missing: missing };
+    /* SourceEdit 是可选增强：不进 missing，界面应照常工作（退回直接用原图） */
+    return { palettes: palettes, pipeline: pipeline, render: render, srcEdit: srcEdit, ok: missing.length === 0, missing: missing };
   }
 
   function updateModuleNotice(mods) {
@@ -2811,6 +4295,14 @@ window.PINDOU_PALETTES = {
     return null;
   }
 
+  /* 色卡 id：select 的值优先，为空时回落到第一个色卡（某些环境下 select 不会自动选中第一项） */
+  function paletteIdForOpts() {
+    var v = ui.paletteSelect ? ui.paletteSelect.value : '';
+    if (v) return v;
+    var p = currentPalette();
+    return p ? p.id : '';
+  }
+
   /* ------------------------------------------------------- 控件读写与同步 */
 
   function methodOf() {
@@ -2819,12 +4311,56 @@ window.PINDOU_PALETTES = {
     return 'nearest';
   }
 
+  function cellSizeValue() {
+    return Math.round(clamp(num(ui.cellSize, DEFAULT_CELL_PX), MIN_CELL_PX, MAX_CELL_PX));
+  }
+
+  /* 格内显示三选：code（色号 A1）/ index（编号 1,2,3…）/ none */
+  function cellLabelOf() {
+    var v = ui.cellLabelMode ? String(ui.cellLabelMode.value) : 'code';
+    if (v !== 'index' && v !== 'none') v = 'code';
+    return v;
+  }
+
+  function labelKindName(label) {
+    if (label === 'index') return '编号（如 1、2、3）';
+    if (label === 'none') return '不显示';
+    return '色号（如 A1）';
+  }
+
+  /* 格内文字阈值：优先用渲染层自报的值（按模式分别缓存），没有就用实测兜底值 */
+  function labelMinPx() {
+    var label = cellLabelOf();
+    if (label === 'none') return 0;
+    var cached = state.labelMinPx[label];
+    if (typeof cached === 'number' && cached > 0) return cached;
+    return LABEL_MIN_FALLBACK[label] || 20;
+  }
+
+  function syncCellLabelHint() {
+    if (!ui.cellLabelHint) return;
+    var cell = cellSizeValue();
+    var label = cellLabelOf();
+    var min = labelMinPx();
+    var text;
+    if (label === 'none') {
+      text = '当前不显示格内文字（格子 ' + cell + 'px）。';
+    } else if (cell < min) {
+      text = '格子太小（' + cell + 'px），' + labelKindName(label) + '已隐藏：调到 ' + min + 'px 以上可见。';
+    } else {
+      text = '当前 ' + cell + 'px，格内显示' + labelKindName(label) + '。';
+    }
+    setText(ui.cellLabelHint, text);
+  }
+
   function syncLabels() {
     setText(ui.brightnessVal, signed(num(ui.brightness, 0)));
     setText(ui.contrastVal, signed(num(ui.contrast, 0)));
     setText(ui.saturationVal, signed(num(ui.saturation, 0)));
     setText(ui.ditherStrengthVal, Math.round(clamp(num(ui.ditherStrength, 30), 0, 100)) + '%');
-    setText(ui.cellSizeVal, Math.round(clamp(num(ui.cellSize, 12), 4, 28)) + 'px');
+    setText(ui.cellSizeVal, cellSizeValue() + 'px');
+    setText(ui.viewZoomVal, Math.round(state.viewZoom * 100) + '%');
+    syncCellLabelHint();
   }
 
   function signed(v) { return (v > 0 ? '+' : '') + v; }
@@ -2839,8 +4375,9 @@ window.PINDOU_PALETTES = {
   function syncMethodState() { syncEnabledState(); }
 
   function viewOpts() {
-    var cell = Math.round(clamp(num(ui.cellSize, 12), 4, 28));
-    var codes = !!(ui.showNumbers && ui.showNumbers.checked);
+    var cell = cellSizeValue();
+    var label = cellLabelOf();
+    var codes = (label !== 'none');
     var ruler = !!(ui.showRuler && ui.showRuler.checked);
     return {
       /* render.js 实际读取的键名 */
@@ -2848,12 +4385,58 @@ window.PINDOU_PALETTES = {
       showCodes: codes,
       showRuler: ruler,
       highlightLocked: true,
+      /* 冻结契约里的新增键名。cellLabel 必须显式给出：render.js 的兼容规则是
+         「只给 showCodes 不给 cellLabel」→ 退回画数字编号，那样用户要的 A1 就永远不出现。 */
+      cellLabel: label,
+      padMode: 'normal',
+      /* 预览必须 annotate:false —— 绝不能把用量清单画进预览画布！
+         一旦 annotate:true，画布高度会多出下方清单表格的高度，而 hitTestCell 是用
+         (canvas.height - gridH)/2 反推网格原点的：原点会整体下移约 tableH/2，点击落错格。
+         用量清单只出现在导出用的离屏画布上（exportViewOpts）。
+         不要为了「顺手在预览里也看看清单」把这里改成 true。 */
+      annotate: false,
       /* 契约文档中的键名：同义双写，兼容任一实现 */
       cellSize: cell,
       showNumbers: codes,
       showGrid: true,
       paletteId: state.pattern ? state.pattern.paletteId : (ui.paletteSelect ? ui.paletteSelect.value : '')
     };
+  }
+
+  /* 导出的 viewOpts：与预览完全解耦——格子像素 = 24 × 倍数，白边收紧，坐标刻度跟随第 7 组开关 */
+  function exportScaleValue() {
+    var v = Math.round(num(ui.exportScale, 2));
+    for (var i = 0; i < EXPORT_SCALES.length; i++) { if (EXPORT_SCALES[i] === v) return v; }
+    return 2;
+  }
+
+  function exportViewOpts(scale) {
+    var cell = EXPORT_BASE_CELL * scale;
+    var label = cellLabelOf();
+    return {
+      cellPx: cell,
+      cellSize: cell,
+      showCodes: (label !== 'none'),
+      cellLabel: label,
+      showRuler: !!(ui.showRuler && ui.showRuler.checked),
+      highlightLocked: true,
+      padMode: 'tight',
+      annotate: !!(ui.exportAnnotate && ui.exportAnnotate.checked),
+      showNumbers: (label !== 'none'),
+      showGrid: true,
+      paletteId: state.pattern ? state.pattern.paletteId : paletteIdForOpts()
+    };
+  }
+
+  function syncExportHint() {
+    if (!ui.exportHint) return;
+    var scale = exportScaleValue();
+    var cell = EXPORT_BASE_CELL * scale;
+    var tail = '导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随第 7 组的「显示坐标刻度」。';
+    var p = state.pattern;
+    if (!p) { setText(ui.exportHint, tail); return; }
+    setText(ui.exportHint, '当前设置：格子 ' + cell + 'px（24 × ' + scale + '），网格区约 '
+      + (p.w * cell) + ' × ' + (p.h * cell) + ' 像素 / ' + (p.w * p.h) + ' 格。' + tail);
   }
 
   function gridDims() {
@@ -2867,15 +4450,41 @@ window.PINDOU_PALETTES = {
     return clamp(Math.max(Math.ceil(w / BOARD_STEP), Math.ceil(h / BOARD_STEP)), 1, BOARD_MAX);
   }
 
+  /* 裁剪 / 旋转之后，宽高比必须按 SourceEdit 的结果画布算，否则裁剪过的图纸比例会不对。 */
+  function pixelSourceCanvas() {
+    if (!state.srcEdit || typeof state.srcEdit.getResultCanvas !== 'function') return null;
+    try {
+      var c = state.srcEdit.getResultCanvas();
+      if (c && Number(c.width) > 0 && Number(c.height) > 0) return c;
+    } catch (e) { /* 落到原图 */ }
+    return null;
+  }
+
+  function hasSource() { return !!state.source; }
+
   function sourceAspect() {
+    var c = pixelSourceCanvas();
+    if (c && Number(c.width) > 0 && Number(c.height) > 0) return Number(c.width) / Number(c.height);
     if (state.srcW > 0 && state.srcH > 0) return state.srcW / state.srcH;
     return 1;
+  }
+
+  function presetValueFor(w, h) {
+    if (w !== h) return 'custom';
+    if (w === 29 || w === 58 || w === 87 || w === 100 || w === 116) return String(w);
+    return 'custom';
+  }
+
+  function syncSizePresetValue() {
+    if (!ui.sizePreset) return;
+    var d = gridDims();
+    setVal(ui.sizePreset, presetValueFor(d.w, d.h));
   }
 
   function applyBoardsPreset() {
     var sel = ui.boardsSelect;
     if (!sel) return;
-    if (sel.value === 'custom') return;
+    if (sel.value === 'custom') { syncSizePresetValue(); return; }
     var limit = clamp(Math.round(num({ value: sel.value }, 1)) * BOARD_STEP, 1, MAX_DIM);
     var w, h;
     var lock = !!(ui.lockAspect && ui.lockAspect.checked);
@@ -2889,9 +4498,26 @@ window.PINDOU_PALETTES = {
     setVal(ui.gridW, w);
     setVal(ui.gridH, h);
     syncLabels();
+    syncSizePresetValue();
   }
 
-  /* 手动输入格数：夹到 1..87，按需同步另一边，并把拼板规格切到「自定义」 */
+  /* 尺寸预设：29 / 58 / 87 / 100 / 116，固定正方形（不受「保持原图宽高比」影响，因为档位名就是 W×H） */
+  function applySizePreset() {
+    var sel = ui.sizePreset;
+    if (!sel || sel.value === 'custom') return;
+    var n = clamp(Math.round(num({ value: sel.value }, 29)), 1, MAX_DIM);
+    setVal(ui.gridW, n);
+    setVal(ui.gridH, n);
+    if (ui.boardsSelect) {
+      var bs = (n === 116) ? '4' : (n === 87) ? '3' : (n === 58) ? '2' : (n === 29) ? '1' : 'custom';
+      setVal(ui.boardsSelect, bs);
+    }
+    syncLabels();
+    setStatus('已套用尺寸预设 ' + n + ' × ' + n + '（正方形）', 'info');
+    scheduleRegenerate(0);
+  }
+
+  /* 手动输入格数：夹到 1..116，按需同步另一边，并把拼板规格切到「自定义」 */
   function normalizeDims(which) {
     var dims = gridDims();
     var w = dims.w, h = dims.h;
@@ -2904,6 +4530,7 @@ window.PINDOU_PALETTES = {
     if (String(h) !== String(ui.gridH ? ui.gridH.value : h)) setVal(ui.gridH, h);
     if (ui.boardsSelect && ui.boardsSelect.value !== 'custom') setVal(ui.boardsSelect, 'custom');
     syncLabels();
+    syncSizePresetValue();
     return { w: w, h: h };
   }
 
@@ -2932,14 +4559,6 @@ window.PINDOU_PALETTES = {
       if (!state.touched.maxColors && typeof d.maxColors === 'number') maxColors = Math.round(clamp(d.maxColors, 2, 221));
     }
     return { enabled: enabled, maxColors: maxColors };
-  }
-
-  /* 色卡 id：select 的值优先，为空时回落到第一个色卡（某些环境下 select 不会自动选中第一项） */
-  function paletteIdForOpts() {
-    var v = ui.paletteSelect ? ui.paletteSelect.value : '';
-    if (v) return v;
-    var p = currentPalette();
-    return p ? p.id : '';
   }
 
   function buildOpts() {
@@ -3025,17 +4644,28 @@ window.PINDOU_PALETTES = {
 
   /* ------------------------------------------------------------- 生成流程 */
 
+  /* 像素源优先级：SourceEdit 的裁剪/旋转结果画布 → sourceCanvas 的 RGBA → 原图对象。
+     裁剪后必须用 getResultCanvas()，否则图纸会按未裁剪的原图比例生成。 */
+  function pixelSource() {
+    var c = pixelSourceCanvas();
+    if (c) return { canvas: c, w: Number(c.width), h: Number(c.height), edited: true };
+    if (state.srcCtx && state.pixW > 0) return { ctx: state.srcCtx, w: state.pixW, h: state.pixH, edited: false };
+    if (state.source) return { image: state.source, w: state.srcW, h: state.srcH, edited: false };
+    return null;
+  }
+
   function runPipeline(opts) {
     var P = win.Pipeline;
     if (!P) return null;
-    if (typeof P.generateFromRGBA === 'function' && state.srcCtx && state.pixW > 0) {
-      var img = state.srcCtx.getImageData(0, 0, state.pixW, state.pixH);
+    var ps = pixelSource();
+    if (!ps) return null;
+    if (ps.canvas && typeof P.generate === 'function') return P.generate(ps.canvas, opts);
+    if (typeof P.generateFromRGBA === 'function' && ps.ctx) {
+      var img = ps.ctx.getImageData(0, 0, ps.w, ps.h);
       var data = (img && img.data) ? img.data : img;
-      return P.generateFromRGBA(data, state.pixW, state.pixH, opts);
+      return P.generateFromRGBA(data, ps.w, ps.h, opts);
     }
-    if (typeof P.generate === 'function') {
-      return P.generate(state.source || ui.sourceCanvas, opts);
-    }
+    if (typeof P.generate === 'function') return P.generate(ps.image || state.source || ui.sourceCanvas, opts);
     return null;
   }
 
@@ -3080,12 +4710,17 @@ window.PINDOU_PALETTES = {
 
     state.pattern = pattern;
     state.viewOpts = viewOpts();
+    /* 重新生成 = 新的图纸生命周期：撤销栈里的旧快照尺寸/色表都可能对不上，整栈作废。
+       这也正合语义：撤销只覆盖改色与锁定，参数变更（会触发重算）不进历史。 */
+    state.history.length = 0;
 
     renderPattern();
     renderLegend();
     renderSummary();
-    syncRecolorColors(pattern);
+    syncRecolorPicker(pattern);
     updateLockInfo();
+    syncUndoButton();
+    syncExportHint();
     setElapsed(now() - t0);
 
     var stats = pattern.stats || {};
@@ -3140,6 +4775,76 @@ window.PINDOU_PALETTES = {
     p.stats.total = total;
     p.stats.usedColors = list.length;
     return p;
+  }
+
+  /* --------------------------------------------------------- 撤销（改色 / 锁定） */
+
+  /* 快照必须是深拷贝：cells 是 Uint16Array（slice 保留类型）、locked 是定型数组或普通数组、
+     colors 是对象数组（rgb 还可能是数组）。只存引用的话撤销会拿到「已经被改过的当前值」。 */
+  function cloneColors(list) {
+    var out = [];
+    var src = list || [];
+    for (var i = 0; i < src.length; i++) {
+      var c = src[i] || {};
+      out.push({
+        code: c.code,
+        hex: c.hex,
+        rgb: isArr(c.rgb) ? c.rgb.slice(0) : c.rgb,
+        group: c.group
+      });
+    }
+    return out;
+  }
+
+  function snapshotOf(p) {
+    if (!p || !p.cells) return null;
+    var cells = (typeof p.cells.slice === 'function') ? p.cells.slice(0) : null;
+    if (!cells) return null;
+    var locked = null;
+    if (p.locked && typeof p.locked.slice === 'function') locked = p.locked.slice(0);
+    return { w: p.w, h: p.h, cells: cells, locked: locked, colors: cloneColors(p.colors) };
+  }
+
+  function pushHistory() {
+    var snap = snapshotOf(state.pattern);
+    if (!snap) return false;
+    state.history.push(snap);
+    while (state.history.length > HISTORY_MAX) state.history.shift();
+    syncUndoButton();
+    return true;
+  }
+
+  function syncUndoButton() {
+    var n = state.history.length;
+    if (ui.btnUndo) {
+      ui.btnUndo.disabled = !(state.pattern && n > 0);
+      setText(ui.btnUndo, n > 0 ? ('撤销（' + n + '）') : '撤销');
+    }
+  }
+
+  function undo() {
+    var p = state.pattern;
+    if (!p) { setStatus('尚未生成图纸，没有可撤销的操作', 'warn'); return false; }
+    if (!state.history.length) { setStatus('没有可撤销的操作', 'warn'); return false; }
+    var snap = state.history.pop();
+    if (!snap || snap.w !== p.w || snap.h !== p.h || !snap.cells || snap.cells.length !== p.cells.length) {
+      state.history.length = 0;
+      syncUndoButton();
+      setStatus('图纸尺寸已变化，之前的操作无法撤销', 'warn');
+      return false;
+    }
+    p.cells = snap.cells;
+    if (snap.locked) p.locked = snap.locked;
+    p.colors = snap.colors;
+    recount(p);
+    renderPattern();
+    renderLegend();
+    renderSummary();
+    syncRecolorPicker(p);
+    updateLockInfo();
+    syncUndoButton();
+    setStatus('已撤销（剩余 ' + state.history.length + ' 步可撤销）', 'ok');
+    return true;
   }
 
   /* ------------------------------------------------------------- 改色模式 */
@@ -3202,11 +4907,15 @@ window.PINDOU_PALETTES = {
     var p = state.pattern;
     if (!p || !p.cells) return;
     if (idx < 0 || idx >= p.cells.length) return;
-    var ci = indexOfCode(p, code);
-    if (ci < 0) {
-      ci = insertColorNatural(p, code);
-      if (ci < 0) { setStatus('色号 ' + code + ' 不在当前色卡中，无法改色', 'warn'); return; }
+    var already = indexOfCode(p, code);
+    if (already < 0 && !findPaletteColor(p.paletteId, code)) {
+      setStatus('色号 ' + code + ' 不在当前色卡中，无法改色', 'warn');
+      return;
     }
+    pushHistory();                       /* 快照必须在改动之前取 */
+    var ci = already;
+    if (ci < 0) ci = insertColorNatural(p, code);
+    if (ci < 0) { state.history.pop(); syncUndoButton(); setStatus('色号 ' + code + ' 不在当前色卡中，无法改色', 'warn'); return; }
     p.cells[idx] = ci;
     if (p.locked) p.locked[idx] = lock ? 1 : 0;
     pruneUnusedColors(p);
@@ -3216,15 +4925,19 @@ window.PINDOU_PALETTES = {
     renderLegend();
     renderSummary();
     updateLockInfo();
-    var code = p.colors[finalCi] ? p.colors[finalCi].code : '?';
+    var doneCode = p.colors[finalCi] ? p.colors[finalCi].code : '?';
     setStatus('已改色：第 ' + (Math.floor(idx / p.w) + 1) + ' 行 第 ' + (idx % p.w + 1) + ' 列 → 色号 '
-      + code + '（图纸编号 ' + (finalCi + 1) + '）' + (lock ? '［已锁定，重新生成时保留］' : '［未锁定］'), 'ok');
+      + doneCode + '（图纸编号 ' + (finalCi + 1) + '）' + (lock ? '［已锁定，重新生成时保留］' : '［未锁定］'), 'ok');
   }
 
   /* 点击坐标 → 格子下标。
    * 优先使用 Render.hitTest(pattern, canvas, px, py, viewOpts)（若渲染模块提供）；
    * 否则按「四周对称留白」推断：render.js 的画布为 pad*2 + w*cellPx、(pad, pad) 处起画，
-   * 内置降级渲染器采用同样的对称留白，因此 (canvas 尺寸 - 网格尺寸) / 2 即为原点。 */
+   * 内置降级渲染器采用同样的对称留白，因此 (canvas 尺寸 - 网格尺寸) / 2 即为原点。
+   *
+   * 预览缩放（viewZoom）只改 canvas 的 CSS 宽高，不改 canvas.width；
+   * getBoundingClientRect() 量到的就是缩放后的 CSS 尺寸，所以 cv.width / rect.width 恰好是 1/zoom，
+   * 折算回来的就是真实的画布像素坐标 —— 无论怎么缩放，这里都不需要额外乘除 zoom。 */
   function hitTestCell(evt) {
     var p = state.pattern;
     var cv = ui.patternCanvas;
@@ -3243,7 +4956,7 @@ window.PINDOU_PALETTES = {
     }
 
     var v = state.viewOpts || {};
-    var cell = v.cellSize || v.cellPx || 12;
+    var cell = v.cellSize || v.cellPx || DEFAULT_CELL_PX;
     var gridW = p.w * cell, gridH = p.h * cell;
     var offX = (cv.width > gridW) ? Math.floor((cv.width - gridW) / 2) : 0;
     var offY = (cv.height > gridH) ? Math.floor((cv.height - gridH) / 2) : 0;
@@ -3260,14 +4973,17 @@ window.PINDOU_PALETTES = {
     var idx = hitTestCell(evt);
     if (idx < 0) { setStatus('点击位置不在图纸网格内（可调大「格子像素大小」后重试）', 'warn'); return; }
     if (evt && (evt.altKey || evt.shiftKey)) {
-      if (p.locked) p.locked[idx] = p.locked[idx] ? 0 : 1;
+      if (p.locked) {
+        pushHistory();
+        p.locked[idx] = p.locked[idx] ? 0 : 1;
+      }
       renderPattern();
       updateLockInfo();
       setStatus(p.locked && p.locked[idx] ? '已锁定该格' : '已解锁该格', 'ok');
       return;
     }
-    var code = ui.recolorColor ? ui.recolorColor.value : '';
-    if (!code) { setStatus('请先在上方「目标色号」里选一个色号', 'warn'); return; }
+    var code = recolorCode();
+    if (!code) { setStatus('请先在上方色板里选一个目标色号', 'warn'); return; }
     var lock = !(ui.lockToggle && !ui.lockToggle.checked);
     applyRecolor(idx, code, lock);
   }
@@ -3275,6 +4991,10 @@ window.PINDOU_PALETTES = {
   function unlockAll() {
     var p = state.pattern;
     if (!p || !p.locked) { setStatus('当前没有可解锁的图纸', 'warn'); return; }
+    var any = false;
+    for (var k = 0; k < p.locked.length; k++) { if (p.locked[k]) { any = true; break; } }
+    if (!any) { setStatus('当前没有锁定的格子', 'warn'); return; }
+    pushHistory();
     for (var i = 0; i < p.locked.length; i++) p.locked[i] = 0;
     renderPattern();
     updateLockInfo();
@@ -3296,62 +5016,280 @@ window.PINDOU_PALETTES = {
     setText(ui.lockInfo, text);
   }
 
-  function syncRecolorColors(pattern) {
-    var sel = ui.recolorColor;
-    if (!sel) return;
-    var prev = sel.value;
-    var pid = pattern ? pattern.paletteId : (ui.paletteSelect ? ui.paletteSelect.value : '');
-    var pal = paletteById(pid)
-      || paletteById(ui.paletteSelect ? ui.paletteSelect.value : '')
-      || paletteEntries()[0] || null;
-    var list = (pal && pal.colors && pal.colors.length) ? pal.colors
-      : ((pattern && pattern.colors) ? pattern.colors : []);
-    if (!list.length) {
-      sel.innerHTML = '<option value="">（色卡数据未加载）</option>';
-      return;
+  /* ------------------------------------------------------- 选色器（色板网格） */
+
+  function normQuery(s) {
+    var q = String(s === null || s === undefined ? '' : s).trim().toLowerCase();
+    if (q.charAt(0) === '#') q = q.slice(1);
+    return q;
+  }
+
+  function swatchMatch(c, q) {
+    if (!q) return true;
+    var code = String(c && c.code ? c.code : '').toLowerCase();
+    var hex = String(c && c.hex ? c.hex : '').toLowerCase();
+    if (hex.charAt(0) === '#') hex = hex.slice(1);
+    if (code === q || hex === q) return true;
+    if (code.indexOf(q) === 0) return true;
+    if (hex.indexOf(q) === 0) return true;
+    return false;
+  }
+
+  function swatchHTML(c, selected, extraClass, count) {
+    var hex = (c && c.hex) ? c.hex : '#000000';
+    var code = (c && c.code) ? String(c.code) : '';
+    var tip = code + ' · ' + hex + (count ? (' · ' + count + ' 颗') : '');
+    return '<button type="button" class="sw' + (extraClass ? (' ' + extraClass) : '') + (selected ? ' sw-on' : '')
+      + '" data-code="' + esc(code) + '" title="' + esc(tip) + '" aria-label="' + esc(tip) + '"'
+      + ' style="background:' + esc(hex) + ';color:' + contrastText(c && c.rgb) + '">'
+      + '<span class="sw-code">' + esc(code) + '</span></button>';
+  }
+
+  /* 本图用到的色号：直接从 pattern.counts 取（recount 已按颗数降序排好），常用的排在前面 */
+  function usedColorList(p) {
+    var out = [];
+    if (!p) return out;
+    var list = p.counts;
+    var i;
+    if (list && list.length) {
+      for (i = 0; i < list.length; i++) out.push({ code: list[i].code, hex: list[i].hex, rgb: list[i].rgb, count: list[i].count });
+      return out;
     }
-    var groups = {}, order = [];
-    for (var j = 0; j < list.length; j++) {
-      var c = list[j];
+    for (i = 0; i < (p.colors || []).length; i++) {
+      out.push({ code: p.colors[i].code, hex: p.colors[i].hex, rgb: p.colors[i].rgb });
+    }
+    return out;
+  }
+
+  /* 整张色卡：按 group（A–H/M）分组，保持色表自然序 */
+  function allColorGroups() {
+    var pal = paletteById(paletteIdForOpts()) || currentPalette();
+    var groups = [], index = {};
+    var colors = (pal && pal.colors) ? pal.colors : [];
+    for (var i = 0; i < colors.length; i++) {
+      var c = colors[i];
       if (!c) continue;
-      var g = c.group ? String(c.group) : '色号';
-      if (!groups[g]) { groups[g] = []; order.push(g); }
-      groups[g].push(c);
+      var g = c.group ? String(c.group) : '其他';
+      if (!index[g]) { index[g] = { label: g, items: [] }; groups.push(index[g]); }
+      index[g].items.push(c);
     }
-    var html = '';
-    for (var k = 0; k < order.length; k++) {
-      var arr = groups[order[k]];
-      html += '<optgroup label="' + esc(order[k]) + '">';
-      for (var m = 0; m < arr.length; m++) {
-        html += '<option value="' + esc(arr[m].code) + '">' + esc(arr[m].code + ' · ' + (arr[m].hex || '')) + '</option>';
+    return groups;
+  }
+
+  function pickerGroups() {
+    var q = normQuery(state.recolor.search);
+    var scope = (state.recolor.scope === PICKER_SCOPE_ALL) ? PICKER_SCOPE_ALL : PICKER_SCOPE_USED;
+    var out = [], i, j;
+    if (scope === PICKER_SCOPE_ALL) {
+      var gs = allColorGroups();
+      for (i = 0; i < gs.length; i++) {
+        var items = [];
+        for (j = 0; j < gs[i].items.length; j++) {
+          if (swatchMatch(gs[i].items[j], q)) items.push(gs[i].items[j]);
+        }
+        out.push({ label: gs[i].label, items: items, key: 'g' + i });
       }
-      html += '</optgroup>';
+      return out;
     }
-    sel.innerHTML = html;
-    if (prev && hasOptionValue(sel, prev)) sel.value = prev;
-    else if (pattern && pattern.counts && pattern.counts.length) sel.value = pattern.counts[0].code;
-    else if (sel.options && sel.options.length) sel.value = sel.options[0].value;
+    var flat = [];
+    var used = usedColorList(state.pattern);
+    for (i = 0; i < used.length; i++) { if (swatchMatch(used[i], q)) flat.push(used[i]); }
+    out.push({ label: '', items: flat, key: 'used' });
+    return out;
+  }
+
+  function pickerEmptyText(total, q, scope) {
+    if (total > 0) return '';
+    if (q) return '无匹配';
+    if (scope === PICKER_SCOPE_ALL) return '色卡数据未加载';
+    if (!state.pattern) return '尚未生成图纸：生成后这里会按颗数列出本图用到的色号';
+    return '本图暂无已用色号';
+  }
+
+  function renderRecolorGrid() {
+    var box = ui.recolorGrid;
+    if (!box) return;
+    var scope = (state.recolor.scope === PICKER_SCOPE_ALL) ? PICKER_SCOPE_ALL : PICKER_SCOPE_USED;
+    var q = normQuery(state.recolor.search);
+    var groups = pickerGroups();
+    var html = '', total = 0, i, j;
+    for (i = 0; i < groups.length; i++) {
+      var items = groups[i].items;
+      if (!items.length) continue;
+      html += '<div class="sw-group">';
+      if (groups[i].label) html += '<div class="sw-group-label">' + esc(groups[i].label) + '</div>';
+      html += '<div class="sw-grid">';
+      for (j = 0; j < items.length; j++) {
+        total++;
+        html += swatchHTML(items[j], String(state.recolor.selected) === String(items[j].code), '', items[j].count);
+      }
+      html += '</div></div>';
+    }
+    box.innerHTML = html;
+    if (ui.recolorEmpty) {
+      var msg = pickerEmptyText(total, q, scope);
+      ui.recolorEmpty.hidden = !msg;
+      if (msg) setText(ui.recolorEmpty, msg);
+    }
+  }
+
+  /* 只改高亮、不重建 DOM：重建 innerHTML 会把网格的滚动位置清零（选一次颜色就跳回顶部）。 */
+  function syncSwatchHighlight() {
+    var box = ui.recolorGrid;
+    if (!box || typeof box.querySelectorAll !== 'function') return;
+    var nodes = box.querySelectorAll('button[data-code]');
+    if (!nodes || typeof nodes.length !== 'number') return;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var on2 = String(n.getAttribute ? n.getAttribute('data-code') : '') === String(state.recolor.selected);
+      toggleCls(n, 'sw-on', on2);
+    }
+  }
+
+  function readRecentColors() {
+    var raw = storageGet(RECENT_KEY);
+    if (!raw) return [];
+    var arr = null;
+    try { arr = JSON.parse(raw); } catch (e) { return []; }
+    if (!isArr(arr)) return [];
+    var out = [];
+    for (var i = 0; i < arr.length && out.length < RECENT_MAX; i++) {
+      var c = String(arr[i] === null || arr[i] === undefined ? '' : arr[i]);
+      if (c && out.indexOf(c) < 0) out.push(c);
+    }
+    return out;
+  }
+
+  function noteRecentColor(code) {
+    if (!code) return;
+    var list = state.recolor.recent;
+    var i = list.indexOf(code);
+    if (i >= 0) list.splice(i, 1);
+    list.unshift(code);
+    if (list.length > RECENT_MAX) list.length = RECENT_MAX;
+    storageSet(RECENT_KEY, JSON.stringify(list));   /* file:// 下可能失败，静默降级为仅本次会话有效 */
+    renderRecentColors();
+  }
+
+  function renderRecentColors() {
+    var box = ui.recolorRecentRow;
+    if (!box) return;
+    var list = state.recolor.recent;
+    var html = '', used = 0;
+    for (var i = 0; i < list.length; i++) {
+      var c = findPaletteColor(paletteIdForOpts(), list[i]);
+      if (!c) continue;
+      used++;
+      html += swatchHTML({ code: c.code, hex: c.hex, rgb: c.rgb }, String(state.recolor.selected) === String(c.code), 'sw-sm', 0);
+    }
+    if (!used) html = '<span class="muted">选过的色号会出现在这里</span>';
+    box.innerHTML = html;
+  }
+
+  function syncRecolorCurrent() {
+    if (!ui.recolorCurrent) return;
+    var code = state.recolor.selected;
+    if (!code) { setText(ui.recolorCurrent, '当前目标色号：未选择'); return; }
+    var c = findPaletteColor(paletteIdForOpts(), code);
+    setText(ui.recolorCurrent, '当前目标色号：' + code + (c && c.hex ? (' · ' + c.hex) : ''));
+  }
+
+  function recolorCode() {
+    var code = state.recolor.selected;
+    if (code && findPaletteColor(paletteIdForOpts(), code)) return code;
+    var p = state.pattern;
+    if (p && p.counts && p.counts.length) return p.counts[0].code;
+    if (p && p.colors && p.colors.length) return p.colors[0].code;
+    var pal = currentPalette();
+    if (pal && pal.colors && pal.colors.length) return pal.colors[0].code;
+    return code || '';
+  }
+
+  function selectRecolorCode(code) {
+    if (!code) return;
+    state.recolor.selected = String(code);
+    noteRecentColor(state.recolor.selected);
+    syncRecolorCurrent();
+    syncSwatchHighlight();
+    renderRecentColors();
+    var c = findPaletteColor(paletteIdForOpts(), state.recolor.selected);
+    setStatus('目标色号：' + state.recolor.selected + (c && c.hex ? ('（' + c.hex + '）') : ''), 'info');
+  }
+
+  /* 重建色板网格。关键约束：不能把用户当前选中的色号重置掉。 */
+  function syncRecolorPicker(pattern) {
+    if (state.recolor.scope !== PICKER_SCOPE_ALL) state.recolor.scope = PICKER_SCOPE_USED;
+    if (ui.recolorScope) setVal(ui.recolorScope, state.recolor.scope);
+    if (ui.recolorSearch && String(ui.recolorSearch.value || '') !== state.recolor.search) {
+      setVal(ui.recolorSearch, state.recolor.search);
+    }
+    var keep = state.recolor.selected;
+    if (!keep || !findPaletteColor(paletteIdForOpts(), keep)) {
+      state.recolor.selected = (pattern && pattern.counts && pattern.counts.length) ? pattern.counts[0].code : '';
+    }
+    renderRecolorGrid();
+    renderRecentColors();
+    syncRecolorCurrent();
+  }
+
+  function onRecolorPick(evt) {
+    var t = evt && evt.target;
+    var root = evt && evt.currentTarget;
+    while (t && t !== root) {
+      if (t.getAttribute && t.getAttribute('data-code')) { selectRecolorCode(t.getAttribute('data-code')); return; }
+      t = t.parentNode;
+    }
   }
 
   /* --------------------------------------------------------------- 渲染区 */
+
+  function renderFailReason(res) {
+    var reason = (res && res.reason) ? String(res.reason) : '';
+    if (reason === 'too-large') {
+      var need = res && res.needPixels, max = res && res.maxPixels;
+      var extra = (need && max) ? ('（需要约 ' + fmtPx(need) + ' 像素，浏览器上限约 ' + fmtPx(max) + '）') : '';
+      return '格子像素太大，画布超出浏览器上限' + extra;
+    }
+    return reason || '渲染模块拒绝了本次绘制';
+  }
+
+  /* 渲染层自报的格内文字阈值：按当前模式缓存，供 #cellLabelHint 用真实数字提示用户 */
+  function recordLabelMinPx(res) {
+    if (!res || typeof res.labelMinPx !== 'number' || !(res.labelMinPx > 0)) return;
+    var label = cellLabelOf();
+    if (label === 'none') return;
+    state.labelMinPx[label] = Math.round(res.labelMinPx);
+    syncCellLabelHint();
+  }
 
   function renderPattern() {
     var cv = ui.patternCanvas;
     var p = state.pattern;
     setCanvasPlaceholders();
-    if (!cv || !p) return;
+    if (!cv || !p) { applyViewZoom(); return; }
     state.viewOpts = viewOpts();
     var v = state.viewOpts;
     var R = win.Render;
     var fell = false;
     if (R && typeof R.drawPattern === 'function') {
+      var res = null;
       try {
-        R.drawPattern(p, cv, v);
+        res = R.drawPattern(p, cv, v);
       } catch (e) {
         fell = true;
         fallbackDrawPattern(cv, p, v);
         setStatus('渲染失败，已改用内置简化渲染：' + errText(e), 'warn');
       }
+      /* 新契约：ok === false 时画布可能没被画出来。此时不要用内置渲染器硬画
+         （内置渲染器同样会撑爆画布），保留旧内容并给出明确提示。 */
+      if (!fell && res && res.ok === false) {
+        state.renderTooLarge = true;
+        setStatus('预览无法渲染：' + renderFailReason(res) + '（请调小第 7 组的「格子像素大小」）', 'warn');
+        applyViewZoom();
+        return;
+      }
+      state.renderTooLarge = false;
+      recordLabelMinPx(res);
     } else {
       fell = true;
       fallbackDrawPattern(cv, p, v);
@@ -3359,27 +5297,44 @@ window.PINDOU_PALETTES = {
     if (!fell && (!cv.width || cv.width < 2)) { fell = true; fallbackDrawPattern(cv, p, v); }
     state.renderFallback = fell;
     if (hasClassList(cv)) {
-      if (ui.recolorMode && ui.recolorMode.checked) cv.classList.add('editing');
-      else cv.classList.remove('editing');
+      toggleCls(cv, 'editing', !!(ui.recolorMode && ui.recolorMode.checked));
     }
+    applyViewZoom();
   }
 
   function contrastText(rgb) {
     var r = 0, g = 0, b = 0;
-    if (Object.prototype.toString.call(rgb) === '[object Array]') { r = rgb[0]; g = rgb[1]; b = rgb[2]; }
+    if (isArr(rgb)) { r = rgb[0]; g = rgb[1]; b = rgb[2]; }
     else if (rgb && typeof rgb === 'object') { r = rgb.r; g = rgb.g; b = rgb.b; }
     r = Number(r) || 0; g = Number(g) || 0; b = Number(b) || 0;
     return ((0.299 * r + 0.587 * g + 0.114 * b) > 150) ? '#1b1b1b' : '#f5f5f5';
   }
 
   /* 内置降级渲染：render.js 缺失或抛错时仍能看到图纸（不依赖任何外部模块）。
-     画布布局与 render.js 一致：四周对称留白 pad，网格从 (pad, pad) 起画，
-     这样 hitTestCell 的「对称余量」推断对两种渲染器都精确成立。 */
+     预览布局与 render.js 一致：四周对称留白 pad，网格从 (pad, pad) 起画，
+     这样 hitTestCell 的「对称余量」推断对两种渲染器都精确成立。
+     导出（padMode:'tight' + annotate）会额外留出清单栏，但那只走导出路径，与命中判定无关。 */
+  function fallbackPad(v, cell, p) {
+    if (v.showRuler) return RULER_PAD;
+    if (v.padMode !== 'tight') return RULER_PAD;
+    return Math.max(2, Math.round(Math.max(p.w, p.h) * cell * 0.04));   /* 白边收到约 4% */
+  }
+
   function fallbackDrawPattern(cv, p, v) {
     if (!cv || typeof cv.getContext !== 'function' || !p || !p.cells) return;
-    var cell = v.cellSize || v.cellPx || 12;
-    var pad = RULER_PAD;
-    cv.width = pad * 2 + p.w * cell;
+    var cell = v.cellSize || v.cellPx || DEFAULT_CELL_PX;
+    var pad = fallbackPad(v, cell, p);
+    var label = v.cellLabel || (v.showNumbers === false ? 'none' : 'code');
+    if (label !== 'none') state.labelMinPx[label] = LABEL_MIN_PX;   /* 内置渲染器自己的阈值，提示文案才准 */
+    var list = v.annotate ? listEntries(p) : null;
+    var rowH = Math.max(14, Math.min(22, Math.round(cell * 1.1)));
+    var listFont = Math.max(11, Math.min(18, Math.round(cell * 0.9)));
+    var listW = list ? clamp(Math.round(cell * 10), 180, 420) : 0;
+    var perCol = list ? Math.max(1, Math.floor((pad * 2 + p.h * cell - 26) / rowH)) : 0;
+    var cols = list ? Math.min(3, Math.max(1, Math.ceil((list.length + 1) / perCol))) : 0;
+    if (list) listW = Math.max(listW, cols * (listFont * 12));
+
+    cv.width = pad * 2 + p.w * cell + listW;
     cv.height = pad * 2 + p.h * cell;
     var ctx = cv.getContext('2d');
     if (!ctx) return;
@@ -3401,14 +5356,14 @@ window.PINDOU_PALETTES = {
           ctx.lineWidth = 1;
           ctx.strokeRect(dx + 0.5, dy + 0.5, cell - 1, cell - 1);
         }
-        if (v.showNumbers && cell >= 9) {
-          /* 与 render.js 一致：图纸上的编号 = colors 下标 + 1（不是色号字符串），
-             阈值也沿用它的 MIN_CODE_PX = 9；墨色按其底色明暗取反以保证可读 */
+        if (label !== 'none' && cell >= LABEL_MIN_PX) {
+          /* 与 render.js 一致：'code' 画色号字符串，'index' 画 colors 下标 + 1，
+             阈值沿用它的 MIN_CODE_PX；墨色按其底色明暗取反以保证可读 */
           ctx.fillStyle = contrastText(col.rgb);
           ctx.font = Math.max(7, Math.floor(cell * 0.42)) + 'px sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(String(ci + 1), dx + cell / 2, dy + cell / 2 + 0.5);
+          ctx.fillText(label === 'index' ? String(ci + 1) : String(col.code), dx + cell / 2, dy + cell / 2 + 0.5);
         }
       }
     }
@@ -3442,6 +5397,34 @@ window.PINDOU_PALETTES = {
         if (cell < 12 && (cy + 1) % 5 !== 0) continue;
         ctx.fillText(String(cy + 1), pad - 3, pad + cy * cell + cell / 2);
       }
+    }
+
+    if (list) drawUsageList(ctx, list, pad * 2 + p.w * cell, pad, rowH, listFont, perCol, cols);
+  }
+
+  function listEntries(p) {
+    var out = [];
+    var list = (p && p.counts) ? p.counts : [];
+    for (var i = 0; i < list.length; i++) {
+      out.push(list[i].code + ' ' + list[i].hex + ' × ' + list[i].count);
+    }
+    return out;
+  }
+
+  function drawUsageList(ctx, list, x0, y0, rowH, font, perCol, cols) {
+    ctx.fillStyle = '#2B3240';
+    ctx.font = 'bold ' + font + 'px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('色号用量清单（共 ' + list.length + ' 色）', x0, y0);
+    ctx.font = font + 'px sans-serif';
+    var shown = Math.min(list.length, perCol * cols);
+    for (var i = 0; i < shown; i++) {
+      var c = Math.floor(i / perCol), r = i % perCol;
+      ctx.fillText(String(i + 1) + '. ' + list[i], x0 + c * (font * 12), y0 + 26 + r * rowH);
+    }
+    if (shown < list.length) {
+      ctx.fillText('…还有 ' + (list.length - shown) + ' 色（见 CSV 清单）', x0, y0 + 26 + perCol * rowH);
     }
   }
 
@@ -3499,6 +5482,83 @@ window.PINDOU_PALETTES = {
     html += summaryRow('图纸格数', p.w + ' × ' + p.h);
     html += summaryRow('色卡', p.paletteId || '—');
     ui.summaryBox.innerHTML = html;
+  }
+
+  /* ----------------------------------------------------------- 预览缩放 */
+
+  /* 预览缩放只改 CSS 尺寸：canvas.width/height（真实像素）保持不变，
+     因此导出分辨率与点击命中判定都不受缩放影响。
+     必须显式覆盖 .pattern-canvas 的 max-width:100%（否则显式宽度会被样式表压回去），
+     height 也要显式给（覆盖样式表里的 height:auto）。 */
+  function applyViewZoom(anchor) {
+    var cv = ui.patternCanvas;
+    var scroll = ui.canvasScroll;
+    if (ui.viewZoom) setVal(ui.viewZoom, state.viewZoom);
+    setText(ui.viewZoomVal, Math.round(state.viewZoom * 100) + '%');
+    if (!cv || !cv.width || !cv.height) return;
+    var w = Math.max(1, Math.round(cv.width * state.viewZoom));
+    var h = Math.max(1, Math.round(cv.height * state.viewZoom));
+    var prev = state.viewZoomApplied > 0 ? state.viewZoomApplied : state.viewZoom;
+    var kx = (state.viewZoom / prev), ky = kx;
+    if (cv.style) {
+      cv.style.maxWidth = 'none';
+      cv.style.width = w + 'px';
+      cv.style.height = h + 'px';
+    }
+    if (scroll && anchor && typeof scroll.getBoundingClientRect === 'function') {
+      try {
+        var rect = scroll.getBoundingClientRect();
+        var rx = Number(anchor.clientX) - Number(rect.left);
+        var ry = Number(anchor.clientY) - Number(rect.top);
+        var cx = Number(scroll.scrollLeft || 0) + rx;
+        var cy = Number(scroll.scrollTop || 0) + ry;
+        scroll.scrollLeft = Math.max(0, Math.round(cx * kx - rx));
+        scroll.scrollTop = Math.max(0, Math.round(cy * ky - ry));
+      } catch (e) { /* 无法调整滚动位置时忽略：缩放本身已经生效 */ }
+    }
+    state.viewZoomApplied = state.viewZoom;
+  }
+
+  function setViewZoom(z, anchor) {
+    var next = Number(z);
+    if (!isFinite(next) || next <= 0) next = ZOOM_DEFAULT;
+    state.viewZoom = Math.round(clamp(next, ZOOM_MIN, ZOOM_MAX) * 100) / 100;
+    applyViewZoom(anchor);
+  }
+
+  /* anchor 必须一路透传：滚轮缩放要停在光标下的那个内容点上（按钮缩放不需要锚点） */
+  function zoomBy(factor, anchor) { setViewZoom(state.viewZoom * factor, anchor); }
+
+  function fitViewZoom() {
+    var cv = ui.patternCanvas, scroll = ui.canvasScroll;
+    if (!cv || !cv.width || !cv.height) { setStatus('尚未生成图纸，无法适应窗口', 'warn'); return; }
+    if (!state.pattern) { setStatus('尚未生成图纸，无法适应窗口', 'warn'); return; }
+    var cw = Number(scroll && scroll.clientWidth) || 0;
+    var ch = Number(scroll && scroll.clientHeight) || 0;
+    if (!cw || !ch) { setStatus('当前环境无法测量预览区尺寸', 'warn'); return; }
+    var availW = Math.max(1, cw - 20), availH = Math.max(1, ch - 20);
+    setViewZoom(Math.min(availW / cv.width, availH / cv.height));
+    setStatus('已适应窗口：' + Math.round(state.viewZoom * 100) + '%', 'info');
+  }
+
+  /* 滚轮缩放：以光标为锚点（applyViewZoom 里按缩放比例修正 scrollLeft/scrollTop）。
+     wheel 需要 {passive:false} 才能 preventDefault 阻止页面滚动。 */
+  function onCanvasWheel(e) {
+    if (!ui.patternCanvas || !state.pattern) return;
+    var d = e ? Number(e.deltaY) : 0;
+    if (!d) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    zoomBy(d < 0 ? ZOOM_STEP_FACTOR : (1 / ZOOM_STEP_FACTOR), e);
+  }
+
+  function bindWheel() {
+    var cv = ui.patternCanvas;
+    if (!cv || typeof cv.addEventListener !== 'function') return;
+    try {
+      cv.addEventListener('wheel', onCanvasWheel, { passive: false });
+    } catch (e) {
+      cv.addEventListener('wheel', onCanvasWheel);
+    }
   }
 
   /* ------------------------------------------------------------- 文件输出 */
@@ -3563,9 +5623,43 @@ window.PINDOU_PALETTES = {
     }
   }
 
+  /* 导出图纸：绝不复用预览画布。离屏 canvas + cellPx = 24 × 倍数 重绘，
+     预览缩放（CSS 尺寸）与导出分辨率彻底解耦。 */
   function exportPng() {
-    if (!state.pattern) { setStatus('请先生成图纸', 'warn'); return; }
-    exportPngOf(ui.patternCanvas, '拼豆图纸.png', '已导出图纸 PNG');
+    var p = state.pattern;
+    var R = win.Render;
+    if (!p) { setStatus('请先生成图纸', 'warn'); return; }
+    if (!R || typeof R.drawPattern !== 'function') { setStatus('核心模块未加载：无法导出图纸 PNG', 'err'); return; }
+    if (!doc || typeof doc.createElement !== 'function') { setStatus('当前环境不支持导出', 'err'); return; }
+    var scale = exportScaleValue();
+    var opts = exportViewOpts(scale);
+    var off = null, ret = null, failure = '';
+    try {
+      off = doc.createElement('canvas');
+      ret = R.drawPattern(p, off, opts);
+    } catch (e) { failure = errText(e); }
+    if (failure) { setStatus('导出图纸失败：' + failure, 'err'); return; }
+
+    if (ret && ret.ok === false) {
+      /* 契约：ok:false 时先看 reason。too-large 必须给提示且不产生下载。 */
+      var why = renderFailReason(ret);
+      if (ret.reason === 'too-large') {
+        setStatus('这个倍数太大，浏览器画不出来，请降低倍数：' + why, 'err');
+      } else {
+        setStatus('导出图纸失败：' + why, 'err');
+      }
+      return;
+    }
+
+    var msg = '已导出图纸 PNG（' + scale + '× · 格子 ' + opts.cellPx + 'px · ' + p.w + ' × ' + p.h + ' 格）';
+    if (ret && ret.labelsSuppressed === true) {
+      msg += '；格子太小，色号没画出来，把倍数调高或格子调大';
+    }
+    var expected = p.w * opts.cellPx;
+    if (Number(off.width) > 0 && Number(off.width) < expected) {
+      msg += '；注意：渲染模块把格子像素夹到了 ' + Math.floor(off.width / Math.max(1, p.w)) + 'px，实际分辨率低于所选倍数';
+    }
+    exportPngOf(off, '拼豆图纸.png', msg);
   }
 
   function exportCompare() {
@@ -3583,6 +5677,123 @@ window.PINDOU_PALETTES = {
     } catch (e) {
       setStatus('导出对照图失败：' + errText(e), 'err');
     }
+  }
+
+  /* ----------------------------------------------------------- 原图调整（SourceEdit 对接） */
+
+  function sourceEditApi() {
+    return (win.SourceEdit && typeof win.SourceEdit.mount === 'function') ? win.SourceEdit : null;
+  }
+
+  function mountSourceEdit() {
+    var S = sourceEditApi();
+    var hint = '原图调整模块（window.SourceEdit）未加载：裁剪 / 旋转 / 翻转不可用，将直接使用原图生成图纸。';
+    if (!S) { setText(ui.srceditHint, hint); syncSrcEditButtons(); return; }
+    if (!ui.sourceCanvas || typeof ui.sourceCanvas.getContext !== 'function') {
+      setText(ui.srceditHint, '缺少原图画布 #sourceCanvas：原图调整不可用，将直接使用原图。');
+      syncSrcEditButtons();
+      return;
+    }
+    try {
+      state.srcEdit = S.mount(ui.sourceCanvas, { onChange: onSrcEditChange });
+      if (!state.srcEdit || typeof state.srcEdit !== 'object') state.srcEdit = null;
+    } catch (e) {
+      state.srcEdit = null;
+      setText(ui.srceditHint, '原图调整模块初始化失败（' + errText(e) + '）：将直接使用原图。');
+    }
+    syncSrcEditButtons();
+    syncSrcEditHint();
+  }
+
+  function syncSrcEditButtons() {
+    var api = state.srcEdit;
+    var locked = !state.srcEdit;
+    toggleCls(ui.sourceCanvas, 'crop-mode', !locked && !!state.srcCropMode);
+    if (locked) return;
+    /* CropMode 不在冻结契约里：有 setCropMode 就透传，没有就只保留 UI 状态（拖拽仍以模块自身实现为准） */
+    if (api && typeof api.setCropMode === 'function') {
+      try { api.setCropMode(!!state.srcCropMode); } catch (e) { /* 忽略 */ }
+    }
+    if (api && typeof api.setAspect === 'function') {
+      try { api.setAspect((ui.srcAspectSquare && ui.srcAspectSquare.checked) ? 'square' : 'free'); } catch (e) { /* 忽略 */ }
+    }
+  }
+
+  function syncSrcEditHint() {
+    if (!ui.srceditHint) return;
+    if (!state.srcEdit) return;   /* 降级文案已在 mountSourceEdit 里写好，不要覆盖 */
+    var st = null;
+    try { st = (typeof state.srcEdit.getState === 'function') ? state.srcEdit.getState() : null; } catch (e) { st = null; }
+    var parts = [];
+    if (st && typeof st === 'object') {
+      parts.push('旋转 ' + (Number(st.rotation) || 0) + '°');
+      parts.push('水平翻转 ' + (st.flipH ? '开' : '关') + ' · 垂直翻转 ' + (st.flipV ? '开' : '关'));
+      parts.push(st.hasCrop || st.crop ? '已裁剪' : '未裁剪');
+      parts.push('裁剪框 ' + (st.aspect === 'square' ? '正方形' : '自由'));
+    } else {
+      parts.push('状态未知');
+    }
+    setText(ui.srceditHint, '原图调整：' + parts.join(' · ') + '。生成图纸时使用裁剪旋转后的像素。');
+  }
+
+  function onSrcEditChange() {
+    syncSrcEditHint();
+    if (state.srcW > 0) {
+      if (ui.lockAspect && ui.lockAspect.checked) applyBoardsPreset();
+      else normalizeDims('gridW');
+    }
+    scheduleRegenerate(DEBOUNCE_MS);
+  }
+
+  /* SourceEdit 的方法都返回 boolean：真正改变了状态才是 true。
+     没载入图片、参数被拒时返回 false —— 这时绝不能报「已右转 90°」这种假成功。 */
+  function srcEditCall(method, arg, okMsg, failMsg) {
+    var api = state.srcEdit;
+    if (!api || typeof api[method] !== 'function') {
+      setStatus('原图调整模块未加载，' + okMsg + '不可用', 'warn');
+      return;
+    }
+    var res = true;
+    try {
+      res = api[method](arg);
+    } catch (e) {
+      setStatus('原图调整失败：' + errText(e), 'err');
+      return;
+    }
+    syncSrcEditHint();
+    if (res === false) {
+      var why = '';
+      if (!state.source) {
+        why = '请先载入图片';
+      } else if (typeof api.getLastError === 'function') {
+        try { why = String(api.getLastError() || ''); } catch (e) { why = ''; }
+      }
+      setStatus((failMsg || (okMsg + '未生效')) + (why ? ('：' + why) : ''), 'warn');
+      return;
+    }
+    setStatus(okMsg, 'ok');
+    if (state.source) {
+      if (ui.lockAspect && ui.lockAspect.checked) applyBoardsPreset();
+      else normalizeDims('gridW');
+      scheduleRegenerate(0);
+    }
+  }
+
+  function onSrcCropModeChange() {
+    state.srcCropMode = !!(ui.srcCropMode && ui.srcCropMode.checked);
+    if (!state.srcEdit) {
+      state.srcCropMode = false;
+      setChecked(ui.srcCropMode, false);
+      syncSrcEditButtons();
+      setStatus('原图调整模块未加载，裁剪模式不可用', 'warn');
+      return;
+    }
+    syncSrcEditButtons();
+    /* 如实描述：冻结契约里没有「开关裁剪交互」的 API，SourceEdit 的裁剪框在载图后始终可拖拽，
+       这个复选框只是操作提示，不能宣称「关闭后拖不动」。 */
+    setStatus(state.srcCropMode
+      ? '裁剪模式：在原图画布上按住并拖拽，框选出要保留的区域'
+      : '裁剪模式已关闭（该模块的裁剪框始终可以用拖拽框选，此开关只作操作提示）', 'info');
   }
 
   /* ------------------------------------------------------------- 图片读入 */
@@ -3646,12 +5857,14 @@ window.PINDOU_PALETTES = {
     img.src = url;
   }
 
+  /* 原图缩放的本地副本：供 generateFromRGBA 取像素（SourceEdit 可用时改由它接管画布，这里直接跳过） */
   function drawSourceCanvas() {
     var cv = ui.sourceCanvas;
     var src = state.source;
     state.srcCtx = null;
     state.pixW = 0;
     state.pixH = 0;
+    if (state.srcEdit) return;   /* 画布由 SourceEdit 接管，不要覆盖它的显示 */
     if (!cv || !src || !state.srcW || !state.srcH) return;
     var scale = 1;
     var edge = Math.max(state.srcW, state.srcH);
@@ -3677,14 +5890,24 @@ window.PINDOU_PALETTES = {
     state.srcW = Math.round(w);
     state.srcH = Math.round(h);
     state.pattern = null;
+    state.history.length = 0;         /* 换图 = 新图纸生命周期 */
+    state.recolor.selected = '';
+    if (state.srcEdit && typeof state.srcEdit.setSource === 'function') {
+      try { state.srcEdit.setSource(src); } catch (e) {
+        setStatus('原图调整模块载入图片失败：' + errText(e) + '（将直接使用原图）', 'warn');
+      }
+    }
     drawSourceCanvas();
+    syncSrcEditHint();
     if (ui.lockAspect && ui.lockAspect.checked) applyBoardsPreset();
     else normalizeDims('gridW');
     setCanvasPlaceholders();
     renderPattern();
     renderLegend();
     renderSummary();
+    syncRecolorPicker(null);
     updateLockInfo();
+    syncUndoButton();
     setStatus('已载入 ' + state.srcW + ' × ' + state.srcH + ' 图片，正在生成图纸…', 'info');
     scheduleRegenerate(0);
   }
@@ -3727,14 +5950,8 @@ window.PINDOU_PALETTES = {
     var on2 = !!active;
     if (state.dragActive === on2) return;
     state.dragActive = on2;
-    if (hasClassList(ui.dropZone)) {
-      if (on2) ui.dropZone.classList.add('drag-active');
-      else ui.dropZone.classList.remove('drag-active');
-    }
-    if (hasClassList(ui.dropHint)) {
-      if (on2) ui.dropHint.classList.add('drag-active');
-      else ui.dropHint.classList.remove('drag-active');
-    }
+    toggleCls(ui.dropZone, 'drag-active', on2);
+    toggleCls(ui.dropHint, 'drag-active', on2);
   }
 
   function onDragOver(e) {
@@ -3774,6 +5991,7 @@ window.PINDOU_PALETTES = {
   /* ------------------------------------------------------------- 事件绑定 */
 
   function onControlInput(id) {
+    if (id === 'viewZoom') { setViewZoom(num(ui.viewZoom, ZOOM_DEFAULT)); return; }
     syncLabels();
     if (id === 'maxColors') state.touched.maxColors = true;
     if (id === 'cellSize') { scheduleRender(); return; }
@@ -3783,7 +6001,8 @@ window.PINDOU_PALETTES = {
 
   function onToggleChange(id) {
     if (id === 'quantizeEnabled') state.touched.quantizeEnabled = true;
-    if (id === 'showNumbers' || id === 'showRuler') { scheduleRender(); return; }
+    if (id === 'showRuler') { scheduleRender(); syncExportHint(); return; }
+    if (id === 'cellLabelMode') { syncCellLabelHint(); scheduleRender(); return; }
     if (id === 'recolorMode') {
       renderPattern();
       updateLockInfo();
@@ -3793,6 +6012,14 @@ window.PINDOU_PALETTES = {
       return;
     }
     if (id === 'lockToggle') { updateLockInfo(); return; }
+    if (id === 'srcCropMode') { onSrcCropModeChange(); return; }
+    if (id === 'srcAspectSquare') {
+      if (!state.srcEdit) { setStatus('原图调整模块未加载，裁剪框比例设置不可用', 'warn'); return; }
+      syncSrcEditButtons();
+      setStatus((ui.srcAspectSquare && ui.srcAspectSquare.checked) ? '裁剪框已切换为正方形' : '裁剪框已切换为自由比例', 'info');
+      return;
+    }
+    if (id === 'exportAnnotate') { syncExportHint(); return; }
     syncEnabledState();
     if (id === 'lockAspect' && ui.lockAspect && ui.lockAspect.checked) normalizeDims('gridW');
     scheduleRegenerate(0);
@@ -3801,12 +6028,38 @@ window.PINDOU_PALETTES = {
   function onSelectChange(id) {
     if (id === 'paletteSelect') {
       syncPaletteMeta();
-      syncRecolorColors(state.pattern);
+      syncRecolorPicker(state.pattern);
       scheduleRegenerate(0);
       return;
     }
     if (id === 'bayerN') { syncEnabledState(); scheduleRegenerate(0); return; }
     if (id === 'boardsSelect') { applyBoardsPreset(); scheduleRegenerate(0); return; }
+    if (id === 'sizePreset') { applySizePreset(); syncSizePresetValue(); return; }
+    if (id === 'cellLabelMode') { onToggleChange('cellLabelMode'); return; }
+    if (id === 'recolorScope') {
+      state.recolor.scope = (ui.recolorScope && String(ui.recolorScope.value) === PICKER_SCOPE_ALL)
+        ? PICKER_SCOPE_ALL : PICKER_SCOPE_USED;
+      renderRecolorGrid();
+      return;
+    }
+    if (id === 'exportScale') { syncExportHint(); return; }
+  }
+
+  function onRecolorSearch() {
+    state.recolor.search = ui.recolorSearch ? String(ui.recolorSearch.value || '') : '';
+    renderRecolorGrid();
+  }
+
+  /* 输入框里按 Ctrl+Z 应该撤销「输入」，不该撤销图纸：输入类元素聚焦时直接放行。 */
+  function onDocKeyDown(e) {
+    if (!e) return;
+    var key = e.key ? String(e.key).toLowerCase() : '';
+    if (key !== 'z') return;
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (e.altKey || e.shiftKey) return;         /* Shift+Ctrl+Z 是重做，本项目未实现，不做任何事 */
+    if (isTypingTarget(e.target)) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    undo();
   }
 
   function applyDefaults(regen) {
@@ -3821,24 +6074,33 @@ window.PINDOU_PALETTES = {
     setChecked(ui.autoLevels, DEFAULTS.autoLevels);
     setChecked(ui.quantizeEnabled, DEFAULTS.quantizeEnabled);
     setChecked(ui.lockAspect, DEFAULTS.lockAspect);
-    setChecked(ui.showNumbers, DEFAULTS.showNumbers);
+    setVal(ui.cellLabelMode, DEFAULTS.cellLabel);
     setChecked(ui.showRuler, DEFAULTS.showRuler);
     setChecked(ui.lockToggle, DEFAULTS.lockToggle);
     setChecked(ui.recolorMode, DEFAULTS.recolorMode);
+    setVal(ui.recolorScope, DEFAULTS.recolorScope);
+    setChecked(ui.exportAnnotate, DEFAULTS.exportAnnotate);
+    setVal(ui.exportScale, DEFAULTS.exportScale);
     setChecked(ui.methodNearest, DEFAULTS.method === 'nearest');
     setChecked(ui.methodFS, DEFAULTS.method === 'fs');
     setChecked(ui.methodBayer, DEFAULTS.method === 'bayer');
     setVal(ui.bayerN, DEFAULTS.bayerN);
     setVal(ui.boardsSelect, DEFAULTS.boards);
     applyBoardsPreset();
+    state.recolor.scope = PICKER_SCOPE_USED;
+    setVal(ui.sizePreset, DEFAULTS.sizePreset);
+    syncSizePresetValue();
     syncQuantizeFromPipeline();      /* 回到默认 = 跟随 Pipeline.DEFAULT_OPTS.quantize */
     state.touched.quantizeEnabled = false;
     state.touched.maxColors = false;
+    state.viewZoom = DEFAULTS.viewZoom;
+    applyViewZoom();
     syncLabels();
     syncEnabledState();
     state.viewOpts = viewOpts();
     renderPattern();
     updateLockInfo();
+    syncExportHint();
     if (regen) {
       setStatus('已重置微调参数', 'info');
       scheduleRegenerate(0);
@@ -3846,9 +6108,10 @@ window.PINDOU_PALETTES = {
   }
 
   function bindEvents() {
-    var continuous = ['brightness', 'contrast', 'saturation', 'ditherStrength', 'cellSize', 'maxColors', 'gridW', 'gridH'];
-    var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showNumbers', 'showRuler', 'lockToggle', 'recolorMode'];
-    var selects = ['boardsSelect', 'paletteSelect', 'bayerN'];
+    var continuous = ['brightness', 'contrast', 'saturation', 'ditherStrength', 'cellSize', 'viewZoom', 'maxColors', 'gridW', 'gridH'];
+    var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showRuler', 'lockToggle', 'recolorMode',
+      'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
+    var selects = ['boardsSelect', 'paletteSelect', 'bayerN', 'cellLabelMode', 'sizePreset', 'recolorScope', 'exportScale'];
     var methods = ['methodNearest', 'methodFS', 'methodBayer'];
     var i;
 
@@ -3877,6 +6140,13 @@ window.PINDOU_PALETTES = {
       });
     }
 
+    on(ui.recolorSearch, 'input', onRecolorSearch);
+    on(ui.recolorSearch, 'change', onRecolorSearch);
+    /* 事件委托：色板网格与「最近用过」会在每次刷新时重建，逐个绑监听会漏 */
+    on(ui.recolorGrid, 'click', onRecolorPick);
+    on(ui.recolorRecentRow, 'click', onRecolorPick);
+
+    on(ui.btnUndo, 'click', undo);
     on(ui.btnRegenerate, 'click', function () { scheduleRegenerate(0); });
     on(ui.btnResetAdjust, 'click', function () { applyDefaults(true); });
     on(ui.btnExportPng, 'click', exportPng);
@@ -3887,7 +6157,29 @@ window.PINDOU_PALETTES = {
     on(ui.emptyState, 'click', pickFile);
     on(ui.dropZone, 'click', function () { if (!state.source) pickFile(); });
     on(ui.sourceCanvas, 'click', function () { if (!state.source) pickFile(); });
+
+    on(ui.viewZoomIn, 'click', function () { zoomBy(ZOOM_STEP_FACTOR); });
+    on(ui.viewZoomOut, 'click', function () { zoomBy(1 / ZOOM_STEP_FACTOR); });
+    on(ui.viewZoomFit, 'click', fitViewZoom);
+
+    on(ui.srcRotateL, 'click', function () { srcEditCall('rotate', -90, '已左转 90°', '原图左转未生效'); });
+    on(ui.srcRotateR, 'click', function () { srcEditCall('rotate', 90, '已右转 90°', '原图右转未生效'); });
+    on(ui.srcFlipH, 'click', function () { srcEditCall('flip', 'h', '已水平翻转', '水平翻转未生效'); });
+    on(ui.srcFlipV, 'click', function () { srcEditCall('flip', 'v', '已垂直翻转', '垂直翻转未生效'); });
+    on(ui.srcReset, 'click', function () {
+      if (!state.srcEdit) { setStatus('原图调整模块未加载，重置原图调整不可用', 'warn'); return; }
+      srcEditCall('reset', null, '已重置原图调整', '重置原图调整未生效（可能已经是初始状态）');
+      setChecked(ui.srcCropMode, false);
+      setChecked(ui.srcAspectSquare, false);
+      state.srcCropMode = false;
+      /* reset() 按冻结契约不动 aspect：app.js 的顺序控件已经复位，这里同步把模块也切成 free，
+         否则会出现「界面显示自由比例、模块内部还是正方形」的失同步。 */
+      syncSrcEditButtons();
+    });
+
     on(ui.patternCanvas, 'click', onPatternClick);
+    bindWheel();
+
     on(ui.fileInput, 'change', function () {
       var f = (ui.fileInput.files && ui.fileInput.files.length) ? ui.fileInput.files[0] : null;
       if (f) loadImageFromBlob(f);
@@ -3900,6 +6192,7 @@ window.PINDOU_PALETTES = {
       doc.addEventListener('dragleave', onDragLeave);
       doc.addEventListener('drop', onDrop);
       doc.addEventListener('paste', onPaste);
+      doc.addEventListener('keydown', onDocKeyDown);
     }
   }
 
@@ -3907,6 +6200,7 @@ window.PINDOU_PALETTES = {
 
   function buildUI() {
     ui = {
+      app: byId('app'),
       fileInput: byId('fileInput'),
       btnPickFile: byId('btnPickFile'),
       dropHint: byId('dropHint'),
@@ -3928,22 +6222,38 @@ window.PINDOU_PALETTES = {
       quantizeEnabled: byId('quantizeEnabled'),
       maxColors: byId('maxColors'),
       boardsSelect: byId('boardsSelect'),
+      sizePreset: byId('sizePreset'),
       gridW: byId('gridW'),
       gridH: byId('gridH'),
       lockAspect: byId('lockAspect'),
       paletteSelect: byId('paletteSelect'),
       paletteMeta: byId('paletteMeta'),
-      showNumbers: byId('showNumbers'),
+      cellLabelMode: byId('cellLabelMode'),
+      cellLabelHint: byId('cellLabelHint'),
       showRuler: byId('showRuler'),
       cellSize: byId('cellSize'),
       cellSizeVal: byId('cellSizeVal'),
+      viewZoom: byId('viewZoom'),
+      viewZoomVal: byId('viewZoomVal'),
+      viewZoomIn: byId('viewZoomIn'),
+      viewZoomOut: byId('viewZoomOut'),
+      viewZoomFit: byId('viewZoomFit'),
       recolorMode: byId('recolorMode'),
-      recolorColor: byId('recolorColor'),
+      recolorScope: byId('recolorScope'),
+      recolorSearch: byId('recolorSearch'),
+      recolorGrid: byId('recolorGrid'),
+      recolorEmpty: byId('recolorEmpty'),
+      recolorRecentRow: byId('recolorRecentRow'),
+      recolorCurrent: byId('recolorCurrent'),
       lockToggle: byId('lockToggle'),
       btnUnlockAll: byId('btnUnlockAll'),
+      btnUndo: byId('btnUndo'),
       lockInfo: byId('lockInfo'),
       btnRegenerate: byId('btnRegenerate'),
       btnResetAdjust: byId('btnResetAdjust'),
+      exportScale: byId('exportScale'),
+      exportAnnotate: byId('exportAnnotate'),
+      exportHint: byId('exportHint'),
       btnExportPng: byId('btnExportPng'),
       btnExportCompare: byId('btnExportCompare'),
       btnExportCsv: byId('btnExportCsv'),
@@ -3952,11 +6262,20 @@ window.PINDOU_PALETTES = {
       elapsedText: byId('elapsedText'),
       progressWrap: byId('progressWrap'),
       progressBar: byId('progressBar'),
+      canvasScroll: byId('canvasScroll'),
       patternCanvas: byId('patternCanvas'),
       patternHint: byId('patternHint'),
       emptyState: byId('emptyState'),
       sourceCanvas: byId('sourceCanvas'),
       sourceHint: byId('sourceHint'),
+      srcCropMode: byId('srcCropMode'),
+      srcAspectSquare: byId('srcAspectSquare'),
+      srcRotateL: byId('srcRotateL'),
+      srcRotateR: byId('srcRotateR'),
+      srcFlipH: byId('srcFlipH'),
+      srcFlipV: byId('srcFlipV'),
+      srcReset: byId('srcReset'),
+      srceditHint: byId('srceditHint'),
       summaryBox: byId('summaryBox'),
       legendBox: byId('legendBox')
     };
@@ -3973,8 +6292,10 @@ window.PINDOU_PALETTES = {
     state.booted = true;
     state.missingUI = buildUI();
     fillPaletteSelect();
-    syncRecolorColors(null);
+    state.recolor.recent = readRecentColors();
+    syncRecolorPicker(null);
     applyDefaults(false);
+    mountSourceEdit();
     bindEvents();
     var mods = describeModules();
     updateModuleNotice(mods);
@@ -3982,6 +6303,8 @@ window.PINDOU_PALETTES = {
     renderLegend();
     renderSummary();
     updateLockInfo();
+    syncUndoButton();
+    syncExportHint();
     setCanvasPlaceholders();
   }
 
@@ -3991,11 +6314,25 @@ window.PINDOU_PALETTES = {
     regenerate: regenerate,
     adoptImage: useImageSource,
     options: buildOpts,
+    viewOpts: viewOpts,
+    exportViewOpts: exportViewOpts,
     clickCell: onPatternClick,
     hitTestCell: hitTestCell,
     applyRecolor: applyRecolor,
-    recount: recount,
+    undo: undo,
+    setViewZoom: setViewZoom,
+    applyViewZoom: applyViewZoom,
+    fitViewZoom: fitViewZoom,
+    renderRecolorGrid: renderRecolorGrid,
+    pickerGroups: pickerGroups,
+    selectRecolorCode: selectRecolorCode,
+    recolorCode: recolorCode,
+    noteRecentColor: noteRecentColor,
+    readRecentColors: readRecentColors,
+    exportPng: exportPng,
     exportCsv: exportCsv,
+    recount: recount,
+    keydown: onDocKeyDown,
     state: function () { return state; },
     elements: function () { return ui; }
   };

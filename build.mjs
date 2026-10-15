@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * build.mjs —— 把 src/ 的 5 个模块与 UI 片段拼装成「双击就能用」的单文件 HTML。
+ * build.mjs —— 把 src/ 的 6 个模块与 UI 片段拼装成「双击就能用」的单文件 HTML。
  *
  * 用法：node build.mjs
  * 依赖：零依赖，只用 node: 内置模块（node:fs / node:path / node:url）。
@@ -20,8 +20,11 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = path.join(ROOT, 'src');
 const OUT_PATH = path.join(ROOT, '拼豆图纸生成器.html');
 
-/** 脚本顺序冻结：palette → color → pipeline → render → app（后者依赖前者的全局）。 */
-const JS_FILES = ['palette.js', 'color.js', 'pipeline.js', 'render.js', 'app.js'];
+/**
+ * 脚本顺序冻结：palette → color → pipeline → render → srcedit → app（后者依赖前者的全局）。
+ * srcedit 自身不依赖其它模块，排在 render 之后只为与验证脚本的模块清单顺序一致。
+ */
+const JS_FILES = ['palette.js', 'color.js', 'pipeline.js', 'render.js', 'srcedit.js', 'app.js'];
 const UI_FILE = 'ui.html';
 
 /* ───────────────────────────────────────────────────────── 安全阀 A：</script */
@@ -152,7 +155,7 @@ if (safetyHits.length) {
 }
 
 /* 3) ui.html 结构校验：它会被原样内联进 <body>，不得自带 script 块或残留闭合标签。
- *    产物必须「恰好 5 个 <script> 块」，UI 片段自带脚本会破坏该契约。 */
+ *    产物必须「恰好 JS_FILES.length 个 <script> 块」，UI 片段自带脚本会破坏该契约。 */
 const uiProblems = [];
 if (/<script\b/i.test(ui)) uiProblems.push('src/' + UI_FILE + ' 含 <script 标签（UI 片段不得自带脚本，脚本只能来自 src/*.js）');
 if (/<\/script/i.test(ui)) uiProblems.push('src/' + UI_FILE + ' 含 `</' + 'script` 字面量');

@@ -45,7 +45,7 @@
   .hint{margin:6px 0 0;font-size:11.8px;line-height:1.5;color:var(--muted)}
   .muted{color:var(--muted)}
   input[type="range"]{width:100%;accent-color:var(--accent);margin:2px 0 4px}
-  input[type="number"],select{
+  input[type="number"],input[type="text"],select{
     width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);
     border-radius:6px;padding:5px 7px;font-size:12.8px;font-family:inherit
   }
@@ -57,11 +57,18 @@
     padding:7px 12px;font-size:12.8px;cursor:pointer;transition:border-color .15s,background .15s
   }
   .btn:hover{border-color:var(--accent);background:#232936}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn:disabled:hover{border-color:var(--line);background:var(--panel2)}
   .btn-primary{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
   .btn-primary:hover{background:#79b0f7;border-color:#79b0f7}
   .btn-ghost{background:transparent}
   .group-actions .btn{width:100%;margin-top:8px}
   .group-actions .btn:first-of-type{margin-top:2px}
+  .btn-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0 0}
+  .btn-grid .btn{width:100%;margin-top:0}
+  .zoom-btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:4px 0 0}
+  .zoom-btns .btn{width:100%}
+  .zoom-btns .btn:last-child{grid-column:1 / -1}
 
   .canvas-panel{position:relative;min-width:0}
   .canvas-panel.drag-active{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-soft),0 0 0 3px var(--accent-soft)}
@@ -87,6 +94,9 @@
   .block h2{margin-bottom:8px;color:var(--accent)}
   .source-wrap{position:relative}
   .source-canvas{display:block;width:100%;max-width:100%;height:auto;background:#0c0e12;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated}
+  .source-canvas.crop-mode{cursor:crosshair}
+  .src-tools{margin-top:10px}
+  .src-reset{width:100%;margin-top:8px}
   .summary{display:flex;flex-direction:column;gap:5px}
   .summary-row{display:flex;justify-content:space-between;gap:10px;font-size:12.6px;border-bottom:1px dotted var(--line);padding-bottom:4px}
   .summary-k{color:var(--muted)}
@@ -99,6 +109,22 @@
   .legend-hex{color:var(--muted);font-size:11.4px}
   .legend-count{margin-left:auto;color:var(--text);font-variant-numeric:tabular-nums;white-space:nowrap}
 
+  .sw-grid-wrap{max-height:212px;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px;margin-top:6px}
+  .sw-group{margin:0 0 8px}
+  .sw-group:last-child{margin-bottom:0}
+  .sw-group-label{font-size:11.2px;color:var(--muted);margin:0 0 4px;font-weight:600}
+  .sw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(36px,1fr));gap:4px}
+  .sw{
+    appearance:none;-webkit-appearance:none;border:1px solid rgba(255,255,255,.20);border-radius:5px;
+    height:26px;padding:0;cursor:pointer;font-size:9.5px;font-weight:700;line-height:1;
+    display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:inherit
+  }
+  .sw:hover{border-color:var(--text)}
+  .sw-on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft),inset 0 0 0 1px rgba(0,0,0,.35)}
+  .sw-sm{height:22px;font-size:9px}
+  .sw-recent{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:4px;min-height:22px}
+  .sw-recent .sw{width:36px;flex:0 0 auto}
+
   .disclaimer{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:var(--radius);padding:9px 12px;font-size:12.6px;color:#e4d9c1}
   .disclaimer-tag{display:inline-block;color:var(--warn);font-weight:600;margin-right:6px}
 
@@ -110,6 +136,7 @@
   @media (max-width:640px){
     #app{padding:10px 10px 18px}
     .legend-grid{grid-template-columns:1fr}
+    .sw-grid{grid-template-columns:repeat(auto-fill,minmax(32px,1fr))}
   }
 </style>
 
@@ -177,14 +204,24 @@
           <option value="1" selected>1 × 1 板（上限 29 格）</option>
           <option value="2">2 × 2 板（上限 58 格）</option>
           <option value="3">3 × 3 板（上限 87 格）</option>
+          <option value="4">4 × 4 板（上限 116 格）</option>
           <option value="custom">自定义格数</option>
         </select>
+        <label class="row" for="sizePreset"><span>尺寸预设</span></label>
+        <select id="sizePreset">
+          <option value="custom" selected>自定义</option>
+          <option value="29">29 × 29</option>
+          <option value="58">58 × 58</option>
+          <option value="87">87 × 87</option>
+          <option value="100">100 × 100</option>
+          <option value="116">116 × 116</option>
+        </select>
         <div class="grid2">
-          <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="87" step="1" value="29" /></label>
-          <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="87" step="1" value="29" /></label>
+          <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="116" step="1" value="29" /></label>
+          <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="116" step="1" value="29" /></label>
         </div>
         <label class="check"><input id="lockAspect" type="checkbox" checked /> 保持原图宽高比</label>
-        <p class="hint">单边上限硬限制 87 格（3 × 3 板），超出会被自动压回。</p>
+        <p class="hint">单边上限硬限制 116 格（4 × 4 板），超出会被自动压回。尺寸预设固定为正方形（如 100 × 100）。</p>
       </section>
 
       <section class="group">
@@ -195,27 +232,71 @@
 
       <section class="group">
         <h2>7 · 图纸显示</h2>
-        <label class="check"><input id="showNumbers" type="checkbox" checked /> 显示数字编号（色号）</label>
-        <label class="check"><input id="showRuler" type="checkbox" /> 显示坐标刻度</label>
-        <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">12px</output></label>
-        <input id="cellSize" type="range" min="4" max="28" step="1" value="12" />
+        <label class="row" for="cellLabelMode"><span>格内显示</span></label>
+        <select id="cellLabelMode">
+          <option value="code" selected>色号（A1）</option>
+          <option value="index">编号（1,2,3…）</option>
+          <option value="none">不显示</option>
+        </select>
+        <label class="check"><input id="showRuler" type="checkbox" checked /> 显示坐标刻度</label>
+        <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">24px</output></label>
+        <input id="cellSize" type="range" min="8" max="48" step="1" value="24" />
+        <p id="cellLabelHint" class="hint">当前 24px，格内显示色号（如 A1）。</p>
       </section>
 
       <section class="group">
-        <h2>8 · 改色模式</h2>
+        <h2>8 · 预览缩放</h2>
+        <label class="row" for="viewZoom"><span>预览缩放（不影响导出）</span><output id="viewZoomVal">100%</output></label>
+        <input id="viewZoom" type="range" min="0.25" max="4" step="0.05" value="1" />
+        <div class="zoom-btns">
+          <button id="viewZoomOut" class="btn" type="button">− 缩小</button>
+          <button id="viewZoomIn" class="btn" type="button">+ 放大</button>
+          <button id="viewZoomFit" class="btn" type="button">适应窗口</button>
+        </div>
+        <p class="hint">缩放只改变屏幕显示大小，不影响画布真实像素与导出分辨率。在图纸上滚动鼠标滚轮可以以光标为锚点缩放。</p>
+      </section>
+
+      <section class="group">
+        <h2>9 · 改色模式</h2>
         <label class="check"><input id="recolorMode" type="checkbox" /> 开启改色模式（点击图纸格子改色）</label>
-        <label class="row" for="recolorColor"><span>目标色号</span></label>
-        <select id="recolorColor"></select>
+        <label class="row" for="recolorScope"><span>色板范围</span></label>
+        <select id="recolorScope">
+          <option value="used" selected>只显示本图用到的色号（按颗数排序）</option>
+          <option value="all">全部 221 色（按 A–H/M 分组）</option>
+        </select>
+        <label class="row" for="recolorSearch"><span>搜索色号 / HEX</span></label>
+        <input id="recolorSearch" type="text" placeholder="例如 A1 或 #FAF5CD" autocomplete="off" spellcheck="false" />
+        <div id="recolorGrid" class="sw-grid-wrap"></div>
+        <p id="recolorEmpty" class="hint" hidden>无匹配</p>
+        <label class="row"><span>最近用过</span></label>
+        <div id="recolorRecentRow" class="sw-recent"></div>
+        <p id="recolorCurrent" class="hint">当前目标色号：未选择</p>
         <label class="check"><input id="lockToggle" type="checkbox" checked /> 改色时锁定该格（重算时不被覆盖）</label>
-        <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
+        <div class="btn-grid">
+          <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
+          <button id="btnUndo" class="btn btn-ghost" type="button" disabled>撤销</button>
+        </div>
         <p id="lockInfo" class="hint">已锁定 0 格</p>
-        <p class="hint">提示：按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格。</p>
+        <p class="hint">提示：按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格。撤销快捷键 Ctrl+Z（Mac 为 ⌘+Z）。</p>
       </section>
 
       <section class="group group-actions">
-        <h2>9 · 操作</h2>
+        <h2>10 · 操作</h2>
         <button id="btnRegenerate" class="btn btn-primary" type="button">重新生成</button>
         <button id="btnResetAdjust" class="btn" type="button">重置微调</button>
+      </section>
+
+      <section class="group group-actions">
+        <h2>11 · 导出</h2>
+        <label class="row" for="exportScale"><span>分辨率倍数</span></label>
+        <select id="exportScale">
+          <option value="1">1×（格子 24px）</option>
+          <option value="2" selected>2×（格子 48px）</option>
+          <option value="4">4×（格子 96px）</option>
+          <option value="8">8×（格子 192px）</option>
+        </select>
+        <label class="check"><input id="exportAnnotate" type="checkbox" checked /> 附色号用量清单（画进图里）</label>
+        <p id="exportHint" class="hint">导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随第 7 组的「显示坐标刻度」。</p>
         <button id="btnExportPng" class="btn" type="button">导出图纸 PNG</button>
         <button id="btnExportCompare" class="btn" type="button">导出对照图 PNG</button>
         <button id="btnExportCsv" class="btn" type="button">导出用量清单 CSV</button>
@@ -231,22 +312,34 @@
         </div>
         <div id="progressWrap" class="progress" hidden><div id="progressBar" class="progress-bar"></div></div>
       </div>
-      <div class="canvas-scroll">
+      <div id="canvasScroll" class="canvas-scroll">
         <canvas id="patternCanvas" class="pattern-canvas" width="640" height="420"></canvas>
         <div class="canvas-overlay">
           <p id="patternHint" class="canvas-hint">尚未载入图片<br /><span class="muted">点击上方「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴</span></p>
-          <button id="emptyState" class="btn btn-primary" type="button">选择本地图片…</button>
+          <button id="emptyState" class="btn btn-primary empty-cta" type="button">选择本地图片…</button>
         </div>
       </div>
-      <p class="hint">参数调整会自动重算（防抖 200ms）。开启第 8 组「改色模式」后，点击图纸格子即可把它改成目标色号。</p>
+      <p class="hint">参数调整会自动重算（防抖 200ms）。开启第 9 组「改色模式」后，点击图纸格子即可把它改成目标色号。</p>
     </main>
 
     <aside class="panel side">
       <section class="block">
-        <h2>原图对照</h2>
+        <h2>原图调整</h2>
         <div class="source-wrap">
           <canvas id="sourceCanvas" class="source-canvas" width="240" height="180"></canvas>
           <p id="sourceHint" class="canvas-hint small">尚未载入图片</p>
+        </div>
+        <div class="src-tools">
+          <label class="check"><input id="srcCropMode" type="checkbox" /> 裁剪模式（在原图上线框选）</label>
+          <label class="check"><input id="srcAspectSquare" type="checkbox" /> 正方形裁剪框</label>
+          <div class="btn-grid">
+            <button id="srcRotateL" class="btn" type="button">↺ 左转 90°</button>
+            <button id="srcRotateR" class="btn" type="button">↻ 右转 90°</button>
+            <button id="srcFlipH" class="btn" type="button">水平翻转</button>
+            <button id="srcFlipV" class="btn" type="button">垂直翻转</button>
+          </div>
+          <button id="srcReset" class="btn btn-ghost src-reset" type="button">重置原图调整</button>
+          <p id="srceditHint" class="hint">原图调整模块状态未知</p>
         </div>
       </section>
       <section class="block">

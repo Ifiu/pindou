@@ -59,6 +59,14 @@
   var HIGHLIGHT_FILL = 'rgba(91,155,243,0.38)';
   var HIGHLIGHT_STROKE = 'rgba(255,255,255,0.85)';
 
+  /* 方向如实说明的文案（只有「<img> 那条路失败 + 只能走不带 options 的 createImageBitmap」才用得上）。
+     界面上本来就有旋转按钮，所以这句是有出路的、可执行的。 */
+  var ORIENT_NOTE = '本浏览器不支持自动纠正照片方向：如果图纸上下颠倒，请用「原图调整」组里的旋转按钮（↺ 左转 / ↻ 右转）先转正';
+  /* img.decode() 被拒后，等元素自己出结论（onload / onerror）的上限；超时后再按事实裁断 */
+  var DECODE_WAIT_MS = 20000;
+  /* createImageBitmap 的选项被拒时，错误文案里通常带这些标识（各引擎都是英文标识符，即使 UI 语言是中文） */
+  var ORIENT_ERR_RE = /imageorientation|imagebitmapoptions|not a valid enum/i;
+
   /* 预处理滑杆的非线性压缩幂次：滑杆 50 → 生效 33，滑杆 20 → 生效 8（见 effCurve） */
   var EFF_POW = 1.6;
 
@@ -105,6 +113,9 @@
     srcCtx: null,        /* sourceCanvas 的 2d 上下文：getImageData 取像素 */
     srcEdit: null,       /* SourceEdit.mount() 返回的 api；缺失时为 null */
     srcCropMode: false,
+    /* 方向如实说明：非空表示「这次读入没能自动纠正照片方向」，会被并进生成状态里（一直显示到换图为止）。
+       只有「<img> 失败 + 引擎不认 createImageBitmap 的 'from-image'」才会置上，见 loadImageFromBlob。 */
+    orientationNote: '',
     pattern: null,
     /* 生成当前这张图纸时真正生效的减色设置：{ enabled, maxColors }；无图纸时为 null。
        汇总区并排显示「上限 / 实际」时用的是它，而不是当前 DOM 值。 */
@@ -1107,7 +1118,9 @@
     if (kept) note += ' · 保留手动改色 ' + kept + ' 格';
     if (state.renderFallback) note += ' · 渲染降级为内置模式';
     var warn = (pattern.warnings && pattern.warnings.length) ? '（' + pattern.warnings.join('；') + '）' : '';
-    setStatus('已生成 ' + pattern.w + ' × ' + pattern.h + ' 格 · 共 ' + total + ' 颗' + note + warn, 'ok');
+    /* 方向提示并进生成状态：读图时那句会被这条状态覆盖，所以在这里再带一次（一直显示到换图为止） */
+    setStatus('已生成 ' + pattern.w + ' × ' + pattern.h + ' 格 · 共 ' + total + ' 颗' + note + warn
+      + (state.orientationNote || ''), 'ok');
 
     if (again) scheduleRegenerate(0);
   }
@@ -2911,8 +2924,7 @@
 
   /* 失败提示里最有用的三项：文件名 / 浏览器声明的 MIME / 字节数。
      只有「Decoding failed」这种话时，用户和排查的人都无从下手。 */
-  function blobInfo(blob) {
-    var name = (blob && blob.name) ? String(blob.name) : '（这个来源没提供文件名）';
+  function blobInfo(blob) {    var name = (blob && blob.name) ? String(blob.name) : '（这个来源没提供文件名）';
     var type = (blob && blob.type) ? String(blob.type) : '（浏览器没有声明类型）';
     var size = (blob && typeof blob.size === 'number')
       ? (Math.round(blob.size / 1024) + ' KB，' + blob.size + ' 字节')
@@ -2920,8 +2932,17 @@
     return { name: name, type: type, size: size };
   }
 
+  /* createImageBitmap 的方向能力：一次判定、后续导入复用（页面生命周期内有效）。
+     bitmapNoOptionsOnly —— 这个引擎不认 'from-image'，以后直接走不带选项的那次调用，不再白试；
+     lastBitmapNoOptions —— 本次这条路是否用了「不带选项」的形态（用它 ⇒ EXIF 方向没被自动纠正）。 */
+  var bitmapNoOptionsOnly = false;
+  var lastBitmapNoOptions = false;
+
   /* 解码第一条路：<img> + blob: URL。现代浏览器按 EXIF 方向显示（等价于 image-orientation: from-image）。
-     能用 img.decode() 就用它 —— 它给的是 Promise 与更可靠的失败原因；不认就沿用 onload / onerror。 */
+     成败以**元素自身的事实**为准：onload 已触发，或 naturalWidth / naturalHeight > 0。
+     decode() 只当**加速器**：它 resolve 就更快出结论，它 **reject 不能单独判死** ——
+     实测有引擎会误拒 decode()，而同一张图用 onload 明明能正常加载（用户真机报过错）。
+     只有 onerror，或「元素已停止加载（complete === true）而尺寸仍为 0」才算这条路失败。 */
   function decodeViaImage(url, ok, fail) {
     var Img = win.Image;
     if (typeof Img !== 'function') { fail('当前环境没有 Image 构造器'); return; }
@@ -2929,18 +2950,43 @@
     var img = null;
     try { img = new Img(); } catch (e) { fail('创建 <img> 失败：' + errText(e)); return; }
     var settled = false;
-    function once(fn) { if (settled) return; settled = true; fn(); }
-    function done() { once(function () { ok(img, img.naturalWidth || img.width, img.naturalHeight || img.height); }); }
+    var backstop = null;
+    function px(v) { var n = Number(v); return (isFinite(n) && n > 0) ? n : 0; }
+    function sizeW() { return px(img.naturalWidth) || px(img.width); }
+    function sizeH() { return px(img.naturalHeight) || px(img.height); }
+    function factsOk() { return px(img.naturalWidth) > 0 || px(img.naturalHeight) > 0; }
+    function once(fn) {
+      if (settled) return;
+      settled = true;
+      if (backstop !== null) { cancelLater(backstop); backstop = null; }
+      fn();
+    }
+    function done() { once(function () { ok(img, sizeW(), sizeH()); }); }
     img.onload = done;
     img.onerror = function () {
       once(function () { fail('<img> 解码失败（onerror：多半不是浏览器认得的图片格式，或文件已损坏）'); });
     };
+    /* decode() 拒绝后的裁断：先看元素事实；事实说成功就成功（正是「decode() 误拒」那种）。
+       只有「元素明确已停止加载（complete === true）而尺寸仍为 0」才当场判失败；
+       complete 为 false / 未知时一律**先等 onload / onerror**（decode() 的误拒不该判死一张能加载的图），
+       并挂一个超时兜底，免得这条路永远不出结论、后面那条 createImageBitmap 也永远轮不到。 */
+    function afterDecodeReject(why) {
+      if (factsOk()) { done(); return; }
+      if (img.complete === true) { once(function () { fail(why); }); return; }
+      if (typeof win.setTimeout !== 'function') { once(function () { fail(why); }); return; }
+      backstop = win.setTimeout(function () {
+        backstop = null;
+        if (settled) return;
+        if (factsOk()) { done(); return; }
+        once(function () { fail(why + '（等待图片加载超时，元素尺寸仍为 0）'); });
+      }, DECODE_WAIT_MS);
+    }
     try {
       if (typeof img.decode === 'function') {
         img.src = url;
         var p = img.decode();
         if (p && typeof p.then === 'function') {
-          p.then(done, function (e) { once(function () { fail('<img>.decode() 拒绝：' + errText(e)); }); });
+          p.then(done, function (e) { afterDecodeReject('<img>.decode() 拒绝：' + errText(e)); });
           return;
         }
       }
@@ -2949,27 +2995,58 @@
   }
 
   /* 解码第二条路：createImageBitmap。
-     ⚠️ 方向必须与第一条路一致：<img> 默认应用 EXIF 方向，而 createImageBitmap **默认不应用** ——
-     不传 { imageOrientation: 'from-image' } 的话，同一条阶梯的两条路会产出方向不同的图纸，
-     手机竖拍照片会明显颠倒。旧内核对这个选项会当场抛错，于是退化到不带选项再试一次
-     （选项是字典成员，多数老内核直接忽略；真抛错时宁可丢方向也不能解不开图片）。 */
+     ① 先带 { imageOrientation: 'from-image' }：createImageBitmap 默认**不应用** EXIF 方向，
+        而第一条路 <img> 会应用 —— 不传这个选项，同一条阶梯的两条路会产出方向不同的图纸。
+     ② 这个字典成员在旧内核上不被认，而且**两种时序都有**：有的同步抛错，有的把
+        「不是合法的 ImageOrientation 枚举值」当 **异步 rejection** 报出来（用户真机实测是后者）。
+        两种都必须接住，否则这条路根本没执行到解码那一步，用户看到的头条还会变成「参数不合法」。
+     ③ 接住后自动重试 createImageBitmap(blob)（不带任何选项）—— 这是所有支持该 API 的引擎都有的形态。
+     ④ 只有第二次也失败，这条路才算失败，且**失败原因取第二次的**；带选项那次的错误只作附注，
+        免得把用户和排查的人都引到「参数不合法」这个错误方向上。
+     ⑤ 「这个引擎不认 'from-image'」一次判定后缓存（见 bitmapNoOptionsOnly），后续导入不再白试一次。 */
   function decodeViaBitmap(blob, ok, fail) {
     if (typeof win.createImageBitmap !== 'function') {
-      fail('当前环境没有 createImageBitmap（第二条路走不了）');
+      fail('当前环境没有 createImageBitmap（第二条路走不了）', '');
       return;
     }
+    lastBitmapNoOptions = false;
+
+    function raw(optNote) {
+      var q = null;
+      try { q = win.createImageBitmap(blob); }
+      catch (e) { fail('createImageBitmap 调用失败：' + errText(e), optNote); return; }
+      if (!q || typeof q.then !== 'function') { fail('createImageBitmap 没有返回 Promise', optNote); return; }
+      lastBitmapNoOptions = true;          /* 这一步不带选项 ⇒ 不会自动纠正 EXIF 方向 */
+      q.then(function (bmp) {
+        if (!bmp) { fail('createImageBitmap 返回了空结果', optNote); return; }
+        ok(bmp, bmp.width || bmp.naturalWidth, bmp.height || bmp.naturalHeight);
+      }, function (e) { fail('createImageBitmap 拒绝：' + errText(e), optNote); });
+    }
+
+    if (bitmapNoOptionsOnly) { raw(''); return; }   /* 已判定：不再白试带选项的那次 */
+
     var p = null;
     try {
       p = win.createImageBitmap(blob, { imageOrientation: 'from-image' });
     } catch (e) {
-      try { p = win.createImageBitmap(blob); }
-      catch (e2) { fail('createImageBitmap 调用失败：' + errText(e2)); return; }
+      bitmapNoOptionsOnly = true;                   /* 同步拒收这个字典成员 */
+      raw('第一次带 imageOrientation: "from-image" 的调用被当场拒绝（本浏览器不支持自动纠正照片方向）：' + errText(e));
+      return;
     }
-    if (!p || typeof p.then !== 'function') { fail('createImageBitmap 没有返回 Promise'); return; }
+    if (!p || typeof p.then !== 'function') { raw(''); return; }
     p.then(function (bmp) {
-      if (!bmp) { fail('createImageBitmap 返回了空结果'); return; }
+      if (!bmp) { fail('createImageBitmap 返回了空结果', ''); return; }
       ok(bmp, bmp.width || bmp.naturalWidth, bmp.height || bmp.naturalHeight);
-    }, function (e) { fail('createImageBitmap 拒绝：' + errText(e)); });
+    }, function (e) {
+      var why = errText(e);
+      /* 异步 rejection：可能是「枚举成员不合法」，也可能是真正的解码失败。两种都重试不带选项的那次；
+         但只有前者的措辞才把「不支持 from-image」缓存下来 —— 否则会把好引擎的方向能力永久关掉。 */
+      var orientErr = ORIENT_ERR_RE.test(why);
+      if (orientErr) bitmapNoOptionsOnly = true;
+      raw(orientErr
+        ? '第一次带 imageOrientation: "from-image" 的调用被拒绝（本浏览器不支持自动纠正照片方向）：' + why
+        : '');
+    });
   }
 
   /* 读入一张本地图片：真正的重试阶梯 —— 先 <img>，失败再 createImageBitmap，
@@ -2980,6 +3057,7 @@
   function loadImageFromBlob(blob) {
     if (!blob) { setStatus('没有拿到图片数据', 'warn'); return; }
     var type = blob.type ? String(blob.type) : '';
+    state.orientationNote = '';               /* 换了一张图：上一次的方向提示作废 */
     setStatus('正在读取图片…', 'info');
     var info = blobInfo(blob);
     var url = null;
@@ -2988,11 +3066,18 @@
     } catch (e) { url = null; }
 
     var finished = false;
+    var leg = 'img';                          /* 当前是哪条路：成功收尾时用来判断方向有没有被自动纠正 */
     function ok(src, w, h) {
       if (finished) return;
       finished = true;
       revoke(url);
       useImageSource(src, w, h);
+      /* 只有「<img> 那条路失败 + 第二条路是不带 options 的调用」时方向才没被自动纠正，
+         这时必须如实说明（别沉默地给出一张可能上下颠倒的图纸）。 */
+      if (leg === 'bmp' && lastBitmapNoOptions) {
+        state.orientationNote = ' · 注意：' + ORIENT_NOTE + '。';
+        setStatus('已载入 ' + w + ' × ' + h + ' 图片（' + ORIENT_NOTE + '），正在生成图纸…', 'warn');
+      }
     }
     function fail(msg) {
       if (finished) return;
@@ -3004,19 +3089,24 @@
     var stage = 1;
     var imgWhy = '';
     var bmpWhy = '';
+    var bmpNote = '';
     function advance() {
       if (finished) return;
       if (stage === 1) {
         stage = 2;
-        decodeViaBitmap(blob, ok, function (why) { bmpWhy = why; advance(); });
+        leg = 'bmp';
+        decodeViaBitmap(blob, ok, function (why, note) { bmpWhy = why; bmpNote = note || ''; advance(); });
         return;
       }
       if (stage === 2) {
         stage = 3;
-        /* 两条路都失败：把两条原因原样报出来，并给一句用户能照做的建议 */
+        /* 两条路都失败：把两条原因原样报出来，并给一句用户能照做的建议。
+           ②的头条原因是**不带选项那次调用**的失败原因；带选项那次的错误只作附注 ——
+           否则「参数不合法」会盖住真正的失败原因。 */
         fail('文件名 ' + info.name + ' · 浏览器声明的类型 ' + info.type + ' · ' + info.size
           + '。两条解码路径都失败了：① <img>：' + (imgWhy || '（未尝试）')
           + '；② createImageBitmap：' + (bmpWhy || '（未尝试）')
+          + (bmpNote ? ('（附注：' + bmpNote + '）') : '')
           + ((type && !isImageType(type))
             ? '。浏览器没把它当图片（类型 ' + type + '），这里已经按内容试过解码 —— 若它其实是图片，'
               + '多半是扩展名 / MIME 与内容不符（改名文件很常见）。'

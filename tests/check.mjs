@@ -21,7 +21,7 @@ import path from 'node:path';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_DIR = path.join(ROOT, 'src');
-const PRODUCT = path.join(ROOT, '拼豆图纸生成器.html');
+const PRODUCT = path.join(ROOT, 'index.html');
 const QUIET = process.argv.includes('--quiet');
 
 /* ══════════════════════════════════════════════════════════ 断言框架 */
@@ -1393,12 +1393,22 @@ for (const bad of [[0, '0'], [-1, '-1'], [NaN, 'NaN'], ['x', '"x"'], [Infinity, 
 }
 
 /* ═════════════════════════════════════════════════════════ 第 5 组 · 产物 */
-startGroup('第 5 组 · 产物（拼豆图纸生成器.html）');
+startGroup('第 5 组 · 产物（index.html）');
+/* 产物缺失时，本组那 69 条断言会「整组不执行」—— 总数会悄悄少掉一大块，
+   只留一条红，极易被误读成「几乎全绿」。所以下面：① 显式 INFO 报出跳过条数；
+   ② 用 EXPECTED_PRODUCT_ASSERTIONS 自校验（产物存在时必须恰好执行这么多条，
+      数量变动而没同步这个常量就会红），③ 缺失时断言实际执行数为 0。 */
+const EXPECTED_PRODUCT_ASSERTIONS = 69;
+let productSkipNotice = '';
+let productAssertionsRan = 0;
+let productAssertionsBase = null;
 const productExists = existsSync(PRODUCT);
-ok('产物文件存在', productExists, PRODUCT);
+ok('产物文件存在', productExists, productExists ? PRODUCT : ('缺少产物文件：' + PRODUCT + '（先跑 `node build.mjs`）'));
 if (!productExists) {
-  console.log('  INFO  产物不存在：先跑 `node build.mjs` 再跑本脚本');
+  productSkipNotice = '因产物缺失（' + PRODUCT + '），本组 ' + EXPECTED_PRODUCT_ASSERTIONS + ' 条断言被整组跳过 —— 本次总数会比正常情况少这么多，别把总数塌缩读成「几乎全绿」';
+  info(productSkipNotice);
 } else {
+  productAssertionsBase = current.pass + current.fail;
   const html = readFileSync(PRODUCT, 'utf8');
   const size = statSync(PRODUCT).size;
   ok('以 <!doctype html> 开头', html.slice(0, 15).toLowerCase() === '<!doctype html>', JSON.stringify(html.slice(0, 30)));
@@ -1605,7 +1615,15 @@ if (!productExists) {
   ok('产物内 app 段挂上了 PindouUI（模块级描述符：palettes/pipeline/render 均可用）', !!globalThis.PindouUI && globalThis.PindouUI.modules && globalThis.PindouUI.modules().ok === true, JSON.stringify(globalThis.PindouUI && globalThis.PindouUI.modules ? globalThis.PindouUI.modules() : null));
   const patFromProduct = globalThis.Pipeline.generateFromRGBA(synth(30, 30, (x) => [x * 8 % 256, 200, 60]), 30, 30, { boards: 1 });
   ok('产物内 Pipeline 端到端产出一张合法 Pattern', patFromProduct.colors.length >= 1 && patFromProduct.stats.total === patFromProduct.w * patFromProduct.h, 'colors=' + patFromProduct.colors.length);
+  if (typeof productAssertionsBase === 'number') productAssertionsRan = (current.pass + current.fail) - productAssertionsBase;
 }
+/* ① 产物存在时必须**恰好**执行 EXPECTED_PRODUCT_ASSERTIONS 条（数量变了却没同步常量 → 红）；
+   ② 产物缺失时实际执行数必须是 0，且输出里已经显式报出跳过条数（总数塌缩必须被看见）。 */
+eq('产物新鲜度守卫的执行条数（产物存在时应恰好 ' + EXPECTED_PRODUCT_ASSERTIONS + ' 条；缺失时为 0）',
+  productAssertionsRan, productExists ? EXPECTED_PRODUCT_ASSERTIONS : 0);
+ok('产物缺失时显式报出「因产物缺失而跳过的断言数」（不是只留一条红就完事）',
+  productExists ? productSkipNotice === '' : (productSkipNotice.indexOf(String(EXPECTED_PRODUCT_ASSERTIONS)) >= 0 && productSkipNotice.length > 20),
+  productSkipNotice || '（产物存在：本组无跳过）');
 
 /* ═════════════════════════════════════════════════════════════ 汇总 */
 /* ══════════════════════════════════════════ 第 6 组 · 界面契约（app.js + ui.html） */
@@ -1746,6 +1764,7 @@ const timers = [];
 let timerSeq = 0;
 const sandboxWin = {
   PINDOU_PALETTES: globalThis.PINDOU_PALETTES,
+  ColorKit: globalThis.ColorKit,          /* 批量修改要用 srgbToLab / deltaE 算推荐色 */
   Pipeline: globalThis.Pipeline,
   Render: null,
   setTimeout(fn) { const id = ++timerSeq; timers.push({ id, fn, cancelled: false }); return id; },
@@ -1998,12 +2017,16 @@ const TAB_NEW_IDS = ['tabBasic', 'tabAdvanced', 'panelBasic', 'panelAdvanced', '
 ok('控件清单 | 上一轮新增、本轮仍在的 11 个 id 全在 ui.html 里', TAB_NEW_IDS.every((id) => htmlIds.includes(id)), TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
 ok('控件清单 | 且这 11 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 /* 本轮增删后的精确计数：90（上一轮）+ 7（移动端：inputHint / saveOverlay / saveTip / saveImage / saveText / saveCopy / saveClose）= 97 */
-eq('控件清单 | ui.html 的 id 总数 = 97（90 + 本轮移动端新增 7）', htmlIds.length, 97);
+eq('控件清单 | ui.html 的 id 总数 = 102（97 + 本轮新增 5）', htmlIds.length, 102);
 eq('控件清单 | 上一轮删除的 3 个 id 一个都不在产物 id 集合里',
   ['cellLabelMode', 'maxColorsVal', 'btnExportCompare'].filter((id) => htmlIds.includes(id)), []);
 const MOBILE_NEW_IDS = ['inputHint', 'saveOverlay', 'saveTip', 'saveImage', 'saveText', 'saveCopy', 'saveClose'];
-ok('控件清单 | 本轮移动端新增的 7 个 id 全在 ui.html 里', MOBILE_NEW_IDS.every((id) => htmlIds.includes(id)), MOBILE_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 上一轮移动端新增的 7 个 id 全在 ui.html 里', MOBILE_NEW_IDS.every((id) => htmlIds.includes(id)), MOBILE_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
 ok('控件清单 | 且这 7 个 id 全部被 app.js 引用（没有一个是摆设）', MOBILE_NEW_IDS.every((id) => appRefs.includes(id)), MOBILE_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
+/* 本轮（用户实测 4 个问题 → 作者改 app.js / srcedit.js / ui.html）新增的 5 个 id */
+const THIS_ROUND_NEW_IDS = ['batchMode', 'batchRecoRow', 'batchHint', 'btnEraseUndo', 'srcCropHint'];
+ok('控件清单 | 本轮新增的 5 个 id 全在 ui.html 里', THIS_ROUND_NEW_IDS.every((id) => htmlIds.includes(id)), THIS_ROUND_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 5 个 id 全部被 app.js 引用（没有一个是摆设）', THIS_ROUND_NEW_IDS.every((id) => appRefs.includes(id)), THIS_ROUND_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 ok('控件清单 | 触摸端兜底层默认全部隐藏（#saveOverlay 与层内元素都带 hidden）',
   /id="saveOverlay"[^>]*hidden/.test(UI_HTML) && /id="saveImage"[^>]*hidden/.test(UI_HTML)
   && /id="saveText"[^>]*hidden/.test(UI_HTML) && /id="saveCopy"[^>]*hidden/.test(UI_HTML));
@@ -2050,7 +2073,7 @@ function tabPanelTitles(fromMark, toMark) {
 const tabBasicTitles = tabPanelTitles('<div id="panelBasic"', '<div id="panelAdvanced"');
 const tabAdvTitles = tabPanelTitles('<div id="panelAdvanced"', '<main id="dropZone"');
 eq('标签页 | 基本页恰好 6 组，且就是这 6 个（新增「抠图」）', tabBasicTitles, ['图片输入', '取色方式', '图纸尺寸', '图纸显示', '抠图', '导出']);
-eq('标签页 | 高级页恰好 6 组，且就是这 6 个', tabAdvTitles, ['预处理', '减色', '色卡版本', '预览缩放', '改色模式', '操作']);
+eq('标签页 | 高级页恰好 6 组，且就是这 6 个', tabAdvTitles, ['预处理', '减色', '色卡版本', '预览缩放', '画笔 / 批量修改', '操作']);
 const tabAllH2 = (UI_HTML.match(/<h2>[^<]*<\/h2>/g) || []).map((s) => s.replace(/<\/?h2>/g, ''));
 ok('标签页 | 全部 ' + tabAllH2.length + ' 个 <h2> 都不存在「数字 · 」序号前缀',
   tabAllH2.length >= 16 && tabAllH2.every((t) => !/^\s*\d+\s*·/.test(t)), JSON.stringify(tabAllH2));
@@ -2644,10 +2667,18 @@ const touchActionOf = (body) => {
 /* ── touch-action：源画布恒 none；图纸画布只在橡皮刷激活态为 none ─────── */
 const sourceCanvasRules = cssRules.filter((r) => /#sourceCanvas|\.source-canvas\b/.test(r.selector));
 ok('触摸 | CSS 里能定位到源画布规则（下面不是空转）', sourceCanvasRules.length > 0, JSON.stringify(sourceCanvasRules.map((r) => r.selector)));
-ok('触摸 | 源画布【实际生效】的 touch-action 恒为 none（按级联取最后一条；任何一条提到它的规则都不许是别的值）',
-  sourceCanvasRules.some((r) => touchActionOf(r.body) === 'none')
-  && sourceCanvasRules.every((r) => touchActionOf(r.body) === null || touchActionOf(r.body) === 'none'),
-  JSON.stringify(sourceCanvasRules.map((r) => [r.selector, touchActionOf(r.body)])));
+/* 本轮实现变了：常态**不再**是 none（页面可滚），只有「裁剪模式」才吃掉手势。
+   原判据 `some(===none) && every(===null||none)` 在这种情况下**仍然通过**，但已经不表示
+   它名字里说的那件事了（语义过时却仍绿 —— 正是这次要消除的形态）。改成两条，分别钉住两件事。 */
+const sourcePlainRules = cssRules.filter((r) => simpleSel(r).some((s) => /^(#sourceCanvas|\.source-canvas)$/.test(s)));
+const sourceCropRules = cssRules.filter((r) => /(#sourceCanvas|\.source-canvas)\.crop-mode\b/.test(r.selector));
+ok('触摸 | CSS 里能定位到源画布的【常态】规则（下面不是空转）', sourcePlainRules.length > 0, JSON.stringify(sourcePlainRules.map((r) => r.selector)));
+ok('触摸 | 源画布【常态】实际生效的 touch-action 不是 none（否则用户想滚页面时滚不动 —— 用户报的就是这个 bug）',
+  sourcePlainRules.length > 0 && sourcePlainRules.every((r) => touchActionOf(r.body) !== 'none'),
+  JSON.stringify(sourcePlainRules.map((r) => [r.selector, touchActionOf(r.body)])));
+ok('触摸 | 存在 .source-canvas.crop-mode 规则且其【实际生效】值为 none（打开裁剪模式才吃掉手势）',
+  sourceCropRules.length >= 1 && sourceCropRules.some((r) => touchActionOf(r.body) === 'none'),
+  JSON.stringify(sourceCropRules.map((r) => [r.selector, touchActionOf(r.body)])));
 const patternPlainRules = cssRules.filter((r) => simpleSel(r).some((s) => /^(#patternCanvas|\.pattern-canvas)$/.test(s)));
 ok('触摸 | CSS 里能定位到图纸画布的【常态】规则（下面不是空转）', patternPlainRules.length > 0, JSON.stringify(patternPlainRules.map((r) => r.selector)));
 ok('触摸 | 图纸画布【常态】实际生效的 touch-action 不是 none（否则大图在手机上没法滚动）',
@@ -2791,6 +2822,7 @@ function mkInstance(winExtra, instrument) {
   let seq = 0;
   const win = Object.assign({
     PINDOU_PALETTES: globalThis.PINDOU_PALETTES,
+    ColorKit: globalThis.ColorKit,
     Pipeline: globalThis.Pipeline,
     Render: globalThis.Render,
     setTimeout(fn) { const id = ++seq; timers.push({ id, fn, cancelled: false }); return id; },
@@ -2957,6 +2989,335 @@ ok('兜底 | drawPattern 返回 ok:false 时文案同时含「降低」与「倍
   && /超出|太大|上限/.test(String(els.statusText.textContent)), String(els.statusText.textContent));
 forceTooLarge = false;
 eq('兜底 | 该分支仍然零下载', pngCalls.length, 0);
+
+/* ══════════════════════════════════════════════════════════════════════
+   本轮（用户实测 4 个问题）：导入重试阶梯 / 批量修改 / 抠图撤销键
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 导入重试阶梯：<img> → createImageBitmap → 两条都失败才判失败 ─────────── */
+function mkDecoderWin(spec) {
+  const bmpCalls = [];
+  const imgDims = spec.imgDims || [400, 300];
+  const bmpDims = spec.bmpDims || [800, 600];
+  function Img() {
+    const img = { naturalWidth: 0, naturalHeight: 0, _src: '' };
+    Object.defineProperty(img, 'src', {
+      get() { return img._src; },
+      set(v) {
+        img._src = v;
+        if (spec.img === 'ok') { img.naturalWidth = imgDims[0]; img.naturalHeight = imgDims[1]; if (img.onload) img.onload(); }
+        else if (img.onerror) img.onerror();
+      }
+    });
+    return img;
+  }
+  function createImageBitmap(blob, options) {
+    bmpCalls.push({ argsLen: arguments.length, options: options, blob: blob });
+    if (spec.bmp === 'throw-on-options' && options !== undefined) throw new Error('old engine: options unsupported');
+    if (spec.bmp === 'fail') return Promise.reject(new Error('bitmap 解码失败'));
+    return Promise.resolve({ width: bmpDims[0], height: bmpDims[1] });
+  }
+  return { Image: Img, createImageBitmap: createImageBitmap, bmpCalls: bmpCalls };
+}
+const mkBlob = (name, type, size) => ({ name: name, type: type, size: size });
+/* createImageBitmap 的 ok/fail 回调都在 Promise 的微任务里 —— 断言前必须先让微任务跑完，
+   否则会看到「还在读取图片…」的中间态（这不是实现的问题，是测试时序的问题）。 */
+const flushAsync = () => new Promise((resolve) => setImmediate(resolve));
+const fireFileInput = (els, blob) => {
+  els.fileInput.files = { 0: blob, length: 1 };
+  return safeFire(els.fileInput, 'change');
+};
+/* ① <img> 成功 → **不得**再去调 createImageBitmap */
+const wImg = mkDecoderWin({ img: 'ok' });
+const instImg = mkInstance(wImg);
+if (instImg.api && instImg.api.boot) instImg.api.boot();
+const elsImg = instImg.api.elements();
+fireFileInput(elsImg, mkBlob('ok.png', 'image/png', 2048));
+await flushAsync();
+const stImg = instImg.api.state();
+eq('导入阶梯 ① | <img> 成功 → 源图被采用（尺寸来自 <img>）', [stImg.srcW, stImg.srcH], [400, 300]);
+ok('导入阶梯 ① | 源对象就是 <img> 实例', !!stImg.source && typeof stImg.source === 'object' && stImg.source._src !== undefined);
+eq('导入阶梯 ① | createImageBitmap 调用 0 次（第一条路成功就不走第二条）', wImg.bmpCalls.length, 0);
+ok('导入阶梯 ① | 提示为成功路径（不含「失败」）', String(elsImg.statusText.textContent).indexOf('失败') < 0, String(elsImg.statusText.textContent));
+
+/* ② <img> 失败但 createImageBitmap 成功 → 换源成功，且**带 imageOrientation 选项** */
+const wBmp = mkDecoderWin({ img: 'fail', bmp: 'ok' });
+const instBmp = mkInstance(wBmp);
+if (instBmp.api && instBmp.api.boot) instBmp.api.boot();
+const elsBmp = instBmp.api.elements();
+fireFileInput(elsBmp, mkBlob('fallback.jpg', 'image/jpeg', 4096));
+await flushAsync();
+const stBmp = instBmp.api.state();
+eq('导入阶梯 ② | 第一条路失败、第二条成功 → 仍成功换源（尺寸来自 bitmap）', [stBmp.srcW, stBmp.srcH], [800, 600]);
+eq('导入阶梯 ② | createImageBitmap 恰好调用 1 次', wBmp.bmpCalls.length, 1);
+eq('导入阶梯 ② | spy：第二个实参是 { imageOrientation: "from-image" }（方向必须与 <img> 一致）',
+  wBmp.bmpCalls[0].options, { imageOrientation: 'from-image' });
+eq('导入阶梯 ② | spy：确实是带选项的两次实参调用', wBmp.bmpCalls[0].argsLen, 2);
+
+/* ③ 两条都失败 → 判失败，且 state.source 仍为空 */
+const wNone = mkDecoderWin({ img: 'fail', bmp: 'fail' });
+const instNone = mkInstance(wNone);
+if (instNone.api && instNone.api.boot) instNone.api.boot();
+const elsNone = instNone.api.elements();
+fireFileInput(elsNone, mkBlob('broken.heic', 'image/heic', 54321));
+await flushAsync();
+const stNone = instNone.api.state();
+eq('导入阶梯 ③ | 两条路都失败 → state.source 仍为空', stNone.source, null);
+eq('导入阶梯 ③ | 两条路都失败 → srcW/srcH 仍为 0', [stNone.srcW, stNone.srcH], [0, 0]);
+const failMsg = String(elsNone.statusText.textContent);
+ok('导入阶梯 ③ | 失败文案含文件名', failMsg.indexOf('broken.heic') >= 0, failMsg);
+ok('导入阶梯 ③ | 失败文案含浏览器声明的 MIME', failMsg.indexOf('image/heic') >= 0, failMsg);
+ok('导入阶梯 ③ | 失败文案含字节数', /字节/.test(failMsg) && failMsg.indexOf('54321') >= 0, failMsg);
+ok('导入阶梯 ③ | 失败文案分别报出两条解码路径的原因', /<img>/.test(failMsg) && /createImageBitmap/.test(failMsg), failMsg);
+ok('导入阶梯 ③ | 失败文案给出可行动建议（导出为 JPEG / 用截图）', /导出为 JPEG|截图/.test(failMsg), failMsg);
+
+/* ④ 旧内核：带选项当场抛错 → 自动不带选项重试（2 次调用，第二次无选项） */
+const wRetry = mkDecoderWin({ img: 'fail', bmp: 'throw-on-options' });
+const instRetry = mkInstance(wRetry);
+if (instRetry.api && instRetry.api.boot) instRetry.api.boot();
+const elsRetry = instRetry.api.elements();
+fireFileInput(elsRetry, mkBlob('old-engine.jpg', 'image/jpeg', 999));
+await flushAsync();
+const stRetry = instRetry.api.state();
+eq('导入阶梯 ④ | 带选项抛错 → 自动重试，共 2 次调用', wRetry.bmpCalls.length, 2);
+eq('导入阶梯 ④ | 第一次带 { imageOrientation }', wRetry.bmpCalls[0].options, { imageOrientation: 'from-image' });
+eq('导入阶梯 ④ | 第二次不带任何选项（argsLen === 1 且 options === undefined）',
+  [wRetry.bmpCalls[1].argsLen, wRetry.bmpCalls[1].options], [1, undefined]);
+eq('导入阶梯 ④ | 重试仍成功换源', [stRetry.srcW, stRetry.srcH], [800, 600]);
+
+/* ⑤ 大图不被拒：4000×3000 走完阶梯正常出图（上游不许加尺寸限制） */
+const wBig = mkDecoderWin({ img: 'ok', imgDims: [4000, 3000] });
+const instBig = mkInstance(wBig);
+if (instBig.api && instBig.api.boot) instBig.api.boot();
+const elsBig = instBig.api.elements();
+fireFileInput(elsBig, mkBlob('big.jpg', 'image/jpeg', 5 * 1024 * 1024));
+await flushAsync();
+const stBig = instBig.api.state();
+eq('导入阶梯 ⑤ | 4000×3000 源图被原样采用（不因尺寸被拒）', [stBig.srcW, stBig.srcH], [4000, 3000]);
+ok('导入阶梯 ⑤ | 没有出现「尺寸无效/太大」类拒绝文案',
+  !/尺寸无效|太大|超出/.test(String(elsBig.statusText.textContent)), String(elsBig.statusText.textContent));
+
+/* ⑥ #fileInput 的 accept 原文（与 onDrop 兜底文案必须同口径） */
+const fileInputTag = (UI_HTML.match(/<input\b[^>]*\bid="fileInput"[^>]*>/) || [''])[0];
+eq('导入 | #fileInput 的 accept 原文', (fileInputTag.match(/accept="([^"]*)"/) || [null, null])[1],
+  'image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.avif,.heic,.heif');
+
+/* ⑦ 非 image/* 的 MIME（application/octet-stream）**不许被静默丢弃**：
+     要么交给解码阶梯成功换源，要么给出可诊断的失败文案（含文件名/类型/两条原因）。
+     注意：这里**不**断言「被静默忽略」——那正是要消灭的形态。 */
+const wOctet = mkDecoderWin({ img: 'ok' });
+const instOctet = mkInstance(wOctet);
+if (instOctet.api && instOctet.api.boot) instOctet.api.boot();
+const elsOctet = instOctet.api.elements();
+fireFileInput(elsOctet, mkBlob('sniffed.jpg', 'application/octet-stream', 7777));
+await flushAsync();
+const stOctet = instOctet.api.state();
+ok('导入 ⑦ | octet-stream 但内容可解码 → 仍然成功换源（不被 MIME 挡掉）',
+  stOctet.srcW === 400 && stOctet.srcH === 300, JSON.stringify([stOctet.srcW, stOctet.srcH, String(elsOctet.statusText.textContent)]));
+const wOctetBad = mkDecoderWin({ img: 'fail', bmp: 'fail' });
+const instOctetBad = mkInstance(wOctetBad);
+if (instOctetBad.api && instOctetBad.api.boot) instOctetBad.api.boot();
+const elsOctetBad = instOctetBad.api.elements();
+fireFileInput(elsOctetBad, mkBlob('mystery.bin', 'application/octet-stream', 2048));
+await flushAsync();
+const octetMsg = String(elsOctetBad.statusText.textContent);
+ok('导入 ⑦ | octet-stream 且两条解码都失败 → 给出可诊断文案（不是静默丢弃，也不只说「不是图片」）',
+  octetMsg.indexOf('mystery.bin') >= 0 && octetMsg.indexOf('application/octet-stream') >= 0 && /字节/.test(octetMsg)
+  && /<img>/.test(octetMsg) && /createImageBitmap/.test(octetMsg), octetMsg);
+
+/* ══════════════════════════════════════════════════════════════════════
+   批量修改（#batchMode）：四连通选区 + Lab 推荐 + 整片改色
+   ══════════════════════════════════════════════════════════════════════ */
+sandboxWin.ColorKit = globalThis.ColorKit;      /* 批量修改用 srgbToLab / deltaE */
+const batchK = globalThis.ColorKit;
+const batchPal = (function () {
+  const keys = Object.keys(globalThis.PINDOU_PALETTES);
+  const entry = globalThis.PINDOU_PALETTES[keys[0]];
+  return { id: keys[0], colors: entry.colors };
+})();
+/* 9×5：区域 A = 第 0 行第 0–2 列（色 0）；区域 B = 第 4 行第 6–8 列（同色 0，与 A 不相连）；
+   第 1 行第 0–2 列用色 1（保证三个色号都被用到，pruneUnusedColors 不会平移下标） */
+const batchPat = erMkPat(9, 5, (x, y) => {
+  if (y === 0 && x <= 2) return 0;
+  if (y === 4 && x >= 6) return 0;
+  if (y === 1 && x <= 2) return 1;
+  if (y === 2) return null;
+  return 2;
+});
+batchPat.paletteId = batchPal.id;
+const codeOfCell = (pat, i) => (pat.cells[i] === EMPTY ? null : String(pat.colors[pat.cells[i]].code));
+st.pattern = batchPat;
+st.viewOpts = ui.viewOpts();
+st.history.length = 0;
+els.batchMode.checked = true;
+fire(els.batchMode, 'change');
+eq('批量 | 勾 #batchMode → state.tool === "batch"', ui.tool(), 'batch');
+eq('批量 | 且 #recolorMode 被取消勾选（双向互斥）', els.recolorMode.checked, false);
+eq('批量 | 三项单选（关闭/魔术棒/橡皮）都未选中', [els.toolNone.checked, els.toolWand.checked, els.toolEraser.checked], [false, false, false]);
+els.recolorMode.checked = true;
+fire(els.recolorMode, 'change');
+eq('批量 | 反向：勾 #recolorMode → tool=recolor 且 #batchMode 自动取消', [ui.tool(), els.batchMode.checked], ['recolor', false]);
+els.batchMode.checked = true;
+fire(els.batchMode, 'change');
+eq('批量 | 回到 batch（同一套 state.tool 状态机）', ui.tool(), 'batch');
+
+/* 未选定：无选区、无推荐、不画高亮 */
+eq('批量 | 未点格子时无选区', ui.batchRegion(), []);
+eq('批量 | 未点格子时无推荐（recs 为 null）', ui.batchRecs(), null);
+eq('批量 | 未选定 → 高亮不画（drawBatchHighlight 返回 false）', ui.drawBatchHighlight(), false);
+
+/* 点一格 → 四连通那一片 */
+const batchSelN = ui.batchSelect(1);
+eq('批量 | 点一格 → 选区 = 四连通那一片（3 格）', ui.batchRegion().slice().sort((a, b) => a - b), [0, 1, 2]);
+eq('批量 | batchSelect 返回值 = 选区大小', batchSelN, 3);
+eq('批量 | 分离的同色区域 B 一格未动', [42, 43, 44].map((i) => st.pattern.cells[i]), [0, 0, 0]);
+ok('批量 | 分离的 B 区 locked 也保持 0', [42, 43, 44].every((i) => !st.pattern.locked[i]));
+ok('批量 | 选定后高亮画出来了（drawBatchHighlight 返回 true）', ui.drawBatchHighlight() === true);
+ok('批量 | 高亮用色来自 ui.highlightColors()（rgba 形态，没写死在别处）',
+  typeof ui.highlightColors().fill === 'string' && ui.highlightColors().fill.indexOf('rgba') === 0, JSON.stringify(ui.highlightColors()));
+ok('批量 | 选中后状态栏报出选区大小', /已选中 3 格/.test(String(els.statusText.textContent)), String(els.statusText.textContent));
+const recsNow = ui.batchRecs() || [];
+const origBatchCode = codeOfCell(st.pattern, 1);
+eq('批量 | 推荐色恰好 8 个', recsNow.length, 8);
+ok('批量 | 推荐里不含原色号 ' + origBatchCode, recsNow.every((r) => r.code !== origBatchCode));
+/* 独立重算：用 ColorKit 自己再算一遍 Lab 距离（不读实现里的数组） */
+const origRgb = st.pattern.colors[st.pattern.cells[1]].rgb;
+const lab0 = batchK.srgbToLab(origRgb);
+const myDist = {};
+for (const c of batchPal.colors) if (String(c.code) !== origBatchCode) myDist[c.code] = batchK.deltaE(lab0, batchK.srgbToLab(c.rgb));
+const myTop8 = Object.keys(myDist).sort((a, b) => (myDist[a] - myDist[b]) || (String(a) < String(b) ? -1 : 1)).slice(0, 8);
+ok('批量 | 每个推荐的 d 都与独立重算的 deltaE 逐值相等（同一把尺子）',
+  recsNow.length > 0 && recsNow.every((r) => Math.abs(r.d - myDist[r.code]) < 1e-9),
+  JSON.stringify(recsNow.map((r) => [r.code, r.d, myDist[r.code]]).slice(0, 3)));
+ok('批量 | 推荐按 Lab 距离升序（单调不减）', recsNow.every((r, i) => i === 0 || recsNow[i - 1].d <= r.d), JSON.stringify(recsNow.map((r) => r.d)));
+ok('批量 | 推荐集合 = 独立取「色卡里除原色外最近的 8 个」',
+  JSON.stringify(recsNow.map((r) => r.code).slice().sort()) === JSON.stringify(myTop8.slice().sort()),
+  JSON.stringify([recsNow.map((r) => r.code), myTop8]));
+
+/* 选推荐色 → 整片改色 + 其余格逐格不变 + 1 步历史 + lockToggle 语义 */
+const batchBeforeCodes = Array.from({ length: batchPat.w * batchPat.h }, (_, i) => codeOfCell(st.pattern, i));
+const batchRegionIdx = ui.batchRegion();
+const batchTarget = recsNow[0].code;
+const batchApplied = ui.batchApply(batchTarget);
+eq('批量 | 改色格数 = 选区大小', batchApplied, 3);
+eq('批量 | 选区整片改成目标色号', batchRegionIdx.map((i) => codeOfCell(st.pattern, i)), [batchTarget, batchTarget, batchTarget]);
+const batchOutsideChanged = [];
+for (let i = 0; i < batchBeforeCodes.length; i++) {
+  if (batchRegionIdx.indexOf(i) >= 0) continue;
+  if (codeOfCell(st.pattern, i) !== batchBeforeCodes[i]) batchOutsideChanged.push(i);
+}
+eq('批量 | 其余格逐格不变（按色号比对，允许 colors 下标平移）', batchOutsideChanged, []);
+eq('批量 | 整片改色只占 1 步历史', st.history.length, 1);
+eq('批量 | #lockToggle 勾着 → 选区格 locked === 1', batchRegionIdx.map((i) => st.pattern.locked[i]), [1, 1, 1]);
+eq('批量 | 改完自动清空选区与推荐（高亮随之消失）', [ui.batchRegion().length, ui.batchRecs(), ui.drawBatchHighlight()], [0, null, false]);
+ok('批量 | 收尾提示写出「已批量改色：3 格」', /已批量改色：3 格/.test(String(els.statusText.textContent)), String(els.statusText.textContent));
+
+/* 撤销：批量改色可被撤销 */
+eq('批量 | undo() 返回 true', ui.undo(), true);
+eq('批量 | undo 后选区格回到原色号', batchRegionIdx.map((i) => codeOfCell(st.pattern, i)), [origBatchCode, origBatchCode, origBatchCode]);
+
+/* 切走工具 → 选区与高亮一起清掉 */
+ui.batchSelect(1);
+eq('批量 | 重新选定后有选区', ui.batchRegion().length, 3);
+ui.setTool('none');
+eq('批量 | 切走工具 → 选区清空、推荐清空、高亮消失',
+  [ui.batchRegion().length, ui.batchRecs(), ui.drawBatchHighlight()], [0, null, false]);
+
+/* 色板路径同样生效：selectRecolorCode → 立刻整片改 + 进入「最近使用」 */
+ui.setTool('batch');
+ui.batchSelect(1);
+const paletteCode = recsNow[1].code;
+ui.selectRecolorCode(paletteCode);
+eq('批量 | 用色板/推荐入口选色 → 立刻整片改色', [0, 1, 2].map((i) => codeOfCell(st.pattern, i)), [paletteCode, paletteCode, paletteCode]);
+eq('批量 | 选中色进入「最近用过」队首', st.recolor.recent[0], paletteCode);
+eq('批量 | 色板路径同样只占 1 步历史', st.history.length, 1);
+ui.undo();
+
+/* 20000 格上限：与魔术棒同一口径 */
+const hugeBatch = erMkPat(150, 150, () => 2);
+hugeBatch.paletteId = batchPal.id;
+const hugeOrigCode = codeOfCell(hugeBatch, 0);
+st.pattern = hugeBatch;
+st.viewOpts = ui.viewOpts();
+st.history.length = 0;
+ui.setTool('batch');
+const hugeSel = ui.batchSelect(0);
+eq('批量 | 单次选区上限 = 20000 格（与魔术棒同一常量）', hugeSel, 20000);
+eq('批量 | 超限时标记 truncated', !!st.batch.truncated, true);
+ok('批量 | 超限时提示说明只处理前 20000 格', /超过单次上限 20000 格/.test(String(els.batchHint.textContent)), String(els.batchHint.textContent));
+const hugeApplied = ui.batchApply(recsNow[0].code);
+eq('批量 | 超限时也只改 20000 格', hugeApplied, 20000);
+/* 批量是「改色」不是「擦除」：格子总数不变（22500），只是 20000 格换成目标色、其余 2500 格仍是原色 */
+const hugeAfterCodes = Array.from(hugeBatch.cells).map((c) => (c === EMPTY ? null : String(hugeBatch.colors[c].code)));
+eq('批量 | 改成目标色的格子恰好 20000 格', hugeAfterCodes.filter((c) => c === String(recsNow[0].code)).length, 20000);
+eq('批量 | 剩下的 2500 格仍是原来的色号（只换色、不擦除，总数仍是 22500）',
+  [hugeAfterCodes.filter((c) => c !== null).length, hugeAfterCodes.filter((c) => c === hugeOrigCode).length],
+  [22500, 2500]);
+
+/* 四工具互斥：任意时刻只有一个生效 */
+const fourTools = [['batchMode', 'batch'], ['recolorMode', 'recolor'], ['toolWand', 'wand'], ['toolEraser', 'eraser'], ['toolNone', 'none']];
+const toolExclusiveBad = [];
+for (const t of fourTools) {
+  els[t[0]].checked = true;
+  safeFire(els[t[0]], 'change');
+  const checkedCount = ['batchMode', 'recolorMode', 'toolWand', 'toolEraser', 'toolNone'].filter((k) => els[k].checked).length;
+  if (ui.tool() !== t[1] || checkedCount !== 1) toolExclusiveBad.push(t[0] + '→' + ui.tool() + '/' + checkedCount);
+}
+eq('批量 | 四工具（+关闭）逐个切换：每次恰好 1 个生效、状态机一致', toolExclusiveBad, []);
+eq('批量 | 高亮没有动 Render 接口（仍是那 4 个键）',
+  Object.keys(Render).sort(), ['drawPattern', 'exportCSV', 'exportPNG', 'legendHTML']);
+
+/* ColorKit 缺失：不抛、不编造推荐、提示如实 */
+const ckBackup = sandboxWin.ColorKit;
+delete sandboxWin.ColorKit;
+st.pattern = batchPat;
+st.viewOpts = ui.viewOpts();
+ui.setTool('batch');
+ui.clearBatch();
+ok('批量 | ColorKit 缺失 + 未选定时，提示如实说明「色彩模块未加载、给不出推荐、色板仍可用」',
+  /色彩模块未加载/.test(String(els.batchHint.textContent)) && /色板/.test(String(els.batchHint.textContent)), String(els.batchHint.textContent));
+let ckThrew = '';
+let ckSel = 0;
+try { ckSel = ui.batchSelect(1); } catch (e) { ckThrew = e.message; }
+eq('批量 | ColorKit 缺失时不抛异常', ckThrew, '');
+eq('批量 | ColorKit 缺失时选区仍然建立（改色本身不依赖推荐）', ckSel, 3);
+eq('批量 | ColorKit 缺失时不编造推荐（batchRecs 为 null）', ui.batchRecs(), null);
+eq('批量 | ColorKit 缺失时 recommendColors 返回 null（不是空数组假装成功）', ui.recommendColors([255, 0, 0], 'A1', 8), null);
+ok('批量 | ColorKit 缺失 + 已选定：提示不再承诺推荐色，只说用色板选色',
+  String(els.batchHint.textContent).indexOf('推荐色号') < 0 && /色板/.test(String(els.batchHint.textContent)), String(els.batchHint.textContent));
+sandboxWin.ColorKit = ckBackup;
+
+/* ── 抠图撤销键 #btnEraseUndo：与 #btnUndo 是同一个函数引用 ─────────────── */
+const undoHandlers = (els.btnUndo._handlers.click || []);
+const eraseUndoHandlers = (els.btnEraseUndo._handlers.click || []);
+ok('抠图撤销 | #btnUndo 与 #btnEraseUndo 绑定**同一个函数引用**（不是两份实现）',
+  undoHandlers.length === 1 && eraseUndoHandlers.length === 1 && undoHandlers[0] === eraseUndoHandlers[0],
+  'undo=' + undoHandlers.length + ' eraseUndo=' + eraseUndoHandlers.length + ' same=' + (undoHandlers[0] === eraseUndoHandlers[0]));
+st.pattern = erMkPat(6, 4, () => 0);
+st.viewOpts = ui.viewOpts();
+st.history.length = 0;
+ui.setTool('none');
+const eraseUndoBeforeCodes = Array.from({ length: 24 }, (_, i) => codeOfCell(st.pattern, i));
+ui.setTool('wand');
+ui.wandErase(0);
+eq('抠图撤销 | 擦除后两个撤销键都可用（置灰状态同步）', [els.btnUndo.disabled, els.btnEraseUndo.disabled], [false, false]);
+eq('抠图撤销 | 擦除后出现 1 步历史', st.history.length, 1);
+safeFire(els.btnEraseUndo, 'click');
+eq('抠图撤销 | 点 #btnEraseUndo 回退一步（栈清空）', st.history.length, 0);
+ok('抠图撤销 | 回退后图纸内容确实还原（与快照逐格比对）',
+  JSON.stringify(Array.from({ length: 24 }, (_, i) => codeOfCell(st.pattern, i))) === JSON.stringify(eraseUndoBeforeCodes));
+eq('抠图撤销 | 栈空后两个撤销键一起置灰', [els.btnUndo.disabled, els.btnEraseUndo.disabled], [true, true]);
+/* 批量改色同样可被它撤销 */
+st.pattern = batchPat;
+st.viewOpts = ui.viewOpts();
+st.history.length = 0;
+ui.setTool('batch');
+ui.batchSelect(1);
+const batchUndoBefore = [0, 1, 2].map((i) => codeOfCell(st.pattern, i));
+ui.batchApply(recsNow[0].code);
+safeFire(els.btnEraseUndo, 'click');
+eq('抠图撤销 | 批量改色也能被 #btnEraseUndo 回退', [0, 1, 2].map((i) => codeOfCell(st.pattern, i)), batchUndoBefore);
+ui.setTool('none');
 
 /* ══════════════════════════════════════════ 第 7 组 · 原图编辑（srcedit.js） */
 startGroup('第 7 组 · 原图编辑（SourceEdit）');
@@ -3314,6 +3675,90 @@ info('srcedit square 下限策略：6 个拖拽目标实测 ' + sqSeen.join(' �
   + '极端贴边序列 40×40 → 90×90 → 8×8 且锚点被平移到 {110,92}、不缩框；'
   + '极小图 5×5 → 5×5（ms=5）、1×1 → 1×1（ms=1）、12×4 → 4×4（ms=4）。'
   + '全部满足 1:1 与 ≥ms 同时成立，本轮观测最小边长 side = ' + sqMinSeen + 'px。');
+
+/* ══════════════ 裁剪模式门控（本轮用户报的「手机上没法滚页面」）══════════════
+   实现口径：常态不吃手势（页面可滚），只有「裁剪模式」开着才把 touch-action 设成 none
+   并且对 pointerType === 'touch' 的 pointerdown 调 preventDefault；鼠标 / 触控笔不受门控。 */
+const cropWorld = makeEditWorld(400);
+const cropApi = cropWorld.win.SourceEdit.mount(cropWorld.canvas, {});
+eq('裁剪门控 | mount 后 setCropMode 存在且是函数', typeof cropApi.setCropMode, 'function');
+eq('裁剪门控 | 挂载后（裁剪默认关）画布 touch-action 不是 none（页面可滚）',
+  cropWorld.canvas.style.touchAction === 'none', false);
+eq('裁剪门控 | setCropMode(true) → 返回 true 且写入 none',
+  [cropApi.setCropMode(true), cropWorld.canvas.style.touchAction], [true, 'none']);
+eq('裁剪门控 | setCropMode(false) → 恢复可滚动（不再是 none）',
+  [cropApi.setCropMode(false), cropWorld.canvas.style.touchAction === 'none'], [true, false]);
+cropApi.setCropMode(true);
+cropApi.destroy();
+eq('裁剪门控 | destroy() 不残留 touch-action:none', cropWorld.canvas.style.touchAction === 'none', false);
+
+/* 触摸真行为：关着不拦手势、开着才拦并起框；鼠标不受门控 */
+const touchWorld = makeEditWorld(400);
+const touchApi = touchWorld.win.SourceEdit.mount(touchWorld.canvas, {});
+touchApi.setSource({ naturalWidth: 200, naturalHeight: 100 });
+const pdEvent = (x, y, pointerType) => {
+  const rec = { prevented: 0 };
+  const evt = {
+    type: 'pointerdown', button: 0, pointerId: 1, pointerType: pointerType, clientX: x, clientY: y,
+    target: touchWorld.canvas, currentTarget: touchWorld.canvas,
+    preventDefault() { rec.prevented++; }, stopPropagation() {}
+  };
+  return { evt: evt, rec: rec };
+};
+const moveEvent = (x, y, pointerType) => ({
+  type: 'pointermove', button: 0, pointerId: 1, pointerType: pointerType, clientX: x, clientY: y,
+  target: touchWorld.win, currentTarget: touchWorld.win, preventDefault() {}, stopPropagation() {}
+});
+const upEvent = (x, y, pointerType) => ({
+  type: 'pointerup', button: 0, pointerId: 1, pointerType: pointerType, clientX: x, clientY: y,
+  target: touchWorld.win, currentTarget: touchWorld.win, preventDefault() {}, stopPropagation() {}
+});
+touchApi.setCropMode(false);
+const pdOff = pdEvent(100, 50, 'touch');
+touchWorld.canvas.dispatchEvent(pdOff.evt);
+eq('裁剪门控 | 裁剪关 + 触摸 pointerdown → 不调 preventDefault（把手势留给页面滚动）', pdOff.rec.prevented, 0);
+touchWorld.win.dispatchEvent(moveEvent(160, 80, 'touch'));
+touchWorld.win.dispatchEvent(upEvent(160, 80, 'touch'));
+eq('裁剪门控 | 裁剪关 + 触摸拖拽 → 不起框（crop 仍为 null）', touchApi.getState().crop, null);
+touchApi.setCropMode(true);
+const pdOn = pdEvent(100, 50, 'touch');
+touchWorld.canvas.dispatchEvent(pdOn.evt);
+eq('裁剪门控 | 裁剪开 + 触摸 pointerdown → 调 preventDefault（吃掉滚动手势）', pdOn.rec.prevented, 1);
+touchWorld.win.dispatchEvent(moveEvent(160, 80, 'touch'));
+touchWorld.win.dispatchEvent(upEvent(160, 80, 'touch'));
+ok('裁剪门控 | 裁剪开 + 触摸拖拽 → 框选真的生效（crop 非 null）',
+  !!touchApi.getState().crop, JSON.stringify(touchApi.getState().crop));
+touchApi.setCropMode(false);
+const pdMouse = pdEvent(100, 50, 'mouse');
+touchWorld.canvas.dispatchEvent(pdMouse.evt);
+eq('裁剪门控 | 裁剪关 + 鼠标 pointerdown → 仍然 preventDefault（鼠标 / 触控笔不受门控）', pdMouse.rec.prevented, 1);
+touchWorld.win.dispatchEvent(upEvent(160, 80, 'mouse'));
+touchApi.setCropMode(false);
+const pdPen = pdEvent(100, 50, 'pen');
+touchWorld.canvas.dispatchEvent(pdPen.evt);
+eq('裁剪门控 | 裁剪关 + 触控笔 pointerdown → 同样不受门控', pdPen.rec.prevented, 1);
+touchWorld.win.dispatchEvent(upEvent(160, 80, 'pen'));
+
+/* app.js 侧：宿主是旧版 SourceEdit（没有 setCropMode）时也必须不抛 */
+const legacyInst = mkInstance({
+  SourceEdit: {
+    mount: function () {
+      return {
+        setSource: function () { return true; }, getResultCanvas: function () { return null; },
+        getState: function () { return { crop: null }; }, rotate: function () {}, flip: function () {},
+        setAspect: function () {}, reset: function () {}, hasTransform: function () { return false; }
+      };
+    }
+  }
+});
+if (legacyInst.api && legacyInst.api.boot) legacyInst.api.boot();
+const legacyEls = legacyInst.api.elements();
+ok('裁剪门控 | 旧版 SourceEdit（无 setCropMode）也能挂载', typeof legacyInst.api.elements === 'function' && !!legacyEls.srcCropMode);
+let legacyThrew = '';
+legacyEls.srcCropMode.checked = true;
+try { safeFire(legacyEls.srcCropMode, 'change'); } catch (e) { legacyThrew = e.message; }
+eq('裁剪门控 | 宿主没有 setCropMode 时 app.js 不抛异常（旧版 SourceEdit 兼容）', legacyThrew, '');
+eq('裁剪门控 | 宿主没有 setCropMode 时 app.js 自己的裁剪状态仍然正确记录', legacyInst.api.state().srcCropMode, true);
 
 /* ═════════════════════════════════════════════════════════════ 汇总 */
 console.log('\n════════════ 分组小结 ════════════');

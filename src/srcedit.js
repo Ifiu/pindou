@@ -44,7 +44,8 @@
  *
  * ── 契约（app.js 按此调用，签名冻结）──────────────────────────────────────
  *   window.SourceEdit = { mount(canvasEl, opts) -> api }
- *   opts:  { onChange: function(state){} }        // 状态变化后调用，供 app.js 刷新自己的 UI
+ *   opts:  { onChange: function(state){}, cropMode: boolean }
+ *          // cropMode 可选：mount 时的「裁剪模式」初值（缺省 false = 画布可滚动，不吃手势）
  *   api:   setSource(imageLike) / getResultCanvas() / getState() / rotate(deltaDeg)
  *          flip(axis) / setAspect(mode) / reset() / hasTransform()
  *   state: { rotation, flipH, flipV, crop, hasCrop, aspect }（每次返回新对象，crop 也是副本）
@@ -52,9 +53,16 @@
  *           getResultCanvas() 返回 HTMLCanvasElement 或 null
  *   契约之外的附加方法（纯增量，不影响上面任何签名）：
  *     getLastError() -> string|null   最近一次被拒绝的原因（如图片加载失败、rotate(45)）
- *     destroy()      -> void          解除 window 监听与观察器，释放引用
+ *     destroy()      -> void          解除 window 监听与观察器，释放引用，并清掉内联 touch-action
  *     relayout()     -> void          容器宽度变化后主动重排预览（侧栏折叠等场景；已自动挂
  *                                     ResizeObserver + window resize，一般不用手动调）
+ *     setCropMode(on) -> true         「裁剪模式」开关（可选扩展，本次新增）：
+ *                                     on=true  → 画布内联 touch-action:none，
+ *                                               触摸拖动只框选、页面不滚（含触摸指针的落点也会被接管）；
+ *                                     on=false → 清空内联 touch-action（宿主 CSS 说了算），
+ *                                               触摸拖动交还页面滚动，且**触摸指针不参与框选**
+ *                                               （鼠标 / 触控笔不受此限制，桌面行为原样保留）。
+ *                                     默认 false —— 挂载时绝不写死 touch-action:none。
  *   onChange 触发策略（恰好每次状态变化一次，拖拽中途不触发）：
  *     setSource 成功（重置裁剪与旋转）、rotate、flip、setAspect、reset、以及**拖拽结束时**
  *     裁剪框确实变了 —— 各触发一次；pointermove 期间一次都不触发；被拒绝的调用不触发。
@@ -229,7 +237,9 @@
       reset: function () { return false; },
       hasTransform: function () { return false; },
       getLastError: function () { return why; },
-      destroy: function () {}
+      destroy: function () {},
+      /* 可选扩展在降级实现里也要在：宿主只做能力检测（typeof === 'function'）即可，不必 try/catch */
+      setCropMode: function () { return false; }
     };
   }
 
@@ -250,6 +260,7 @@
     var warned = {};
     var drag = null;
     var hoverCursor = '';
+    var cropMode = false;              // 裁剪模式：默认关 —— 关着时画布不吃滚动手势
     var alive = true;
 
     /* ---- 预览布局状态 ---- */
@@ -580,6 +591,10 @@
     function onDown(e) {
       if (!src || !alive) return;
       if (!isPrimary(e)) return;
+      /* 裁剪模式关着 + 手指落下 = 用户在滚页面，不是要框选：
+         直接放行（连 preventDefault 都不调，免得在部分内核上把滚动也一起拦掉）。
+         鼠标 / 触控笔不受影响 —— 桌面端「载图即可拖拽框选」的老行为原样保留。 */
+      if (!cropMode && e && e.pointerType === 'touch') return;
       if (e && typeof e.preventDefault === 'function') e.preventDefault();
       var p = cssPoint(e);
       var c = { x: p.x / viewScale, y: p.y / viewScale };
@@ -814,6 +829,9 @@
       resetTransform();
       cacheSig = ''; cacheCanvas = null;
       drag = null;
+      /* 卸掉内联 touch-action：实例没了就别再扣着宿主画布的手势 */
+      cropMode = false;
+      applyTouchAction();
     }
 
     /* --------------------------------------------------------- 事件绑定 */
@@ -850,9 +868,28 @@
         } catch (err) { /* 不支持就算了，window resize 仍能兜住 */ }
       }
     }
-    if (canvasEl.style) {
-      try { canvasEl.style.touchAction = 'none'; } catch (err) { /* 忽略 */ }
+    /* 裁剪模式开关时同步内联 touch-action：
+         · 开 → 'none'：手指在画布上只做框选，页面不跟着滚（框选优先）；
+         · 关 → 清空内联值：让宿主样式表接管（本项目的 .source-canvas 常态没有 touch-action，
+           即默认 auto），手指落在原图上就是滚页面。
+       这条内联样式必须跟着开关走，**不能挂载时无条件写死 'none'** ——
+       否则用户根本没打算框选时，手指落在原图上就已经滚不动页面了（实测反馈的问题）。
+       opts.cropMode 可在 mount 时直接给初值，缺省为关。 */
+    function applyTouchAction() {
+      if (!canvasEl.style) return;
+      try { canvasEl.style.touchAction = cropMode ? 'none' : ''; } catch (err) { /* 忽略 */ }
     }
+
+    function setCropMode(on) {
+      cropMode = !!on;
+      applyTouchAction();
+      return true;
+    }
+
+    /* mount 时把内联 touch-action 对齐到「裁剪模式」的初值（默认关 → 清空 = 可滚动），
+       绝不再无条件写死 'none'。opts.cropMode 可在 mount 时就打开。 */
+    cropMode = !!(opts && opts.cropMode);
+    applyTouchAction();
 
     layout();
 
@@ -867,6 +904,9 @@
       hasTransform: hasTransform,
       getLastError: getLastError,
       destroy: destroy,
+      /* 可选扩展（不在冻结契约里）：开关「裁剪模式」。开 = 画布吃掉滚动手势只做框选，
+         关 = 画布恢复可滚动。宿主没有这个方法时旧行为不变（module 内部只在指针交互里读 cropMode）。 */
+      setCropMode: setCropMode,
       /* 供 app.js 在容器宽度变化后（如侧栏折叠）主动重排预览；非契约必需 */
       relayout: layout
     };

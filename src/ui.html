@@ -144,9 +144,12 @@
   .side{display:flex;flex-direction:column;gap:12px}
   .block h2{margin-bottom:8px;color:var(--accent)}
   .source-wrap{position:relative}
-  /* 原图预览画布是纯拖拽表面（裁剪框 / 移动框都用它），手指在上面必须只拖动、不滚动页面 */
-  .source-canvas{display:block;width:100%;max-width:100%;height:auto;background:#0c0e12;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated;touch-action:none}
-  .source-canvas.crop-mode{cursor:crosshair}
+  /* 原图预览画布：**常态必须可滚**（手机上一根手指落在原图上应该是滚页面），
+     只有打开「裁剪模式」时才关掉滚动，让拖拽专门用来框选。
+     两个入口同一个语义：这里的 .crop-mode 类由 app.js 切开关时同步加/去，
+     SourceEdit.setCropMode() 再写一次内联样式（该模块被别的宿主单独挂载、没有这张样式表时也成立）。 */
+  .source-canvas{display:block;width:100%;max-width:100%;height:auto;background:#0c0e12;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated}
+  .source-canvas.crop-mode{cursor:crosshair;touch-action:none}
   .src-tools{margin-top:10px}
   .src-reset{width:100%;margin-top:8px}
   .summary{display:flex;flex-direction:column;gap:5px}
@@ -237,7 +240,7 @@
     </div>
     <div class="head-actions">
       <button id="btnPickFile" class="btn btn-primary" type="button">选择图片…</button>
-      <input id="fileInput" class="file-input" type="file" accept="image/*" />
+      <input id="fileInput" class="file-input" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.avif,.heic,.heif" />
       <span id="dropHint" class="drop-hint">也可拖拽图片到窗口，或按 Ctrl+V 粘贴</span>
     </div>
   </header>
@@ -325,6 +328,10 @@
             <option value="5">5 × 5</option>
           </select>
           <p id="toolHint" class="hint">未开启任何图纸工具：点击格子不会有任何改动。</p>
+          <div class="btn-grid">
+            <button id="btnEraseUndo" class="btn btn-ghost" type="button" disabled>撤销这一步</button>
+          </div>
+          <p class="hint">手机上按不出 Ctrl+Z，而「撤销」按钮在「画笔 / 批量修改」组里、离抠图操作很远 —— 所以这里就近再给一个。它与全局「撤销」、Ctrl+Z 是同一条撤销路径（同一个历史栈），历史为空时同样置灰。</p>
         </section>
 
         <section class="group group-actions">
@@ -387,8 +394,9 @@
         </section>
 
         <section class="group">
-          <h2>改色模式</h2>
-          <label class="check"><input id="recolorMode" type="checkbox" /> 开启改色模式（点击图纸格子改色）</label>
+          <h2>画笔 / 批量修改</h2>
+          <label class="check"><input id="recolorMode" type="checkbox" /> 画笔模式（先在上面选好色号，再点击图纸格子改色）</label>
+          <label class="check"><input id="batchMode" type="checkbox" /> 批量修改（先点图纸上一个格子，再选颜色，整片同色区域一起改）</label>
           <label class="row" for="recolorScope"><span>色板范围</span></label>
           <select id="recolorScope">
             <option value="used" selected>只显示本图用到的色号（按颗数排序）</option>
@@ -401,13 +409,16 @@
           <label class="row"><span>最近用过</span></label>
           <div id="recolorRecentRow" class="sw-recent"></div>
           <p id="recolorCurrent" class="hint">当前目标色号：未选择</p>
-          <label class="check"><input id="lockToggle" type="checkbox" checked /> 改色时锁定该格（重算时不被覆盖）</label>
+          <label class="row"><span>批量修改的推荐色号（与原色最接近的 8 个）</span></label>
+          <div id="batchRecoRow" class="sw-recent"></div>
+          <p id="batchHint" class="hint">批量修改：先点图纸上的一个格子，这里会出现 8 个最接近的色号；选一个即可把该格所在的整片同色区域（上下左右相连、不含斜连）一次改掉。</p>
+          <label class="check"><input id="lockToggle" type="checkbox" checked /> 改色 / 批量修改后锁定这些格（重算时不被覆盖）</label>
           <div class="btn-grid">
             <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
             <button id="btnUndo" class="btn btn-ghost" type="button" disabled>撤销</button>
           </div>
           <p id="lockInfo" class="hint">已锁定 0 格</p>
-          <p class="hint">提示：按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格。撤销快捷键 Ctrl+Z（Mac 为 ⌘+Z）。改色与抠图共用同一撤销栈。</p>
+          <p class="hint">提示：在「画笔模式」下按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格（批量修改不参与这个操作）。撤销快捷键 Ctrl+Z（Mac 为 ⌘+Z）；画笔模式、批量修改、抠图共用同一撤销栈，手机上也可以用「抠图」组里的「撤销这一步」。</p>
         </section>
 
         <section class="group group-actions">
@@ -438,7 +449,7 @@
           <button id="emptyState" class="btn btn-primary empty-cta" type="button">选择本地图片…</button>
         </div>
       </div>
-      <p class="hint">参数调整会自动重算（防抖 200ms）。「改色模式」开启后点击格子可改色；「抠图」组里可选魔术棒或橡皮刷，擦掉的格子会置空并在重新生成时保持为空。</p>
+      <p class="hint">参数调整会自动重算（防抖 200ms）。「画笔 / 批量修改」组里打开「画笔模式」后点格子改单格、打开「批量修改」后点一格再选颜色可整片改色；「抠图」组里可选魔术棒、橡皮刷，或就近用「撤销这一步」。擦掉的格子会置空并在重新生成时保持为空。</p>
     </main>
 
     <aside class="panel side">
@@ -449,8 +460,9 @@
           <p id="sourceHint" class="canvas-hint small">尚未载入图片</p>
         </div>
         <div class="src-tools">
-          <label class="check"><input id="srcCropMode" type="checkbox" /> 裁剪模式（在原图上线框选）</label>
+          <label class="check"><input id="srcCropMode" type="checkbox" /> 裁剪模式（打开后在原图上拖拽框选要保留的区域）</label>
           <label class="check"><input id="srcAspectSquare" type="checkbox" /> 正方形裁剪框</label>
+          <p id="srcCropHint" class="hint">触摸屏：手机上一根手指落在原图上用来滚动页面；要框选请先打开上面的「裁剪模式」—— 打开后单指拖动才会画框，页面也不会跟着滚。鼠标 / 触控笔不受这个开关影响。</p>
           <div class="btn-grid">
             <button id="srcRotateL" class="btn" type="button">↺ 左转 90°</button>
             <button id="srcRotateR" class="btn" type="button">↻ 右转 90°</button>

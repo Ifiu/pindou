@@ -4,7 +4,7 @@
  *
  * 用法：node build.mjs
  * 依赖：零依赖，只用 node: 内置模块（node:fs / node:path / node:url）。
- * 产物：<工作目录>/拼豆图纸生成器.html
+ * 产物：<工作目录>/index.html
  *
  * 三条硬约束（对应验收脚本 tests/check.mjs 第 5 组）：
  *   1) 安全阀：任何输入 JS 含 `</script` → 立即失败，绝不写产物（否则产物会被浏览器截断）。
@@ -18,7 +18,11 @@ import path from 'node:path';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = path.join(ROOT, 'src');
-const OUT_PATH = path.join(ROOT, '拼豆图纸生成器.html');
+/* 产物名统一为 index.html：用户把这一份直接当作部署入口（服务器默认首页）。
+   曾用名「拼豆图纸生成器.html」已废弃 —— 两个名字共存时出现过「本地与验收看的是 A、
+   服务器实际跑的是 B」的静默漂移，而套件当时提到旧名的次数是 0、完全看不见。
+   只有一个产物名，就不存在两份漂移；tests/check.mjs 第 5 组按这个文件名做新鲜度比对。 */
+const OUT_PATH = path.join(ROOT, 'index.html');
 
 /**
  * 脚本顺序冻结：palette → color → pipeline → render → srcedit → app（后者依赖前者的全局）。

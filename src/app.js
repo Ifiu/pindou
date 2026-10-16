@@ -54,6 +54,10 @@
   var RECENT_KEY = 'pindou.recentColors.v1';
   var BEAD_RATE = 500;                  /* 图纸角标的「颗/小时」估算速率（契约固定 500） */
   var WAND_MAX = 20000;                 /* 魔术棒单次最多擦除的格数：区域再大也不会卡死界面 */
+  /* 批量修改的选区高亮：直接叠在图纸画布上的半透明底 + 描边（不经过 Render 的公开接口）。
+     这两个字符串是自测识别高亮的锚点，别随手改。 */
+  var HIGHLIGHT_FILL = 'rgba(91,155,243,0.38)';
+  var HIGHLIGHT_STROKE = 'rgba(255,255,255,0.85)';
 
   /* 预处理滑杆的非线性压缩幂次：滑杆 50 → 生效 33，滑杆 20 → 生效 8（见 effCurve） */
   var EFF_POW = 1.6;
@@ -61,6 +65,7 @@
   /* 图纸工具互斥状态：任何时刻只有一个生效 */
   var TOOL_NONE = 'none';
   var TOOL_RECOLOR = 'recolor';
+  var TOOL_BATCH = 'batch';
   var TOOL_WAND = 'wand';
   var TOOL_ERASER = 'eraser';
   var TAB_BASIC = 'basic';
@@ -80,6 +85,7 @@
     boards: '1', sizePreset: 'custom', lockAspect: true,
     cellLabel: 'code', showRuler: true, cellSize: DEFAULT_CELL_PX, viewZoom: ZOOM_DEFAULT,
     recolorMode: false, recolorScope: PICKER_SCOPE_USED, lockToggle: true,
+    batchMode: false,
     exportScale: '2', exportAnnotate: true
   };
 
@@ -112,12 +118,16 @@
     viewZoomApplied: ZOOM_DEFAULT,
     history: [],         /* 撤销栈：[{w,h,cells,locked,colors}] 深拷贝快照；重新生成 / 换图时清空 */
     recolor: { scope: PICKER_SCOPE_USED, search: '', selected: '', recent: [] },
+    /* 批量修改的选区：region 是四连通同色区域的格子下标（上限 WAND_MAX），
+       code 是选区当前色号，recs 是推荐色（{color,d} 升序，最多 8 个），origin 是起点下标。
+       选区只在 TOOL_BATCH 下存在；切走工具 / 改完颜色都会清空（setTool / applyBatch）。 */
+    batch: { region: [], code: '', origin: -1, truncated: false, recs: null },
     status: { text: '', kind: 'info' },
     lastMs: 0,
     lockCount: 0,
     tab: TAB_BASIC,      /* 当前标签页：basic / advanced（只切显隐，不重建 DOM，不需要持久化） */
-    /* 图纸工具互斥状态：none / recolor / wand / eraser。
-       改色复选框 #recolorMode 与它双向同步，点击图纸的行为完全由它决定。 */
+    /* 图纸工具互斥状态：none / recolor（画笔模式）/ batch（批量修改）/ wand / eraser。
+       #recolorMode 与 #batchMode 两个复选框都和它双向同步，点击图纸的行为完全由它决定。 */
     tool: TOOL_NONE,
     eraseActive: false,  /* 橡皮刷是否处于一次按住拖动中 */
     eraseCount: 0,       /* 本次拖动已擦除的格数（pointerup 时统一收尾用） */
@@ -1183,9 +1193,16 @@
 
   function syncUndoButton() {
     var n = state.history.length;
+    var can = !!(state.pattern && n > 0);
     if (ui.btnUndo) {
-      ui.btnUndo.disabled = !(state.pattern && n > 0);
+      ui.btnUndo.disabled = !can;
       setText(ui.btnUndo, n > 0 ? ('撤销（' + n + '）') : '撤销');
+    }
+    /* 抠图组里的这个按钮走的是**同一个 undo()**（同一个历史栈），可用性必须与 #btnUndo 完全一致：
+       手机上按不出 Ctrl+Z，而全局「撤销」在「画笔 / 批量修改」组里，离抠图操作很远。 */
+    if (ui.btnEraseUndo) {
+      ui.btnEraseUndo.disabled = !can;
+      setText(ui.btnEraseUndo, n > 0 ? ('撤销这一步（' + n + '）') : '撤销这一步');
     }
   }
 
@@ -1204,6 +1221,8 @@
     if (snap.locked) p.locked = snap.locked;
     p.colors = snap.colors;
     recount(p);
+    /* 回退会把格子改回去：选区高亮是「当时的颜色区域」，此刻已经不成立了，先清掉再重绘 */
+    clearBatchSelection();
     renderPattern();
     renderLegend();
     renderSummary();
@@ -1214,7 +1233,7 @@
     return true;
   }
 
-  /* ------------------------------------------------------------- 改色模式 */
+  /* --------------------------------------------- 画笔模式 / 批量修改（改色） */
 
   /* 改色必须让 Pattern.colors 始终维持 Pipeline 的「自然序」：colors 的顺序就是图例、CSV
      与状态提示呈现颜色时的顺序，下标一乱，整张图纸的颜色顺序就变了。
@@ -1323,22 +1342,33 @@
       } catch (e) { /* 落到内置推断 */ }
     }
 
-    var v = state.viewOpts || {};
-    var cell = v.cellSize || v.cellPx || DEFAULT_CELL_PX;
-    var gridW = p.w * cell;
-    /* 网格原点 (pad, pad)：两种渲染器都保证「左留白 == 上留白 == 右留白」。
-       但**画布高度不等于 2*pad + gridH**：render.js 会在网格下方追加
-          · annotate 的用量表（预览恒 annotate:false，不出现），
-          · 一行「成品尺寸 / 板数」标注带 cap.h（总是出现，与 annotate 无关）。
-       所以不能用 (cv.height - gridH)/2 反推——那会把原点整体下移 cap.h/2，
-       格子越小越致命（cellPx=8 时正好差一整格，点击全部错行）。
-       画布宽度没有这两条附加带（预览 annotate:false ⇒ 内容宽 == 网格宽），
-       于是 pad 可以从宽度唯一还原，X/Y 共用同一个值。 */
-    var pad = (cv.width > gridW) ? Math.floor((cv.width - gridW) / 2) : 0;
-    var col = Math.floor((px - pad) / cell);
-    var row = Math.floor((py - pad) / cell);
+    var g = cellGeometry();
+    if (!g) return -1;
+    var col = Math.floor((px - g.pad) / g.cell);
+    var row = Math.floor((py - g.pad) / g.cell);
     if (col < 0 || row < 0 || col >= p.w || row >= p.h) return -1;
     return row * p.w + col;
+  }
+
+  /* 网格几何：命中判定（hitTestCell 的内置推断）与选区高亮（drawBatchHighlight）共用这一份实现，
+     否则「点中的格子」与「画高亮的格子」迟早会错开一整格。
+     pad 只能从**画布宽度**反推：两种渲染器都保证「左留白 == 上留白 == 右留白」，
+     但**画布高度不等于 2*pad + gridH** —— render.js 会在网格下方追加
+       · annotate 的用量表（预览恒 annotate:false，不出现），
+       · 一行「成品尺寸 / 板数」标注带 cap.h（总是出现，与 annotate 无关）。
+     所以不能用 (cv.height - gridH)/2 反推：那会把原点整体下移 cap.h/2，格子越小越致命
+     （cellPx=8 时正好差一整格，点击全部错行）。画布宽度没有这两条附加带
+     （预览 annotate:false ⇒ 内容宽 == 网格宽），于是 pad 可以从宽度唯一还原，X/Y 共用同一个值。 */
+  function cellGeometry() {
+    var p = state.pattern;
+    var cv = ui.patternCanvas;
+    if (!p || !cv || !p.w || !p.h) return null;
+    var v = state.viewOpts || {};
+    var cell = v.cellSize || v.cellPx || DEFAULT_CELL_PX;
+    if (!(cell > 0)) return null;
+    var gridW = p.w * cell;
+    var pad = (cv.width > gridW) ? Math.floor((cv.width - gridW) / 2) : 0;
+    return { cell: cell, pad: pad, w: p.w, h: p.h };
   }
 
   /* --------------------------------------------------- 标签页（基本 / 高级） */
@@ -1364,32 +1394,36 @@
 
   /* ------------------------------------------------- 图纸工具（互斥的单选状态） */
 
-  function isTool(v) { return v === TOOL_RECOLOR || v === TOOL_WAND || v === TOOL_ERASER; }
+  function isTool(v) { return v === TOOL_RECOLOR || v === TOOL_BATCH || v === TOOL_WAND || v === TOOL_ERASER; }
 
   function toolOf() { return isTool(state.tool) ? state.tool : TOOL_NONE; }
 
   function toolName(t) {
-    if (t === TOOL_RECOLOR) return '改色';
+    if (t === TOOL_RECOLOR) return '画笔模式';
+    if (t === TOOL_BATCH) return '批量修改';
     if (t === TOOL_WAND) return '魔术棒';
     if (t === TOOL_ERASER) return '橡皮刷';
     return '关闭';
   }
 
-  /* 工具状态的唯一写入口：三项单选、#recolorMode 复选框、画布光标、锁定提示全部由它对齐。
-     任何时刻只有一个工具生效——勾上改色就自动取消魔术棒 / 橡皮刷的单选，反之亦然。 */
+  /* 工具状态的唯一写入口：四个互斥工具 + #recolorMode / #batchMode 两个复选框、画布光标、
+     锁定提示全部由它对齐。任何时刻只有一个工具生效 —— 勾上画笔模式就自动取消批量修改 /
+     魔术棒 / 橡皮刷的单选，反之亦然。 */
   function setTool(t, silent) {
     var v = isTool(t) ? t : TOOL_NONE;
     var changed = (state.tool !== v);
     state.tool = v;
     if (v !== TOOL_ERASER) state.eraseActive = false;   /* 中途换工具：结束这次拖动语义 */
+    if (v !== TOOL_BATCH) clearBatchSelection();        /* 切走工具：清空选区高亮与推荐色 */
     setChecked(ui.recolorMode, v === TOOL_RECOLOR);
+    setChecked(ui.batchMode, v === TOOL_BATCH);
     setChecked(ui.toolNone, v === TOOL_NONE);
     setChecked(ui.toolWand, v === TOOL_WAND);
     setChecked(ui.toolEraser, v === TOOL_ERASER);
     if (ui.eraserSize) ui.eraserSize.disabled = (v !== TOOL_ERASER);
     if (ui.patternCanvas && hasClassList(ui.patternCanvas)) toggleCls(ui.patternCanvas, 'editing', v !== TOOL_NONE);
     /* 图纸画布只有「橡皮刷」是按住拖动类工具，才需要 touch-action:none 把滚动让出来；
-       魔术棒 / 改色都是一次点击，保留默认滚动（用户还得单指滑动看大图）。
+       魔术棒 / 画笔模式 / 批量修改都是一次点击，保留默认滚动（用户还得单指滑动看大图）。
        用加/去 class 切换，绝不把 touch-action:none 写死在 CSS 里。 */
     if (ui.patternCanvas && hasClassList(ui.patternCanvas)) toggleCls(ui.patternCanvas, TOUCH_DRAG_CLASS, v === TOOL_ERASER);
     syncToolHint();
@@ -1407,7 +1441,10 @@
       text = '橡皮刷：在图纸上按住拖动即可擦掉划过的格子（当前 ' + brushSizeValue() + ' × ' + brushSizeValue()
         + '，越界自动裁剪）。整个一次拖动只算一步撤销。';
     } else if (t === TOOL_RECOLOR) {
-      text = '当前工具：改色（在上方色板里选目标色号后点击格子）。要抠图请改选「魔术棒」或「橡皮刷」。';
+      text = '当前工具：画笔模式（在上方色板里选目标色号后点击格子，改的就是这一格）。要抠图请改选「魔术棒」或「橡皮刷」。';
+    } else if (t === TOOL_BATCH) {
+      text = '当前工具：批量修改（先点图纸上一格选定整片同色区域，再选颜色 → 整片一起改）。单次最多 ' + WAND_MAX
+        + ' 格；再点另一格可以切换选区。';
     } else {
       text = '未开启任何图纸工具：点击格子不会有任何改动。擦掉的格子会置空并锁定，重新生成时保持为空。';
     }
@@ -1477,14 +1514,17 @@
     setStatus('已擦除 ' + count + ' 格（这些格子已置空并锁定，重新生成时保持为空）', 'ok');
   }
 
-  /* 魔术棒：四连通（上下左右，不斜连）洪泛；条件是与起点同色号且非空。
-     超过 WAND_MAX 格只擦前 WAND_MAX 格并提示，避免一张大图点一下就卡死。 */
-  function wandErase(idx) {
-    var p = state.pattern;
-    if (!p || !p.cells) { setStatus('尚未生成图纸', 'warn'); return 0; }
-    if (idx < 0 || idx >= p.cells.length) return 0;
+  /* 四连通（上下左右，不斜连）洪泛：条件是与起点同色号且非空。
+     魔术棒（擦除）与批量修改（整片改色）**共用这一份实现** —— 同一语义只留一处，
+     两边的区域、单次上限与截断行为必然一致（复制一份出来迟早会错开）。
+     超过 WAND_MAX 格只取前 WAND_MAX 格，并把 truncated 报给调用方去提示。 */
+  function floodRegion4(p, idx) {
+    var out = { color: EMPTY_CELL, region: [], truncated: false };
+    if (!p || !p.cells) return out;
+    if (idx < 0 || idx >= p.cells.length) return out;
     var color = p.cells[idx];
-    if (color === EMPTY_CELL) { setStatus('这一格已经是空的，魔术棒没有可擦除的连通区域', 'warn'); return 0; }
+    out.color = color;
+    if (color === EMPTY_CELL) return out;
     var w = p.w, h = p.h;
     var seen = {};
     var q = [idx];
@@ -1510,6 +1550,21 @@
       seen[j] = 1;
       q.push(j);
     }
+    out.region = region;
+    out.truncated = truncated;
+    return out;
+  }
+
+  /* 魔术棒：清掉起点所在的整片四连通同色区域。
+     超过 WAND_MAX 格只擦前 WAND_MAX 格并提示，避免一张大图点一下就卡死。 */
+  function wandErase(idx) {
+    var p = state.pattern;
+    if (!p || !p.cells) { setStatus('尚未生成图纸', 'warn'); return 0; }
+    if (idx < 0 || idx >= p.cells.length) return 0;
+    if (p.cells[idx] === EMPTY_CELL) { setStatus('这一格已经是空的，魔术棒没有可擦除的连通区域', 'warn'); return 0; }
+    var res = floodRegion4(p, idx);
+    var region = res.region;
+    var truncated = res.truncated;
     if (!region.length) return 0;
     ensureLocked(p);
     pushHistory();                           /* 快照必须在改动之前取 */
@@ -1575,7 +1630,7 @@
 
   function onPatternClick(evt) {
     /* 捏合过程中、以及捏合刚结束的那一小段时间：不认这一下
-       （两指抬起后浏览器仍可能补一个 click，魔术棒 / 改色都不该被它触发） */
+       （两指抬起后浏览器仍可能补一个 click，魔术棒 / 画笔模式 / 批量修改都不该被它触发） */
     if (pinch.active || intNow() < pinch.blockedUntil) return;
     var p = state.pattern;
     if (!p) { setStatus('尚未生成图纸', 'warn'); return; }
@@ -1586,6 +1641,13 @@
       var wi = hitTestCell(evt);
       if (wi < 0) { setStatus('点击位置不在图纸网格内（可调大「格子像素大小」后重试）', 'warn'); return; }
       wandErase(wi);
+      return;
+    }
+    /* 批量修改：点一格 = 选定整片同色区域 + 出推荐色；颜色由色板 / 推荐色块那一步给出 */
+    if (tool === TOOL_BATCH) {
+      var bi = hitTestCell(evt);
+      if (bi < 0) { setStatus('点击位置不在图纸网格内（可调大「格子像素大小」后重试）', 'warn'); return; }
+      selectBatchRegion(bi);
       return;
     }
     if (tool !== TOOL_RECOLOR) return;       /* 未开启任何工具：点击不改动图纸 */
@@ -1632,7 +1694,8 @@
     var tool = toolOf();
     var lockOn = !(ui.lockToggle && !ui.lockToggle.checked);
     var text = '已锁定 ' + n + ' 格';
-    if (tool === TOOL_RECOLOR) text += '（改色模式已开启' + (lockOn ? '，点击后自动锁定' : '，点击不锁定') + '）';
+    if (tool === TOOL_RECOLOR) text += '（画笔模式已开启' + (lockOn ? '，点击后自动锁定' : '，点击不锁定') + '）';
+    else if (tool === TOOL_BATCH) text += '（批量修改已开启' + (lockOn ? '，改过的格会自动锁定' : '，改过不锁定') + '）';
     else if (tool !== TOOL_NONE) text += '（当前工具：' + toolName(tool) + '，擦掉的格子会自动锁定）';
     setText(ui.lockInfo, text);
   }
@@ -1829,12 +1892,18 @@
   function selectRecolorCode(code) {
     if (!code) return;
     state.recolor.selected = String(code);
-    noteRecentColor(state.recolor.selected);
+    noteRecentColor(state.recolor.selected);      /* 画笔 / 批量修改共用这一条「最近用过」记录 */
     syncRecolorCurrent();
     syncSwatchHighlight();
     renderRecentColors();
     var c = findPaletteColor(paletteIdForOpts(), state.recolor.selected);
     setStatus('目标色号：' + state.recolor.selected + (c && c.hex ? ('（' + c.hex + '）') : ''), 'info');
+    /* 批量修改：选区已经有了 → 选定颜色就立刻整片改掉（画笔模式仍是「选色 → 点格子」两步）。
+       两条入口（推荐色块 / 色板网格 / 最近用过）都汇到这里，所以只有这一处需要判断。 */
+    if (toolOf() === TOOL_BATCH) {
+      if (state.batch.region && state.batch.region.length) applyBatch(state.recolor.selected);
+      else { renderBatchReco(); syncBatchHint(); }
+    }
   }
 
   /* 重建色板网格。关键约束：不能把用户当前选中的色号重置掉。 */
@@ -1860,6 +1929,240 @@
       if (t.getAttribute && t.getAttribute('data-code')) { selectRecolorCode(t.getAttribute('data-code')); return; }
       t = t.parentNode;
     }
+  }
+
+  /* ------------------------------------------------------------- 批量修改 */
+
+  /* 色差与 Lab 一律走色彩模块（window.ColorKit），app.js 不另写一套色差公式。
+     ColorKit 缺失（本次自测里就有这种宿主）时不编造推荐色，如实说明「无法推荐」。 */
+  function colorKit() {
+    var K = win.ColorKit;
+    if (K && typeof K.srgbToLab === 'function' && typeof K.deltaE === 'function') return K;
+    return null;
+  }
+
+  /* 色表里的 rgb 可能是数组也可能是 {r,g,b} 对象，统一成 [r,g,b]；非法时返回 null */
+  function rgbTriple(rgb) {
+    var r, g, b;
+    if (isArr(rgb)) { r = rgb[0]; g = rgb[1]; b = rgb[2]; }
+    else if (rgb && typeof rgb === 'object') { r = rgb.r; g = rgb.g; b = rgb.b; }
+    else return null;
+    r = Number(r); g = Number(g); b = Number(b);
+    if (!isFinite(r) || !isFinite(g) || !isFinite(b)) return null;
+    return [r, g, b];
+  }
+
+  /* 推荐色：以原色为基准，按 **Lab 感知距离（ColorKit.deltaE，CIE76）** 升序取最近 limit 个，
+     排除原色本身；距离相同时按色表自然序（稳定、可复现）。
+     候选池用**图纸自己的色卡**（p.paletteId，兜底到当前选中的色卡）—— 推荐出来的色号必须
+     能被 insertColorNatural 真的插进这张图纸，否则「推荐了却改不了」。 */
+  function recommendColors(rgb, excludeCode, limit) {
+    var K = colorKit();
+    var base = rgbTriple(rgb);
+    if (!K || !base) return null;
+    var p = state.pattern;
+    var pal = paletteById(p && p.paletteId) || paletteById(paletteIdForOpts()) || currentPalette();
+    var colors = (pal && pal.colors) ? pal.colors : [];
+    var lab0 = K.srgbToLab(base);
+    var out = [];
+    for (var i = 0; i < colors.length; i++) {
+      var c = colors[i];
+      if (!c || String(c.code) === String(excludeCode)) continue;
+      var t = rgbTriple(c.rgb);
+      if (!t) continue;
+      out.push({ code: c.code, hex: c.hex, rgb: c.rgb, order: i, d: K.deltaE(lab0, K.srgbToLab(t)) });
+    }
+    out.sort(function (a, b) { return (a.d - b.d) || (a.order - b.order); });
+    return out.slice(0, limit || 8);
+  }
+
+  function renderBatchReco() {
+    var box = ui.batchRecoRow;
+    if (!box) return;
+    var recs = state.batch.recs;
+    var html = '';
+    var used = 0;
+    if (recs && recs.length) {
+      for (var i = 0; i < recs.length; i++) {
+        var c = recs[i];
+        used++;
+        html += swatchHTML({ code: c.code, hex: c.hex, rgb: c.rgb },
+          String(state.recolor.selected) === String(c.code), 'sw-sm', 0);
+      }
+    }
+    if (!used) {
+      html = (toolOf() === TOOL_BATCH)
+        ? '<span class="muted">点图纸上的一个格子，这里会出现 8 个最接近的色号</span>'
+        : '<span class="muted">开启「批量修改」并点一个格子后，这里会出现推荐色号</span>';
+    }
+    box.innerHTML = html;
+  }
+
+  /* 空闲 / 已选区的文案。冷启动文案与 HTML 里的初始文案一致（首屏不空）。 */
+  var BATCH_IDLE_TEXT = '批量修改：先点图纸上的一个格子，这里会出现 8 个最接近的色号；'
+    + '选一个即可把该格所在的整片同色区域（上下左右相连、不含斜连）一次改掉。';
+
+  function syncBatchHint() {
+    if (!ui.batchHint) return;
+    var p = state.pattern;
+    var n = (state.batch.region && state.batch.region.length) ? state.batch.region.length : 0;
+    if (!n) {
+      if (toolOf() !== TOOL_BATCH) { setText(ui.batchHint, BATCH_IDLE_TEXT); return; }
+      var extra = colorKit() ? '' : '（色彩模块未加载：这里给不出相近色推荐，但上方色板仍然可用。）';
+      setText(ui.batchHint, '批量修改已开启：点图纸上的一个格子选定整片同色区域（上下左右相连）。' + extra);
+      return;
+    }
+    var row = (state.batch.origin >= 0 && p) ? (Math.floor(state.batch.origin / p.w) + 1) : 0;
+    var col = (state.batch.origin >= 0 && p) ? (state.batch.origin % p.w + 1) : 0;
+    var text = '已选中 第 ' + row + ' 行 第 ' + col + ' 列 的色号 ' + (state.batch.code || '?')
+      + '，共 ' + n + ' 格（上下左右相连、不含斜连）。';
+    if (state.batch.truncated) {
+      text += '区域超过单次上限 ' + WAND_MAX + ' 格，本次只处理前 ' + WAND_MAX + ' 格，可再次点击继续。';
+    }
+    if (state.batch.recs && state.batch.recs.length) {
+      text += '点下面的推荐色号，或在上方色板里选一个颜色，整片一起改。';
+    } else {
+      text += '在上方色板里选一个颜色即可整片改。';
+    }
+    setText(ui.batchHint, text);
+  }
+
+  /* 清空选区与推荐色（切工具 / 关闭 / 改完都走这里）。返回之前是否真的有选区。 */
+  function clearBatchSelection() {
+    var had = !!(state.batch.region && state.batch.region.length);
+    state.batch.region = [];
+    state.batch.code = '';
+    state.batch.origin = -1;
+    state.batch.truncated = false;
+    state.batch.recs = null;
+    renderBatchReco();
+    syncBatchHint();
+    return had;
+  }
+
+  /* 点一格 → 选区 + 推荐色 + 高亮。再点另一格就换选区（同色不同片的区域各自独立）。 */
+  function selectBatchRegion(idx) {
+    var p = state.pattern;
+    if (!p || !p.cells) { setStatus('尚未生成图纸', 'warn'); return 0; }
+    if (idx < 0 || idx >= p.cells.length) return 0;
+    var res = floodRegion4(p, idx);
+    if (!res.region.length) {
+      clearBatchSelection();
+      renderPattern();
+      setStatus('这一格是空的（已擦除或未取色），没有可批量改色的同色区域', 'warn');
+      return 0;
+    }
+    var c = p.colors[res.color] || {};
+    state.batch.region = res.region;
+    state.batch.code = c.code ? String(c.code) : '';
+    state.batch.origin = idx;
+    state.batch.truncated = res.truncated;
+    state.batch.recs = recommendColors(c.rgb, state.batch.code, 8);
+    renderBatchReco();
+    syncBatchHint();
+    renderPattern();          /* 高亮画在图纸画布上（见 drawBatchHighlight） */
+    var n = res.region.length;
+    setStatus('已选中 ' + n + ' 格（色号 ' + (state.batch.code || '?') + '）：'
+      + (state.batch.recs && state.batch.recs.length
+        ? '点推荐色号或在上方色板里选色，整片一起改。'
+        : '在上方色板里选色即可整片改。')
+      + (res.truncated ? '（区域超过单次上限 ' + WAND_MAX + ' 格，本次只处理前 ' + WAND_MAX + ' 格）' : ''),
+      res.truncated ? 'warn' : 'info');
+    return n;
+  }
+
+  /* 选定颜色 → 把选区整片改成它。与 applyRecolor 同一套 colors 自然序维护：
+     先取快照（1 步历史）→ 需要时插入新色号（下标平移）→ 写格子 → 清零颗色号 → 重算 → 重绘。 */
+  function applyBatch(code) {
+    var p = state.pattern;
+    if (!p || !p.cells || !code) return 0;
+    var region = state.batch.region;
+    if (!region || !region.length) return 0;
+    var already = indexOfCode(p, code);
+    if (already < 0 && !findPaletteColor(p.paletteId, code)) {
+      setStatus('色号 ' + code + ' 不在当前色卡中，无法改色', 'warn');
+      return 0;
+    }
+    var fromCode = state.batch.code;
+    var lock = !(ui.lockToggle && !ui.lockToggle.checked);
+    /* 先数一遍真正会被改的格子：一个都没得改时不占一步历史（与魔术棒同一口径） */
+    var n = 0;
+    for (var k = 0; k < region.length; k++) {
+      var at = region[k];
+      if (at < 0 || at >= p.cells.length) continue;
+      if (p.cells[at] === EMPTY_CELL) continue;
+      n++;
+    }
+    if (!n) {
+      clearBatchSelection();
+      renderPattern();
+      setStatus('没有可改色的格子（选区内的格子都已被清空）', 'warn');
+      return 0;
+    }
+    pushHistory();                           /* 快照必须在改动之前取 */
+    var ci = already;
+    if (ci < 0) ci = insertColorNatural(p, code);
+    if (ci < 0) {
+      state.history.pop(); syncUndoButton();
+      setStatus('色号 ' + code + ' 不在当前色卡中，无法改色', 'warn');
+      return 0;
+    }
+    ensureLocked(p);
+    for (var i = 0; i < region.length; i++) {
+      var idx = region[i];
+      if (idx < 0 || idx >= p.cells.length) continue;
+      if (p.cells[idx] === EMPTY_CELL) continue;   /* 选区快照之后被别处改空：跳过，不当成改色 */
+      p.cells[idx] = ci;
+      p.locked[idx] = lock ? 1 : 0;
+    }
+    /* 选区的使命完成：先清高亮与推荐色，再走统一的收尾重绘 */
+    clearBatchSelection();
+    pruneUnusedColors(p);
+    recount(p);
+    renderPattern();
+    renderLegend();
+    renderSummary();
+    syncRecolorPicker(p);
+    updateLockInfo();
+    syncUndoButton();
+    setStatus('已批量改色：' + n + ' 格 ' + (fromCode || '?') + ' → ' + code
+      + (lock ? '［已锁定，重新生成时保留］' : '［未锁定］'), 'ok');
+    return n;
+  }
+
+  /* 选区高亮：直接画在**图纸画布**上（在 Render.drawPattern 之后补一层）。
+     为什么不用 Render：drawPattern / exportPNG / exportCSV / legendHTML 是冻结的 4 个键，
+     不能为了高亮再加参数或第 5 个键。几何与命中判定同源（cellGeometry，pad 只从画布宽度反推）。 */
+  function drawBatchHighlight() {
+    var cv = ui.patternCanvas;
+    var region = state.batch.region;
+    if (!cv || !region || !region.length) return false;
+    if (typeof cv.getContext !== 'function') return false;
+    var g = cellGeometry();
+    if (!g) return false;
+    var ctx = null;
+    try { ctx = cv.getContext('2d'); } catch (e) { ctx = null; }
+    if (!ctx || typeof ctx.fill !== 'function' || typeof ctx.rect !== 'function') return false;
+    try {
+      if (typeof ctx.save === 'function') ctx.save();
+      ctx.beginPath();
+      for (var i = 0; i < region.length; i++) {
+        var idx = region[i];
+        if (idx < 0 || idx >= g.w * g.h) continue;
+        var x = idx % g.w;
+        var y = (idx - x) / g.w;
+        ctx.rect(g.pad + x * g.cell + 0.5, g.pad + y * g.cell + 0.5, g.cell - 1, g.cell - 1);
+      }
+      ctx.fillStyle = HIGHLIGHT_FILL;
+      ctx.fill();
+      if (typeof ctx.stroke === 'function') {
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = HIGHLIGHT_STROKE;
+        ctx.stroke();
+      }
+      if (typeof ctx.restore === 'function') ctx.restore();
+    } catch (e) { return false; }
+    return true;
   }
 
   /* --------------------------------------------------------------- 渲染区 */
@@ -1929,6 +2232,8 @@
     if (hasClassList(cv)) {
       toggleCls(cv, 'editing', toolOf() !== TOOL_NONE);
     }
+    /* 批量修改的选区高亮：画完网格再叠一层（只画在画布上，不进 Render 的公开接口） */
+    drawBatchHighlight();
     applyViewZoom();
   }
 
@@ -2501,7 +2806,9 @@
     var locked = !state.srcEdit;
     toggleCls(ui.sourceCanvas, 'crop-mode', !locked && !!state.srcCropMode);
     if (locked) return;
-    /* CropMode 不在冻结契约里：有 setCropMode 就透传，没有就只保留 UI 状态（拖拽仍以模块自身实现为准） */
+    /* 「裁剪模式」透传给模块（可选 API，能力检测 + try/catch：没有这个方法的模块不该让 app.js 抛）。
+       模块那边做两件事：内联 touch-action 跟着开关走、关着时触摸指针不参与框选。
+       这里同时保留 crop-mode 类的切换 —— 那是光标样式（crosshair）。 */
     if (api && typeof api.setCropMode === 'function') {
       try { api.setCropMode(!!state.srcCropMode); } catch (e) { /* 忽略 */ }
     }
@@ -2580,11 +2887,11 @@
       return;
     }
     syncSrcEditButtons();
-    /* 如实描述：冻结契约里没有「开关裁剪交互」的 API，SourceEdit 的裁剪框在载图后始终可拖拽，
-       这个复选框只是操作提示，不能宣称「关闭后拖不动」。 */
+    /* 如实描述：这个开关真的在控制交互 —— 开着时源画布吃掉滚动手势（触摸拖动 = 框选），
+       关着时手指落在原图上是滚页面（触摸指针不参与框选，鼠标 / 触控笔仍可拖拽框选）。 */
     setStatus(state.srcCropMode
-      ? '裁剪模式：在原图画布上按住并拖拽，框选出要保留的区域'
-      : '裁剪模式已关闭（该模块的裁剪框始终可以用拖拽框选，此开关只作操作提示）', 'info');
+      ? '裁剪模式已开启：在原图画布上按住并拖拽，框选出要保留的区域（触摸时单指拖动是框选，页面不会跟着滚）'
+      : '裁剪模式已关闭：触摸时手指落在原图上用来滚动页面；要框选请重新打开「裁剪模式」（鼠标 / 触控笔不受影响）', 'info');
   }
 
   /* ------------------------------------------------------------- 图片读入 */
@@ -2602,22 +2909,79 @@
     try { if (url && win.URL && win.URL.revokeObjectURL) win.URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ }
   }
 
-  function loadViaImageBitmap(blob, ok, fail) {
-    if (typeof win.createImageBitmap === 'function') {
-      try {
-        win.createImageBitmap(blob).then(function (bmp) { ok(bmp, bmp.width, bmp.height); },
-          function (e) { fail(errText(e)); });
-        return;
-      } catch (e) { /* 继续走失败分支 */ }
-    }
-    fail('当前环境不支持读取该图片格式');
+  /* 失败提示里最有用的三项：文件名 / 浏览器声明的 MIME / 字节数。
+     只有「Decoding failed」这种话时，用户和排查的人都无从下手。 */
+  function blobInfo(blob) {
+    var name = (blob && blob.name) ? String(blob.name) : '（这个来源没提供文件名）';
+    var type = (blob && blob.type) ? String(blob.type) : '（浏览器没有声明类型）';
+    var size = (blob && typeof blob.size === 'number')
+      ? (Math.round(blob.size / 1024) + ' KB，' + blob.size + ' 字节')
+      : '（未知大小）';
+    return { name: name, type: type, size: size };
   }
 
+  /* 解码第一条路：<img> + blob: URL。现代浏览器按 EXIF 方向显示（等价于 image-orientation: from-image）。
+     能用 img.decode() 就用它 —— 它给的是 Promise 与更可靠的失败原因；不认就沿用 onload / onerror。 */
+  function decodeViaImage(url, ok, fail) {
+    var Img = win.Image;
+    if (typeof Img !== 'function') { fail('当前环境没有 Image 构造器'); return; }
+    if (!url) { fail('没能创建 blob: URL（URL.createObjectURL 不可用）'); return; }
+    var img = null;
+    try { img = new Img(); } catch (e) { fail('创建 <img> 失败：' + errText(e)); return; }
+    var settled = false;
+    function once(fn) { if (settled) return; settled = true; fn(); }
+    function done() { once(function () { ok(img, img.naturalWidth || img.width, img.naturalHeight || img.height); }); }
+    img.onload = done;
+    img.onerror = function () {
+      once(function () { fail('<img> 解码失败（onerror：多半不是浏览器认得的图片格式，或文件已损坏）'); });
+    };
+    try {
+      if (typeof img.decode === 'function') {
+        img.src = url;
+        var p = img.decode();
+        if (p && typeof p.then === 'function') {
+          p.then(done, function (e) { once(function () { fail('<img>.decode() 拒绝：' + errText(e)); }); });
+          return;
+        }
+      }
+    } catch (e) { /* decode() 不可用或当场抛错：退回 onload / onerror */ }
+    try { img.src = url; } catch (e) { once(function () { fail('设置 img.src 失败：' + errText(e)); }); }
+  }
+
+  /* 解码第二条路：createImageBitmap。
+     ⚠️ 方向必须与第一条路一致：<img> 默认应用 EXIF 方向，而 createImageBitmap **默认不应用** ——
+     不传 { imageOrientation: 'from-image' } 的话，同一条阶梯的两条路会产出方向不同的图纸，
+     手机竖拍照片会明显颠倒。旧内核对这个选项会当场抛错，于是退化到不带选项再试一次
+     （选项是字典成员，多数老内核直接忽略；真抛错时宁可丢方向也不能解不开图片）。 */
+  function decodeViaBitmap(blob, ok, fail) {
+    if (typeof win.createImageBitmap !== 'function') {
+      fail('当前环境没有 createImageBitmap（第二条路走不了）');
+      return;
+    }
+    var p = null;
+    try {
+      p = win.createImageBitmap(blob, { imageOrientation: 'from-image' });
+    } catch (e) {
+      try { p = win.createImageBitmap(blob); }
+      catch (e2) { fail('createImageBitmap 调用失败：' + errText(e2)); return; }
+    }
+    if (!p || typeof p.then !== 'function') { fail('createImageBitmap 没有返回 Promise'); return; }
+    p.then(function (bmp) {
+      if (!bmp) { fail('createImageBitmap 返回了空结果'); return; }
+      ok(bmp, bmp.width || bmp.naturalWidth, bmp.height || bmp.naturalHeight);
+    }, function (e) { fail('createImageBitmap 拒绝：' + errText(e)); });
+  }
+
+  /* 读入一张本地图片：真正的重试阶梯 —— 先 <img>，失败再 createImageBitmap，
+     **两条都失败才判失败**（任何单一解码器的失败都不是终局：那正是「有的 jpg 行、有的不行」的来源）。
+     MIME 只作**提示**、不作**门槛**：浏览器给的 type 很不可靠（改名文件、某些来源一律报
+     application/octet-stream），按它提前 return 就等于把文件吞掉 —— 内容嗅探比 MIME 可靠，
+     所以这里一律送进解码阶梯，认不出来时再把 type 如实写进失败原因里。 */
   function loadImageFromBlob(blob) {
     if (!blob) { setStatus('没有拿到图片数据', 'warn'); return; }
-    var type = blob.type || '';
-    if (!isImageType(type)) { setStatus('这不是图片文件：' + type, 'err'); return; }
+    var type = blob.type ? String(blob.type) : '';
     setStatus('正在读取图片…', 'info');
+    var info = blobInfo(blob);
     var url = null;
     try {
       url = (win.URL && typeof win.URL.createObjectURL === 'function') ? win.URL.createObjectURL(blob) : null;
@@ -2637,15 +3001,31 @@
       setStatus('图片读取失败：' + msg, 'err');
     }
 
-    if (!url) { loadViaImageBitmap(blob, ok, fail); return; }
-    var Img = win.Image;
-    if (typeof Img !== 'function') { loadViaImageBitmap(blob, ok, fail); return; }
-    var img = new Img();
-    img.onload = function () {
-      ok(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
-    };
-    img.onerror = function () { loadViaImageBitmap(blob, ok, fail); };
-    img.src = url;
+    var stage = 1;
+    var imgWhy = '';
+    var bmpWhy = '';
+    function advance() {
+      if (finished) return;
+      if (stage === 1) {
+        stage = 2;
+        decodeViaBitmap(blob, ok, function (why) { bmpWhy = why; advance(); });
+        return;
+      }
+      if (stage === 2) {
+        stage = 3;
+        /* 两条路都失败：把两条原因原样报出来，并给一句用户能照做的建议 */
+        fail('文件名 ' + info.name + ' · 浏览器声明的类型 ' + info.type + ' · ' + info.size
+          + '。两条解码路径都失败了：① <img>：' + (imgWhy || '（未尝试）')
+          + '；② createImageBitmap：' + (bmpWhy || '（未尝试）')
+          + ((type && !isImageType(type))
+            ? '。浏览器没把它当图片（类型 ' + type + '），这里已经按内容试过解码 —— 若它其实是图片，'
+              + '多半是扩展名 / MIME 与内容不符（改名文件很常见）。'
+            : '。')
+          + '如果这个文件其实不是 JPEG（例如 iPhone 的 HEIC 被改名成 .jpg，或者是 AVIF / 新版 ProRAW 之类），'
+          + '浏览器就是解不开它：请在相册里把它「导出为 JPEG」后再导入，或用系统截图（截图固定是 PNG / JPEG）后重新导入。');
+      }
+    }
+    decodeViaImage(url, ok, function (why) { imgWhy = why; advance(); });
   }
 
   /* 原图缩放的本地副本：供 generateFromRGBA 取像素（SourceEdit 可用时改由它接管画布，这里直接跳过） */
@@ -2717,19 +3097,25 @@
     return false;
   }
 
+  /* 从拖拽 / 剪贴板的事件对象里取出一个文件对象：**不按 MIME 过滤**。
+     浏览器给的 type 很不可靠（改名文件、部分来源一律报 application/octet-stream），
+     按它过滤的后果就是「文件被悄悄吞掉、界面一句话都不说」—— 最难排查的那种。
+     这里只做结构性判断（对象存在 / kind === 'file'），格式交给解码器按内容判断：
+     认不出来时 loadImageFromBlob 会给出文件名 / MIME / 字节数 / 两条解码原因与可行动建议。
+     kind === 'string' 的纯文本仍留在这里之外，由 onPaste 自己如实说明「剪贴板里是文本」。 */
   function imageFileFrom(dt) {
     if (!dt) return null;
     var files = dt.files;
     if (files && files.length) {
       for (var i = 0; i < files.length; i++) {
-        if (files[i] && isImageType(files[i].type)) return files[i];
+        if (files[i]) return files[i];
       }
     }
     var items = dt.items;
     if (items && items.length) {
       for (var j = 0; j < items.length; j++) {
         var it = items[j];
-        if (it && it.kind === 'file' && isImageType(it.type) && typeof it.getAsFile === 'function') {
+        if (it && it.kind === 'file' && typeof it.getAsFile === 'function') {
           var f = it.getAsFile();
           if (f) return f;
         }
@@ -2762,8 +3148,13 @@
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
     setDragActive(false);
     var f = imageFileFrom(e && e.dataTransfer);
-    if (f) loadImageFromBlob(f);
-    else setStatus('没有识别到图片文件，请拖入 PNG / JPEG / WebP / GIF 图片', 'warn');
+    if (f) { loadImageFromBlob(f); return; }
+    /* 真的没拿到文件对象（空拖拽 / 只有文本 / 只有链接）：如实说明。
+       文案**不列举比 #fileInput 的 accept 更窄的格式集合** —— 列窄了就等于骗用户，
+       所以用「…等都能试」，并说明认不出来时会给具体原因。 */
+    setStatus('没有拿到图片数据：这次拖拽里没有可读取的文件（可能拖的是网页上的图片、链接或文字）。'
+      + '请改用「选择图片…」按钮，或把图片文件本身拖进窗口 —— JPEG / PNG / WebP / GIF / BMP / AVIF / HEIC 等都能试，'
+      + '认不出来时会给出具体原因。', 'warn');
   }
 
   function onPaste(e) {
@@ -2774,6 +3165,7 @@
       var text = '';
       try { text = (typeof cb.getData === 'function') ? (cb.getData('text') || '') : ''; } catch (err) { text = ''; }
       if (text) setStatus('剪贴板里是文本而不是图片：请先在系统里复制图片，再按 Ctrl+V。', 'warn');
+      else setStatus('剪贴板里没有图片数据：请先在系统里复制一张图片（或先截图），再按 Ctrl+V。', 'warn');
       return;
     }
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
@@ -2819,6 +3211,12 @@
     if (id === 'recolorMode') {
       setTool(ui.recolorMode && ui.recolorMode.checked ? TOOL_RECOLOR : TOOL_NONE);
       renderPattern();
+      updateLockInfo();
+      return;
+    }
+    if (id === 'batchMode') {
+      setTool(ui.batchMode && ui.batchMode.checked ? TOOL_BATCH : TOOL_NONE);
+      renderPattern();          /* 关掉时同时清掉画布上的选区高亮 */
       updateLockInfo();
       return;
     }
@@ -2889,6 +3287,7 @@
     setChecked(ui.showRuler, DEFAULTS.showRuler);
     setChecked(ui.lockToggle, DEFAULTS.lockToggle);
     setChecked(ui.recolorMode, DEFAULTS.recolorMode);
+    setChecked(ui.batchMode, DEFAULTS.batchMode);
     setVal(ui.recolorScope, DEFAULTS.recolorScope);
     setChecked(ui.exportAnnotate, DEFAULTS.exportAnnotate);
     setVal(ui.exportScale, DEFAULTS.exportScale);
@@ -2908,7 +3307,7 @@
     applyViewZoom();
     syncLabels();
     syncEnabledState();
-    setTool(DEFAULTS.recolorMode ? TOOL_RECOLOR : TOOL_NONE, true);   /* 工具状态跟着一起复位 */
+    setTool(DEFAULTS.recolorMode ? TOOL_RECOLOR : TOOL_NONE, true);   /* 工具状态跟着一起复位（含批量修改） */
     state.viewOpts = viewOpts();
     renderPattern();
     updateLockInfo();
@@ -2929,7 +3328,7 @@
     var continuous = ['brightness', 'contrast', 'saturation', 'ditherStrength', 'cellSize', 'viewZoom', 'maxColors',
       'maxColorsNum', 'gridW', 'gridH'];
     var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showCodes', 'showRuler', 'lockToggle',
-      'recolorMode', 'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
+      'recolorMode', 'batchMode', 'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
     var selects = ['boardsSelect', 'paletteSelect', 'bayerN', 'sizePreset', 'recolorScope', 'exportScale'];
     var methods = ['methodNearest', 'methodFS', 'methodBayer'];
     var i;
@@ -2964,6 +3363,9 @@
     /* 事件委托：色板网格与「最近用过」会在每次刷新时重建，逐个绑监听会漏 */
     on(ui.recolorGrid, 'click', onRecolorPick);
     on(ui.recolorRecentRow, 'click', onRecolorPick);
+    /* 批量修改的推荐色块走同一个委托（同一套 data-code → selectRecolorCode），
+       所以「最近用过」的记录路径也只有一条 */
+    on(ui.batchRecoRow, 'click', onRecolorPick);
 
     /* 标签页：只切显隐，切换不重建 DOM ⇒ 控件状态不会丢 */
     on(ui.tabBasic, 'click', function () { setTab(TAB_BASIC); });
@@ -2990,6 +3392,8 @@
     }
 
     on(ui.btnUndo, 'click', undo);
+    /* 抠图组里的就近撤销：同一个 undo()（同一条历史路径），不另建历史栈 */
+    on(ui.btnEraseUndo, 'click', undo);
     on(ui.btnRegenerate, 'click', function () { scheduleRegenerate(0); });
     on(ui.btnResetAdjust, 'click', function () { applyDefaults(true); });
     on(ui.btnExportPng, 'click', exportPng);
@@ -3103,17 +3507,21 @@
       viewZoomOut: byId('viewZoomOut'),
       viewZoomFit: byId('viewZoomFit'),
       recolorMode: byId('recolorMode'),
+      batchMode: byId('batchMode'),
       toolNone: byId('toolNone'),
       toolWand: byId('toolWand'),
       toolEraser: byId('toolEraser'),
       eraserSize: byId('eraserSize'),
       toolHint: byId('toolHint'),
+      btnEraseUndo: byId('btnEraseUndo'),
       recolorScope: byId('recolorScope'),
       recolorSearch: byId('recolorSearch'),
       recolorGrid: byId('recolorGrid'),
       recolorEmpty: byId('recolorEmpty'),
       recolorRecentRow: byId('recolorRecentRow'),
       recolorCurrent: byId('recolorCurrent'),
+      batchRecoRow: byId('batchRecoRow'),
+      batchHint: byId('batchHint'),
       lockToggle: byId('lockToggle'),
       btnUnlockAll: byId('btnUnlockAll'),
       btnUndo: byId('btnUndo'),
@@ -3138,6 +3546,7 @@
       sourceHint: byId('sourceHint'),
       srcCropMode: byId('srcCropMode'),
       srcAspectSquare: byId('srcAspectSquare'),
+      srcCropHint: byId('srcCropHint'),
       srcRotateL: byId('srcRotateL'),
       srcRotateR: byId('srcRotateR'),
       srcFlipH: byId('srcFlipH'),
@@ -3201,6 +3610,23 @@
     tool: toolOf,
     eraserSize: brushSizeValue,
     wandErase: wandErase,
+    /* 批量修改（自测 / 脚本入口；与界面点击走同一批函数） */
+    floodRegion4: floodRegion4,
+    batchSelect: selectBatchRegion,
+    batchApply: applyBatch,
+    batchRegion: function () { return (state.batch.region || []).slice(0); },
+    batchRecs: function () {
+      var list = state.batch.recs;
+      if (!list) return null;
+      var out = [];
+      for (var i = 0; i < list.length; i++) out.push({ code: list[i].code, hex: list[i].hex, d: list[i].d });
+      return out;
+    },
+    clearBatch: clearBatchSelection,
+    recommendColors: recommendColors,
+    cellGeometry: cellGeometry,
+    drawBatchHighlight: drawBatchHighlight,
+    highlightColors: function () { return { fill: HIGHLIGHT_FILL, stroke: HIGHLIGHT_STROKE }; },
     eraseBrushAt: function (idx) {
       /* 测试 / 脚本入口：按当前刷子大小擦一次（不进历史，调用方自行 pushHistory） */
       var p = state.pattern;

@@ -8,7 +8,7 @@
 
 ## 直接用
 
-下载 [`拼豆图纸生成器.html`](./拼豆图纸生成器.html)，用浏览器打开。
+下载 [`index.html`](./index.html)，用浏览器打开。
 或者把这个文件放到静态服务器上，别人用网址访问即可 —— **手机浏览器同样能用**。
 
 送一张图进去（**注意：这个动作叫「选图」，不是「上传」——没有任何字节离开你的设备**）：
@@ -70,13 +70,13 @@ src/render.js     图纸渲染、原图对照、PNG/CSV 导出、用量清单入
 src/srcedit.js    原图裁剪、旋转、翻转
 src/app.js        界面交互
 build.mjs         把上面 6 个文件内联拼成单文件 HTML
-tests/check.mjs   验收脚本（1084 条断言 / 8 组）
+tests/check.mjs   验收脚本（1183 条断言 / 8 组）
 ```
 
 零依赖，只用 Node 内置模块。
 
 ```bash
-node build.mjs        # 重新生成 拼豆图纸生成器.html
+node build.mjs        # 重新生成 index.html
 node tests/check.mjs  # 跑验收（全过 exit 0；加 --quiet 只看分组小计）
 ```
 

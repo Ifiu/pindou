@@ -278,29 +278,20 @@
 
         <section class="group">
           <h2>图纸尺寸</h2>
-          <label class="row" for="boardsSelect"><span>拼板规格</span></label>
-          <select id="boardsSelect">
-            <option value="1" selected>1 × 1 板（上限 29 格）</option>
-            <option value="2">2 × 2 板（上限 58 格）</option>
-            <option value="3">3 × 3 板（上限 87 格）</option>
-            <option value="4">4 × 4 板（上限 116 格）</option>
-            <option value="custom">自定义格数</option>
-          </select>
           <label class="row" for="sizePreset"><span>尺寸预设</span></label>
           <select id="sizePreset">
-            <option value="custom" selected>自定义</option>
+            <option value="custom">自定义</option>
             <option value="29">29 × 29</option>
             <option value="58">58 × 58</option>
             <option value="87">87 × 87</option>
-            <option value="100">100 × 100</option>
-            <option value="116">116 × 116</option>
+            <option value="100" selected>100 × 100</option>
           </select>
           <div class="grid2">
-            <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="116" step="1" value="29" /></label>
-            <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="116" step="1" value="29" /></label>
+            <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="100" step="1" value="100" /></label>
+            <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="100" step="1" value="100" /></label>
           </div>
           <label class="check"><input id="lockAspect" type="checkbox" checked /> 保持原图宽高比</label>
-          <p class="hint">单边上限硬限制 116 格（4 × 4 板），超出会被自动压回。尺寸预设固定为正方形（如 100 × 100）。</p>
+          <p class="hint">单边上限硬限制 100 格，超出会被自动压回。尺寸预设固定为正方形（29 / 58 / 87 / 100 四档），默认 100 × 100。</p>
         </section>
 
         <section class="group">

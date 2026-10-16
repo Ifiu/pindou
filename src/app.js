@@ -12,13 +12,12 @@
     : ((typeof globalThis !== 'undefined') ? globalThis : {});
   var doc = (typeof document !== 'undefined') ? document : null;
 
-  var MAX_DIM = 116;         /* 单边硬上限：4 × 4 板（= 4×4 块 29 孔板） */
-  var BOARD_STEP = 29;       /* 每块拼板 29 × 29 格 */
-  var BOARD_MAX = 4;
+  var MAX_DIM = 100;         /* 单边硬上限 100 格（与 pipeline 的 MAX_DIM、ui.html 的 max="100" 一致）。
+                                「29 格一块拼板」那套概念已整体移除：不再有板数 / 板边界 / 板材规格下拉。 */
   var EMPTY_CELL = 65535;    /* Pattern.cells 里的空格标记，与 pipeline.js / render.js 保持一致 */
   var DEBOUNCE_MS = 200;
   var RULER_PAD = 16;        /* 内置降级渲染器的四周对称留白 */
-  var SRC_MAX_EDGE = 1600;   /* 像素源长边上限：≥116 格图纸完全够用，且 getImageData 更快 */
+  var SRC_MAX_EDGE = 1600;   /* 像素源长边上限：≥100 格图纸完全够用，且 getImageData 更快 */
 
   var MIN_CELL_PX = 8;       /* 格子像素滑杆下限 */
   var MAX_CELL_PX = 48;      /* 格子像素滑杆上限（render.js 已放宽到 256，48 是「看一眼」的舒适上限） */
@@ -35,6 +34,11 @@
   var ZOOM_STEP_FACTOR = 1.25;
   /* 缩放下限的绝对地板：纯粹防退化（比例算出来是 0 或负数时也不至于除零/卡死），正常永远碰不到。 */
   var ABS_FLOOR = 0.01;
+
+  /* 索引圈宽（格）：图纸四周各画一圈「逐格索引」，render.js 同批加。
+     命中判定与选区高亮都按「画布宽 = 2*pad + (w + 2*INDEX_RING)*cell」反推 ——
+     这个 R 必须与 render.js 的 R 一致（两边用同一份冻结几何）。 */
+  var INDEX_RING = 1;
 
   /* 触摸端参数。捏合复用同一套缩放状态（state.viewZoom）与同一个 setViewZoom / applyViewZoom，
      所以捏合与 +/−/滑杆/「适应窗口」拿到的是**同一个**动态下限（zoomFloor），这里不另设一套。 */
@@ -92,7 +96,8 @@
     brightness: 0, contrast: 0, saturation: 0, autoWB: false, autoLevels: false,
     method: 'nearest', bayerN: '4', ditherStrength: 30,
     quantizeEnabled: true, maxColors: 24,
-    boards: '1', sizePreset: 'custom', lockAspect: true,
+    gridW: 100, gridH: 100,
+    sizePreset: '100', lockAspect: true,
     cellLabel: 'code', showRuler: true, cellSize: DEFAULT_CELL_PX, viewZoom: ZOOM_DEFAULT,
     recolorMode: false, recolorScope: PICKER_SCOPE_USED, lockToggle: true,
     batchMode: false,
@@ -766,7 +771,7 @@
       /* 预览必须 annotate:false —— 绝不能把用量清单画进预览画布！
          一旦 annotate:true，画布会变高变宽（下方清单表格），而 hitTestCell 要靠画布宽度
          反推网格原点，宽度方向多出清单列就会把 pad 算错、点击整体偏移。
-         另外 render.js 本来就会在网格下方加一条「成品尺寸/板数」标注带（cap.h），
+         另外 render.js 本来就会在网格下方加一条「成品尺寸」标注带（cap.h），
          画布高度因此永远不是 2*pad + gridH —— 这也是命中判定只信宽度、不信高度的一半原因。
          用量清单只出现在导出用的离屏画布上（exportViewOpts）。
          不要为了「顺手在预览里也看看清单」把这里改成 true。 */
@@ -822,14 +827,16 @@
   }
 
   function gridDims() {
+    /* 元素缺失（降级 DOM）→ 用 DEFAULTS；元素在但值不是有限数（清空 / 输入 "abc"）→ 当成无效输入夹到下限 1，
+       而不是悄悄回落到默认尺寸 —— 后者会让「输入框里明明是乱码、图纸却变成 100×100」更难理解。 */
+    var w = ui.gridW ? Number(ui.gridW.value) : DEFAULTS.gridW;
+    var h = ui.gridH ? Number(ui.gridH.value) : DEFAULTS.gridH;
+    if (!isFinite(w)) w = 1;
+    if (!isFinite(h)) h = 1;
     return {
-      w: Math.round(clamp(num(ui.gridW, 29), 1, MAX_DIM)),
-      h: Math.round(clamp(num(ui.gridH, 29), 1, MAX_DIM))
+      w: Math.round(clamp(w, 1, MAX_DIM)),
+      h: Math.round(clamp(h, 1, MAX_DIM))
     };
-  }
-
-  function boardLayoutFor(w, h) {
-    return clamp(Math.max(Math.ceil(w / BOARD_STEP), Math.ceil(h / BOARD_STEP)), 1, BOARD_MAX);
   }
 
   /* 裁剪 / 旋转之后，宽高比必须按 SourceEdit 的结果画布算，否则裁剪过的图纸比例会不对。 */
@@ -853,7 +860,7 @@
 
   function presetValueFor(w, h) {
     if (w !== h) return 'custom';
-    if (w === 29 || w === 58 || w === 87 || w === 100 || w === 116) return String(w);
+    if (w === 29 || w === 58 || w === 87 || w === 100) return String(w);
     return 'custom';
   }
 
@@ -863,43 +870,19 @@
     setVal(ui.sizePreset, presetValueFor(d.w, d.h));
   }
 
-  function applyBoardsPreset() {
-    var sel = ui.boardsSelect;
-    if (!sel) return;
-    if (sel.value === 'custom') { syncSizePresetValue(); return; }
-    var limit = clamp(Math.round(num({ value: sel.value }, 1)) * BOARD_STEP, 1, MAX_DIM);
-    var w, h;
-    var lock = !!(ui.lockAspect && ui.lockAspect.checked);
-    if (!lock) {
-      w = limit; h = limit;
-    } else {
-      var aspect = sourceAspect();
-      if (aspect >= 1) { w = limit; h = clamp(Math.round(limit / aspect), 1, MAX_DIM); }
-      else { h = limit; w = clamp(Math.round(limit * aspect), 1, MAX_DIM); }
-    }
-    setVal(ui.gridW, w);
-    setVal(ui.gridH, h);
-    syncLabels();
-    syncSizePresetValue();
-  }
-
-  /* 尺寸预设：29 / 58 / 87 / 100 / 116，固定正方形（不受「保持原图宽高比」影响，因为档位名就是 W×H） */
+  /* 尺寸预设：29 / 58 / 87 / 100，固定正方形（不受「保持原图宽高比」影响，因为档位名就是 W×H） */
   function applySizePreset() {
     var sel = ui.sizePreset;
     if (!sel || sel.value === 'custom') return;
-    var n = clamp(Math.round(num({ value: sel.value }, 29)), 1, MAX_DIM);
+    var n = clamp(Math.round(num({ value: sel.value }, DEFAULTS.gridW)), 1, MAX_DIM);
     setVal(ui.gridW, n);
     setVal(ui.gridH, n);
-    if (ui.boardsSelect) {
-      var bs = (n === 116) ? '4' : (n === 87) ? '3' : (n === 58) ? '2' : (n === 29) ? '1' : 'custom';
-      setVal(ui.boardsSelect, bs);
-    }
     syncLabels();
     setStatus('已套用尺寸预设 ' + n + ' × ' + n + '（正方形）', 'info');
     scheduleRegenerate(0);
   }
 
-  /* 手动输入格数：夹到 1..116，按需同步另一边，并把拼板规格切到「自定义」 */
+  /* 手动输入格数：夹到 1..MAX_DIM（=100），按需同步另一边 */
   function normalizeDims(which) {
     var dims = gridDims();
     var w = dims.w, h = dims.h;
@@ -910,7 +893,6 @@
     }
     if (String(w) !== String(ui.gridW ? ui.gridW.value : w)) setVal(ui.gridW, w);
     if (String(h) !== String(ui.gridH ? ui.gridH.value : h)) setVal(ui.gridH, h);
-    if (ui.boardsSelect && ui.boardsSelect.value !== 'custom') setVal(ui.boardsSelect, 'custom');
     syncLabels();
     syncSizePresetValue();
     return { w: w, h: h };
@@ -948,7 +930,6 @@
     var method = methodOf();
     return {
       paletteId: paletteIdForOpts(),
-      boards: boardLayoutFor(dims.w, dims.h),
       gridW: dims.w,
       gridH: dims.h,
       lockAspect: !!(ui.lockAspect && ui.lockAspect.checked),
@@ -1331,11 +1312,17 @@
       + doneCode + (lock ? '［已锁定，重新生成时保留］' : '［未锁定］'), 'ok');
   }
 
-  /* 点击坐标 → 格子下标。
-   * 优先使用 Render.hitTest(pattern, canvas, px, py, viewOpts)（若渲染模块提供）；
-   * 否则用「画布宽度」反推留白：render.js 与内置降级渲染器都是 (pad, pad) 处起画、
-   * 左右留白相等，且预览为 annotate:false ⇒ 内容宽 == 网格宽，于是
-   * pad = (canvas.width - w*cellPx) / 2，X/Y 共用（见下方为何不能用 height 反推）。
+  /* 点击坐标 → 格子下标（**冻结几何**，与 render.js 同批改动必须逐字一致）：
+   *   R = INDEX_RING = 1（图纸四周各画一圈逐格索引）
+   *   gridCols = w + 2R、gridRows = h + 2R、padX = padY = pad
+   *   画布宽 W = 2*pad + gridCols*cellPx
+   *   原图纸 (r,c) 左上角 = (pad + (c+R)*cellPx, pad + (r+R)*cellPx)
+   * 反推（X/Y 共用由**宽度**得到的 pad）：
+   *   pad = (cv.width - (w + 2R)*cellPx) / 2
+   *   col = floor((x - pad)/cellPx) - R ；row = floor((y - pad)/cellPx) - R
+   *   有效 ⇔ 0 <= col < w 且 0 <= row < h；**索引圈里的格子必须返回未命中**（不能落到第 0 行/列）。
+   * 绝对不能用高度反推 pad：画布下方还有角标带（见 cellGeometry 注释）。
+   * 优先使用 Render.hitTest(pattern, canvas, px, py, viewOpts)（若渲染模块提供）。
    *
    * 预览缩放（viewZoom）只改 canvas 的 CSS 宽高，不改 canvas.width；
    * getBoundingClientRect() 量到的就是缩放后的 CSS 尺寸，所以 cv.width / rect.width 恰好是 1/zoom，
@@ -1359,31 +1346,54 @@
 
     var g = cellGeometry();
     if (!g) return -1;
-    var col = Math.floor((px - g.pad) / g.cell);
-    var row = Math.floor((py - g.pad) / g.cell);
+    var col = Math.floor((px - g.padX) / g.cell) - g.ring;
+    var row = Math.floor((py - g.padY) / g.cell) - g.ring;
+    if (!isFinite(col) || !isFinite(row)) return -1;
+    /* 索引圈内（col/row 为 -1 或 w/h）、更外面、以及四周留白：一律未命中 */
     if (col < 0 || row < 0 || col >= p.w || row >= p.h) return -1;
     return row * p.w + col;
   }
 
-  /* 网格几何：命中判定（hitTestCell 的内置推断）与选区高亮（drawBatchHighlight）共用这一份实现，
-     否则「点中的格子」与「画高亮的格子」迟早会错开一整格。
+  /* 网格几何：命中判定（hitTestCell 的内置推断）与选区高亮（drawBatchHighlight）**共用这一份实现** ——
+     任何第二套 pad / 原点换算都会让「点中的格子」与「画高亮的格子」错开，历史上正是这样偏过一整格。
      pad 只能从**画布宽度**反推：两种渲染器都保证「左留白 == 上留白 == 右留白」，
-     但**画布高度不等于 2*pad + gridH** —— render.js 会在网格下方追加
+     但**画布高度不等于 2*pad + gridRows*cell** —— render.js 会在网格下方追加
        · annotate 的用量表（预览恒 annotate:false，不出现），
-       · 一行「成品尺寸 / 板数」标注带 cap.h（总是出现，与 annotate 无关）。
+       · 一行「成品尺寸」标注带 cap.h（总是出现，与 annotate 无关）。
      所以不能用 (cv.height - gridH)/2 反推：那会把原点整体下移 cap.h/2，格子越小越致命
      （cellPx=8 时正好差一整格，点击全部错行）。画布宽度没有这两条附加带
-     （预览 annotate:false ⇒ 内容宽 == 网格宽），于是 pad 可以从宽度唯一还原，X/Y 共用同一个值。 */
-  function cellGeometry() {
+     （预览 annotate:false ⇒ 内容宽 == gridCols*cell），于是 pad 可以从宽度唯一还原，X/Y 共用同一个值。
+     传 idx 时返回**那一格的矩形**（{x,y,w,h}，与反推公式同源），供高亮直接使用。 */
+  function cellGeometry(idx) {
     var p = state.pattern;
     var cv = ui.patternCanvas;
     if (!p || !cv || !p.w || !p.h) return null;
     var v = state.viewOpts || {};
     var cell = v.cellSize || v.cellPx || DEFAULT_CELL_PX;
     if (!(cell > 0)) return null;
-    var gridW = p.w * cell;
-    var pad = (cv.width > gridW) ? Math.floor((cv.width - gridW) / 2) : 0;
-    return { cell: cell, pad: pad, w: p.w, h: p.h };
+    var ring = INDEX_RING;
+    var gridW = (p.w + 2 * ring) * cell;          /* 索引圈也算进可反推的宽度里 */
+    /* 冻结公式：pad = (cv.width - (w + 2R)*cell) / 2 —— **不夹到 0**。
+       不夹的理由：内置降级渲染器不画索引圈（画布宽 = 2*P + w*cell），此时这个式子给出 P - cell，
+       而原点 originX = pad + R*cell 又加回 cell ⇒ 原点仍是 P，命中与高亮都落在正确的格子上。
+       一旦夹到 0，降级渲染器（cell 较大时它的画布比 (w+2)*cell 还窄）就会整体偏一格。 */
+    var pad = Math.floor((cv.width - gridW) / 2);
+    if (!isFinite(pad)) pad = 0;
+    var originX = pad + ring * cell;              /* 原图纸第 0 列的左边缘 */
+    var originY = pad + ring * cell;              /* 原图纸第 0 行的上边缘 */
+    if (idx === undefined || idx === null) {
+      return {
+        cell: cell, pad: pad, padX: pad, padY: pad, ring: ring,
+        cols: p.w + 2 * ring, rows: p.h + 2 * ring,
+        originX: originX, originY: originY, w: p.w, h: p.h
+      };
+    }
+    var k = Number(idx);
+    /* 只接受真正的整数下标：非整数（脚本误传）宁可不给矩形，也不要悄悄 round 到别的格 */
+    if (!isFinite(k) || Math.floor(k) !== k || k < 0 || k >= p.w * p.h) return null;
+    var col = k % p.w;
+    var row = (k - col) / p.w;
+    return { x: originX + col * cell, y: originY + row * cell, w: cell, h: cell, cell: cell, col: col, row: row };
   }
 
   /* --------------------------------------------------- 标签页（基本 / 高级） */
@@ -2147,7 +2157,9 @@
 
   /* 选区高亮：直接画在**图纸画布**上（在 Render.drawPattern 之后补一层）。
      为什么不用 Render：drawPattern / exportPNG / exportCSV / legendHTML 是冻结的 4 个键，
-     不能为了高亮再加参数或第 5 个键。几何与命中判定同源（cellGeometry，pad 只从画布宽度反推）。 */
+     不能为了高亮再加参数或第 5 个键。
+     几何**与命中判定同源**：每一格的矩形都由 cellGeometry(idx) 给出（含索引圈的那一份反推），
+     所以「点中的格子」和「画高亮的格子」不可能各走一套。 */
   function drawBatchHighlight() {
     var cv = ui.patternCanvas;
     var region = state.batch.region;
@@ -2162,11 +2174,9 @@
       if (typeof ctx.save === 'function') ctx.save();
       ctx.beginPath();
       for (var i = 0; i < region.length; i++) {
-        var idx = region[i];
-        if (idx < 0 || idx >= g.w * g.h) continue;
-        var x = idx % g.w;
-        var y = (idx - x) / g.w;
-        ctx.rect(g.pad + x * g.cell + 0.5, g.pad + y * g.cell + 0.5, g.cell - 1, g.cell - 1);
+        var rect = cellGeometry(region[i]);
+        if (!rect) continue;
+        ctx.rect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1);
       }
       ctx.fillStyle = HIGHLIGHT_FILL;
       ctx.fill();
@@ -2265,6 +2275,13 @@
      于是 hitTestCell 的「pad = (画布宽 - w*cellPx)/2」推断对两种渲染器都精确成立。
      导出（padMode:'tight' + annotate）会额外留出清单栏，但那只走导出路径，与命中判定无关；
      预览恒 annotate:false，所以宽度方向不会有清单列、高度方向也不会有表格。 */
+  /* 内置降级渲染器自己算 pad / 画格子 —— 这是**渲染**侧的几何，不是命中侧的换算：
+     命中判定只认「画布宽度反推 + 索引圈」（见 cellGeometry）。
+     两者对得上，是因为冻结公式里 pad 与原点用的是**同一个** R：
+     降级渲染器不画索引圈（画布宽 = 2*pad + w*cell）时，(cv.width - (w+2)*cell)/2 恰好把原点
+     整体左/上移回 pad - cell，再加上 R*cell 正好抵消 —— 实测两种画布下命中都落在同一格
+     （见自测「圈内/圈外/无圈画布」三组）。若将来要让降级路径也画索引圈，改的应是这里，
+     而不是去动命中侧的第二套换算。 */
   function fallbackPad(v, cell, p) {
     if (v.showRuler) return RULER_PAD;
     if (v.padMode !== 'tight') return RULER_PAD;
@@ -2468,8 +2485,6 @@
     /* 只有真的启用了减色才有「上限」可言；没启用就不显示这一行，也不假装有个数字 */
     if (q && q.enabled) html += summaryRow('减色上限', q.maxColors + ' 色');
     html += summaryRow('成品尺寸', fmt1(s.cmW) + ' × ' + fmt1(s.cmH) + ' cm');
-    html += summaryRow('拼板', ((s.boardX !== null && s.boardX !== undefined) ? s.boardX : '—')
-      + ' × ' + ((s.boardY !== null && s.boardY !== undefined) ? s.boardY : '—') + ' 板');
     html += summaryRow('图纸格数', p.w + ' × ' + p.h);
     html += summaryRow('色卡', p.paletteId || '—');
     var note = quantizeNote(q, used);
@@ -2520,8 +2535,8 @@
     return s;
   }
 
-  /* 缩放下限：永远不高于「能看全」的比例 —— 否则手机上一张 116×116 的图纸
-     （2784px 宽）在 360px 的容器里再怎么缩也看不全。
+  /* 缩放下限：永远不高于「能看全」的比例 —— 否则手机上一张 100×100 的图纸
+     （格区 100 × 24px = 2400px 宽）在 360px 的手机容器里再怎么缩也看不全。
      下限只会被 fitScale **调低**，不会被它抬高：小图在宽容器上 fitScale 可能 > 1，
      这时下限仍是 ZOOM_MIN，用户照样能缩出去（不能反过来把用户锁死在放大侧）。
      3 位小数**向下截断**（不是四舍五入）：四舍五入会把 0.0584 抬成 0.0585→更大，
@@ -2931,8 +2946,9 @@
   function onSrcEditChange() {
     syncSrcEditHint();
     if (state.srcW > 0) {
-      if (ui.lockAspect && ui.lockAspect.checked) applyBoardsPreset();
-      else normalizeDims('gridW');
+      /* 宽高比锁定时由 normalizeDims 按当前宽度推高度；不锁定时它只做范围夹取。
+         （原来这里是 applyBoardsPreset()：「按拼板规格 + 宽高比铺满」；板材概念已移除。） */
+      normalizeDims('gridW');
     }
     scheduleRegenerate(DEBOUNCE_MS);
   }
@@ -2965,8 +2981,8 @@
     }
     setStatus(okMsg, 'ok');
     if (state.source) {
-      if (ui.lockAspect && ui.lockAspect.checked) applyBoardsPreset();
-      else normalizeDims('gridW');
+      /* 同上：原图旋转 / 翻转后按当前宽度重推另一边（宽高比锁定由 normalizeDims 负责） */
+      normalizeDims('gridW');
       scheduleRegenerate(0);
     }
   }
@@ -3242,8 +3258,8 @@
     }
     drawSourceCanvas();
     syncSrcEditHint();
-    if (ui.lockAspect && ui.lockAspect.checked) applyBoardsPreset();
-    else normalizeDims('gridW');
+    /* 换了图：按当前宽度（保持原图宽高比则一起推高度）重新对齐格数 */
+    normalizeDims('gridW');
     setCanvasPlaceholders();
     renderPattern();
     renderLegend();
@@ -3413,7 +3429,6 @@
       return;
     }
     if (id === 'bayerN') { syncEnabledState(); scheduleRegenerate(0); return; }
-    if (id === 'boardsSelect') { applyBoardsPreset(); scheduleRegenerate(0); return; }
     if (id === 'sizePreset') { applySizePreset(); syncSizePresetValue(); return; }
     if (id === 'recolorScope') {
       state.recolor.scope = (ui.recolorScope && String(ui.recolorScope.value) === PICKER_SCOPE_ALL)
@@ -3466,8 +3481,9 @@
     setChecked(ui.methodFS, DEFAULTS.method === 'fs');
     setChecked(ui.methodBayer, DEFAULTS.method === 'bayer');
     setVal(ui.bayerN, DEFAULTS.bayerN);
-    setVal(ui.boardsSelect, DEFAULTS.boards);
-    applyBoardsPreset();
+    /* 尺寸复位：默认就是 100 × 100，且预设控件同步停在 100 档（不再有「拼板规格」这一步） */
+    setVal(ui.gridW, DEFAULTS.gridW);
+    setVal(ui.gridH, DEFAULTS.gridH);
     state.recolor.scope = PICKER_SCOPE_USED;
     setVal(ui.sizePreset, DEFAULTS.sizePreset);
     syncSizePresetValue();
@@ -3500,7 +3516,7 @@
       'maxColorsNum', 'gridW', 'gridH'];
     var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showCodes', 'showRuler', 'lockToggle',
       'recolorMode', 'batchMode', 'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
-    var selects = ['boardsSelect', 'paletteSelect', 'bayerN', 'sizePreset', 'recolorScope', 'exportScale'];
+    var selects = ['paletteSelect', 'bayerN', 'sizePreset', 'recolorScope', 'exportScale'];
     var methods = ['methodNearest', 'methodFS', 'methodBayer'];
     var i;
 
@@ -3659,7 +3675,6 @@
       maxColorsNum: byId('maxColorsNum'),
       maxColorsHint: byId('maxColorsHint'),
       preprocessHint: byId('preprocessHint'),
-      boardsSelect: byId('boardsSelect'),
       sizePreset: byId('sizePreset'),
       gridW: byId('gridW'),
       gridH: byId('gridH'),

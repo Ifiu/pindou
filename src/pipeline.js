@@ -79,8 +79,7 @@
   'use strict';
 
   var BEAD_MM = 2.6;            // 单颗拼豆外径（毫米）
-  var BOARD_CELLS = 29;         // 一块板 29×29 格
-  var MAX_DIM = 116;            // 4 板 = 116 格（与 ui.html 的 max="116" / 4×4 板档一致）
+  var MAX_DIM = 100;            // 单边格数硬上限（与 ui.html 的 max="100" 一致）
   var EMPTY = 65535;            // cells 里的空格标记
   var ALPHA_MIN = 128;          // alpha < 128 视为透明
   var MAX_SRC_PIXELS = 1200 * 1200;  // generate() 读取源图的像素上限（防止把 4000×3000 全量读进来）
@@ -91,23 +90,22 @@
    * 默认参数：与 src/ui.html 的默认控件值保持一致（否则「不传 opts」与「用界面默认值」
    * 会得到两张不同的图纸，用户会认为有 bug）。逐项理由：
    *   method 'nearest'      忠实、快、色块最干净，便于用户先看清原图结构再切 FS/Bayer 对比。
-   *   bayerN 4              UI 默认 4×4；4×4 在小格数（29×29）下纹理比 8×8 更细。
+   *   bayerN 4              UI 默认 4×4；4×4 在小格数下纹理比 8×8 更细。
    *   ditherStrength 0.3    UI 滑杆默认 30%；全强度(1)在拼豆这种「色块即成品」的载体上
    *                         会把边缘打散成杂色，0.3 是稳妥起点。
-   *   quantize.enabled true 默认必须「拼得完」：随机噪声图用最近邻会命中 172/221 个色号，
-   *                         真实照片也常上百色，而没有人手上有 172 种拼豆。默认开减色。
-   *   quantize.maxColors 24 一板 29×29 = 841 颗；常用拼豆作品通常 10–25 色，24 落在
-   *                         「表现力够 + 买得到豆」的甜点上：116×116 满配时每色平均仍有
-   *                         ~560 颗，足以表现渐变；同时与 UI 的 maxColors 默认值一致。
+   *   quantize.enabled true 默认必须「拼得完」：随机噪声图用最近邻实测会命中 208/221 个色号，
+   *                         真实照片也常上百色，而没有人手上有两百种拼豆。默认开减色。
+   *   quantize.maxColors 24 常用拼豆作品通常 10–25 色，24 落在「表现力够 + 买得到豆」的
+   *                         甜点上：100×100 满配时每色平均仍有 ~417 颗，足以表现渐变；
+   *                         同时与 UI 的 maxColors 默认值一致。
    *   paletteId             默认主谱系 mard-221-getcolors（palette.js 的第一个 key）。
-   *   gridW/gridH null      未给时按 boards + 原图宽高比推导；给出则优先并夹到 [1,116]。
-   *   boards 1              一板起步，最省豆。
+   *   gridW/gridH null      未给时按原图宽高比铺满长边 MAX_DIM = 100 格（也就是预设尺寸）；
+   *                         给出则优先并夹到 [1,100]。
    * 说明：opts 里出现约定外的附加字段（如 app.js 的 keepLocks / locks）一律忽略，不报错。
    */
   var DEFAULT_OPTS = {
     gridW: null,
     gridH: null,
-    boards: 1,
     lockAspect: true,
     paletteId: DEFAULT_PALETTE_ID,
     preprocess: { brightness: 0, contrast: 0, saturation: 0, autoWB: false, autoLevels: false },
@@ -243,7 +241,6 @@
     return {
       gridW: numOrNull(o.gridW),
       gridH: numOrNull(o.gridH),
-      boards: clampInt(num(o.boards, DEFAULT_OPTS.boards), 1, 3),
       lockAspect: o.lockAspect === undefined ? DEFAULT_OPTS.lockAspect : !!o.lockAspect,
       paletteId: typeof o.paletteId === 'string' ? o.paletteId : '',
       method: method,
@@ -266,18 +263,18 @@
   }
 
   /**
-   * 尺寸推导。长边上限 = 29 * boards（29/58/87；boards 自身夹在 1..3），单边硬上限 MAX_DIM = 116。
-   * - gridW/gridH 都未给：长边取上限，短边按原图宽高比推导后夹到 [1,116]（极端比例不强行方形）。
+   * 尺寸推导。单边硬上限 MAX_DIM = 100，没有「板」的概念。
+   * - gridW/gridH 都未给：长边取 MAX_DIM = 100（＝预设尺寸），短边按原图宽高比推导后夹到 [1,100]
+   *   （极端比例不强行方形，短边可以小到 1）。这是唯一的回落值，永远不会推出 0 / NaN。
    * - 只给一边：另一边按 lockAspect 推导（true = 按原图比例；false = 取与已给一边相同的格数）。
-   * - 两边都给：优先采用，各自夹到 [1,116]（是否等比拉伸由调用方决定，管线不擅自改用户输入）。
+   * - 两边都给：优先采用，各自夹到 [1,100]（是否等比拉伸由调用方决定，管线不擅自改用户输入）。
    */
   function deriveDims(sw, sh, o, warnings) {
     var w = o.gridW, h = o.gridH;
     var aspect = sw / sh;                    // 宽/高，恒 > 0
     if (w === null && h === null) {
-      var lim = BOARD_CELLS * o.boards;      // 29 / 58 / 87
-      if (aspect >= 1) { w = lim; h = clampInt(Math.round(lim / aspect), 1, MAX_DIM); }
-      else { h = lim; w = clampInt(Math.round(lim * aspect), 1, MAX_DIM); }
+      if (aspect >= 1) { w = MAX_DIM; h = clampInt(Math.round(MAX_DIM / aspect), 1, MAX_DIM); }
+      else { h = MAX_DIM; w = clampInt(Math.round(MAX_DIM * aspect), 1, MAX_DIM); }
     } else if (w === null) {
       h = clampInt(h, 1, MAX_DIM);
       w = o.lockAspect ? clampInt(Math.round(h * aspect), 1, MAX_DIM) : h;
@@ -651,8 +648,6 @@
       stats: {
         total: total,
         usedColors: set.length,
-        boardX: Math.ceil(gw / BOARD_CELLS),
-        boardY: Math.ceil(gh / BOARD_CELLS),
         cmW: round2(gw * BEAD_MM / 10),
         cmH: round2(gh * BEAD_MM / 10)
       },

@@ -39,7 +39,6 @@
   /* ---------------------------------------------------------------- 常量 */
 
   var EMPTY = 65535;         // cells 里的空格 / 不用豆标记
-  var BOARD = 29;            // 一块拼豆板的边长（格）
   var MIN_CELL_PX = 4;
   var MAX_CELL_PX = 256;     // 导出倍率会放大格子；真正的护栏是 MAX_CANVAS_PIXELS
   var DEFAULT_CELL_PX = 12;
@@ -50,7 +49,7 @@
   // 左下角角标：标题上限 24 字符（超出截到 23 + '…'）；时长按 viewOpts.beadRate 折算（UI 默认 500 颗/小时）
   var CAPTION_TITLE_MAX = 24;
   var CAPTION_FONT_MIN = 9;    // 角标字号下限；连它都放不下就不画（与「格内标签太小就不画」同原则）
-  var CAPTION_FONT_MAX = 28;
+  var CAPTION_FONT_MAX = 40;   // 角标字号上限（「尽可能大」的天花板，用户建议值）
 
   // 标签可读性：字号 = round(cellPx*0.42)，且必须同时满足「最小可读字号」与「装得下」
   var LABEL_FONT_RATIO = 0.42;
@@ -65,7 +64,22 @@
   var RULER_FONT_RATIO = 0.5;
   var RULER_FONT_MIN = 9;
   var RULER_FONT_MAX = 40;
-  var ANNOTATE_FONT_RATIO = 0.45;
+  var ANNOTATE_FONT_RATIO = 0.62;      // 用量块字号：0.45 → 0.62（用户要求色卡/标签整体放大）
+  var ANNOTATE_FONT_MIN = 12;          // 下限 9 → 12（小 cellPx 下也要看得清）
+  var ANNOTATE_FONT_MAX = 40;          // 上限不变，避免大 cellPx 下无限制膨胀
+  var CHIP_H_RATIO = 2.4;              // 块高 = 字号 × 2.4（上一轮 2.2，继续放大一档）
+  var CHIP_FONT_MIN = 9;               // 色卡字号下限（块宽不够时缩到这里就不再缩，宁可贴着块内留白）
+  var CHIP_COLS = 8;                   // 色卡固定每行 8 个，与图纸大小无关
+  var FRAME_LINE_RATIO = 0.35;         // 最外围外框线宽 = cellPx × 0.35（上一轮 0.3，再加粗一档）
+  var FRAME_LINE_MIN = 4;
+  var FRAME_LINE_MAX = 10;
+  var INNER_LINE_RATIO = 0.18;         // 原图纸外沿（索引圈内侧那圈）线宽
+  var INNER_LINE_MIN = 2;
+  var INNER_LINE_MAX = 5;
+  var INDEX_RING = 1;                  // 索引圈宽 = 1 格（图纸区 = (m+2)×(n+2)）
+  var INDEX_FONT_FIT = 0.85;           // 索引数字宽度上限 = 格宽 × 0.85（要塞得下 3 位数）
+  var INDEX_FONT_MIN = 5;
+  var INDEX_FONT_MAX = 22;
 
   var HEX_FULL = /^#[0-9a-fA-F]{6}$/;
   var HEX_SHORT = /^#[0-9a-fA-F]{3}$/;
@@ -75,20 +89,17 @@
 
   var C = {
     paper: '#FFFFFF',        // 纸底
-    grid: '#DCE0E6',         // 细网格线
-    board: '#39424F',        // 29 格板边界线（加粗）
-    rulerLine: '#98A2B3',
-    rulerText: '#5A6472',
-    rulerBoardText: '#39424F',
-    // 左下角角标专用色：**不与任何其它绘制复用**（rulerText / chipCount 仍是 #5A6472），
-    // 好让测试能按颜色直接认出「这次 fillText 是角标」，不必再依赖易变的文字格式正则。
-    // 同族中性灰、与旧值(rulerText)几乎不可分辨，不引入新色相。
+    // 三层线宽/深度（可量化）：细网格 < 原图纸外沿 < 最外围外框
+    grid: '#A6AEBA',         // 细网格线（比旧值 #DCE0E6 明显加深；整块均匀，29 格不再特殊）
+    inner: '#3E4753',        // 原图纸外沿（索引圈内侧那圈）
+    frame: '#0E1218',        // 最外围外框（近黑深灰，最粗最深）
+    indexText: '#2B3240',    // 索引圈里的数字（深、清晰）
+    // 左下角角标专用色：**不与任何其它绘制复用**，好让测试按颜色直接认出「这条 fillText 是角标」。
     caption: '#616B7A',
     title: '#2B3240',
-    chipBg: '#F5F7FA',       // 用量块底
-    chipLine: '#DCE0E6',     // 用量块描边
-    chipCount: '#5A6472',    // 用量块里的颗数文字
-    swatchEdge: '#8A94A6'    // 色块描边
+    chipLine: '#8A94A6',     // 用量块描边（底色是色号本色，浅色块也必须有看得见的边）
+    placeholder: '#EEF1F5',
+    placeholderText: '#8A94A6'
   };
 
   /* ------------------------------------------------------------ 小工具 */
@@ -179,6 +190,36 @@
     if (!rgb) return '#111827';
     var lum = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
     return lum > 0.55 ? '#111827' : '#FFFFFF';
+  }
+
+  // WCAG 2.x 相对亮度（sRGB 线性化）与对比度：(L1+0.05)/(L2+0.05)
+  function relLuminance(hex) {
+    var rgb = hexToRgb(hex);
+    if (!rgb) return 1;
+    var lin = [], i, v;
+    for (i = 0; i < 3; i++) {
+      v = rgb[i] / 255;
+      lin.push(v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+    }
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  }
+
+  function contrastRatio(a, b) {
+    var la = relLuminance(a), lb = relLuminance(b);
+    var hi = la > lb ? la : lb, lo = la > lb ? lb : la;
+    return (hi + 0.05) / (lo + 0.05);
+  }
+
+  // 用量块文字色：纯黑 / 纯白二选一，取 WCAG 对比度更高者。
+  // 为什么是纯黑而不是 #111827：两档文字色的理论最差对比度出现在「临界底色」上，
+  // 该值 = sqrt(1.05/(Ld+0.05))（Ld = 深色墨的相对亮度）。#111827 的 Ld≈0.0092 → 最差 4.21:1，
+  // 达不到 4.5:1；纯黑 Ld=0 → 最差 4.58:1，所以 221 个色号里任何一个都必然 ≥ 4.5:1。
+  var CHIP_INK_DARK = '#000000';
+  var CHIP_INK_LIGHT = '#FFFFFF';
+
+  function chipInk(hex) {
+    var bg = safeHex(hex);
+    return contrastRatio(bg, CHIP_INK_DARK) >= contrastRatio(bg, CHIP_INK_LIGHT) ? CHIP_INK_DARK : CHIP_INK_LIGHT;
   }
 
   function escapeHTML(v) {
@@ -351,45 +392,70 @@
     return rows;
   }
 
-  // 网格下方用量块的版式：每个色号一个「圆角色块 + 色号 + 颗数」的行内块，横向排布、自动换行。
+  // 块内「颗数」文字：参考图形态 `(17)` —— 不带单位（单位在角标「共 N 颗」里），窄块也放得下更大字号
+  function chipCountText(count) {
+    return '(' + textOf(count) + ')';
+  }
+
+  // 网格下方用量块的版式：每个色号一个「**底色 = 该色号本色**的圆角块 + `色号 (颗数)`」，横向排布、自动换行。
   // 尺寸只在这里算一次，绘制与面积守卫共用。
   function annotateLayout(pattern, opts, gridW) {
     var rows = usageRows(pattern);
     var gap = Math.max(2, Math.round(opts.cellPx * 0.5));
     if (!rows.length) {
-      return { rows: rows, chips: [], lines: [], fontPx: 0, swatch: 0, chipPadX: 0, inner: 0,
-        chipGapX: 0, chipGapY: 0, chipH: 0, chipR: 0, tableW: gridW, tableH: 0, gap: 0 };
+      return { rows: rows, chips: [], lines: [], fontPx: 0, chipPadX: 0, inner: 0,
+        chipGapX: 0, chipGapY: 0, chipH: 0, chipR: 0, chipW: 0, tableW: gridW, tableH: 0, gap: 0 };
     }
 
-    var fontPx = clamp(Math.round(opts.cellPx * ANNOTATE_FONT_RATIO), 9, 40);
-    var swatch = Math.max(10, Math.round(fontPx * 1.15));    // 圆角色块边长
-    var padX = Math.max(7, Math.round(fontPx * 0.6));        // 块内左右留白
-    var inner = Math.max(4, Math.round(fontPx * 0.45));      // 色块↔色号↔颗数 的间距
-    var gapX = Math.max(6, Math.round(fontPx * 0.55));       // 块与块的横向间距
-    var gapY = Math.max(6, Math.round(fontPx * 0.55));       // 行距
-    var chipH = Math.max(Math.round(fontPx * 2.2), swatch + Math.round(fontPx * 0.7));
-    var chipR = Math.max(3, Math.round(chipH * 0.3));        // 胶囊圆角半径
-
-    var i, r, chip, chips = [], widest = 0;
+    // 最长文本（用来把字号压到「放得下」为止；不截断文本本身）。
+    // 块内文字形态 = 参考图的 `色号 (颗数)`（如 `A2 (17)`）：**不带「颗」单位**（单位在角标的「共 N 颗」里），
+    // 这样窄块也能给出更大的字号 —— 用户要的就是「色卡再放大」。
+    var i, r, maxCode = '', maxCount = '';
     for (i = 0; i < rows.length; i++) {
       r = rows[i];
-      chip = { code: textOf(r.code), hex: safeHex(r.hex), count: textOf(r.count) };
-      chip.w = padX * 2 + swatch + inner + Math.ceil(estTextW(chip.code, fontPx))
-        + inner + Math.ceil(estTextW(chip.count + ' 颗', fontPx));
-      chips.push(chip);
-      if (chip.w > widest) widest = chip.w;
+      if (textOf(r.code).length > maxCode.length) maxCode = textOf(r.code);
+      if (chipCountText(r.count).length > maxCount.length) maxCount = chipCountText(r.count);
     }
 
-    // 换行容器：至少与网格同宽；单个块比网格还宽时以最宽的那个块为准
-    var boxW = Math.max(gridW, widest);
-    var lines = [], cur = [], curW = 0, need;
-    for (i = 0; i < chips.length; i++) {
-      need = cur.length ? curW + gapX + chips[i].w : chips[i].w;
-      if (cur.length && need > boxW) { lines.push({ items: cur, w: curW }); cur = []; curW = 0; need = chips[i].w; }
-      cur.push(chips[i]);
-      curW = need;
+    // 固定 8 列：块宽 = (行宽 - 7*间距) / 8，8 个块 + 7 个间距**正好撑满行宽**。
+    // 字号**顶到最大**（从 ANNOTATE_FONT_MAX 逐 1px 降到放得下为止，下限 CHIP_FONT_MIN）——
+    // 唯一的约束就是「8 列块宽」本身，不再用 cellPx 比例当起点。
+    var fontPx = ANNOTATE_FONT_MAX;
+    var gapX, chipW, padX, inner, chipH, chipR, need;
+    for (;;) {
+      gapX = Math.max(6, Math.round(fontPx * 0.5));
+      // 行宽 = 图纸区宽 gridW（m+2 列）；块宽 = (行宽 - 7*间距)/8 —— 不取整，
+      // 这样 8 块 + 7 间距 **逐像素撑满**行宽（最后一块右边缘正好落在 gridW 上）
+      chipW = (gridW - (CHIP_COLS - 1) * gapX) / CHIP_COLS;
+      padX = Math.max(8, Math.round(fontPx * 0.55));
+      inner = Math.max(4, Math.round(fontPx * 0.4));
+      need = padX * 2 + Math.ceil(estTextW(maxCode, fontPx)) + inner + Math.ceil(estTextW(maxCount, fontPx));
+      if (need <= chipW || fontPx <= CHIP_FONT_MIN) break;
+      fontPx--;
     }
-    if (cur.length) lines.push({ items: cur, w: curW });
+    var gapY = Math.max(6, Math.round(fontPx * 0.5));
+    // 块高：既随字号（放大），也有一个随 cellPx 的下限，保证「窄块 + 被压小的字号」时块仍然够大；
+    // 再夹到「严格比块宽小一点」——固定 8 列会把窄图纸的块压窄，这里保证色卡始终是横条（不是竖条）。
+    chipH = Math.max(10, Math.min(
+      Math.max(Math.round(fontPx * CHIP_H_RATIO), Math.round(opts.cellPx * 1.5), 26),
+      Math.floor(chipW) - 1
+    ));
+    chipR = Math.max(3, Math.round(chipH * 0.3));
+
+    var chip, chips = [];
+    for (i = 0; i < rows.length; i++) {
+      r = rows[i];
+      chip = { code: textOf(r.code), hex: safeHex(r.hex), count: textOf(r.count), countText: chipCountText(r.count), ink: chipInk(r.hex), w: chipW };
+      chips.push(chip);
+    }
+
+    // 每行固定 8 个（最后一行可少），列对齐（不居中）
+    var lines = [], cur = [];
+    for (i = 0; i < chips.length; i++) {
+      cur.push(chips[i]);
+      if (cur.length === CHIP_COLS) { lines.push({ items: cur, w: cur.length * chipW + (cur.length - 1) * gapX }); cur = []; }
+    }
+    if (cur.length) lines.push({ items: cur, w: cur.length * chipW + (cur.length - 1) * gapX });
     var lineCount = lines.length;
 
     return {
@@ -397,14 +463,14 @@
       chips: chips,
       lines: lines,
       fontPx: fontPx,
-      swatch: swatch,
       chipPadX: padX,
       inner: inner,
       chipGapX: gapX,
       chipGapY: gapY,
       chipH: chipH,
       chipR: chipR,
-      tableW: boxW,
+      chipW: chipW,
+      tableW: gridW,
       tableH: lineCount * chipH + (lineCount - 1) * gapY,
       gap: gap
     };
@@ -491,21 +557,20 @@
     return out;
   }
 
-  // 自适应角标：**绝不撑宽画布**，只在给定可用内宽里收缩。
-  // 顺序固定：字号从自然值降到 CAPTION_FONT_MIN(9)，每个字号档内按 C1→C4 依次试第一个放得下的；
-  // 所有字号档都不行 → 整条不画（text/h 全 0，不留空白带）。
-  // 先保字号（大字号比一个被截断的名字有价值），所以「宁可掉标题/掉时长，也不轻易缩字号」。
-  // 每一档都满足 estTextW(text, fontPx) <= availW，所以文字永远不会画到画布外。
+  // 自适应角标：**信息优先、字号在该信息量内尽可能大**。
+  // 顺序：候选从 C1（完整四段）→ C2 → C3 → C4（只留颗数），对每个候选求「能放下的最大字号」；
+  // 第一个能在 ≥ CAPTION_FONT_MIN(9px) 放下的候选胜出 → 采用它 + 它的最大字号。
+  // 即：降级阶梯只用来**兜底保信息**，不是用来换字号的（用户要「视图纸名增加」，标题不能在还能放下时被丢掉）。
+  // 连 C4 在 9px 都放不下 → 整条不画（text/h 全 0，不留空白带）。
   function captionFit(pattern, opts, availW) {
     var blank = { text: '', fontPx: 0, top: 0, h: 0, drawn: false };
     var ext = cellsExtent(pattern);
     if (!ext) return blank;                           // 一颗都没有 → 没有角标
     var cands = captionCandidates(ext, opts);
-    var nat = clamp(Math.round(opts.cellPx * 0.45), CAPTION_FONT_MIN, CAPTION_FONT_MAX);
     var top = Math.max(4, Math.round(opts.cellPx * 0.35));
     var f, i;
-    for (f = nat; f >= CAPTION_FONT_MIN; f--) {
-      for (i = 0; i < cands.length; i++) {
+    for (i = 0; i < cands.length; i++) {
+      for (f = CAPTION_FONT_MAX; f >= CAPTION_FONT_MIN; f--) {
         if (estTextW(cands[i], f) <= availW) {
           return {
             text: cands[i],
@@ -520,67 +585,54 @@
     return blank;
   }
 
+  // 索引圈：四边**逐格**写数字（上/下 = 列号 1..m，左/右 = 行号 1..n），四角留空。
+  // 数字画在圈里（格中心），所以不会侵入原图纸区域。字号随 cellPx 定，并保证最长数字（如 116 三位）
+  // 的估算宽度 ≤ 格宽 × INDEX_FONT_FIT。
+  function indexMetrics(w, h, cellPx) {
+    var maxLen = String(Math.max(w, h, 1)).length;
+    var fontPx = clamp(Math.floor(cellPx * INDEX_FONT_FIT / (LABEL_CHAR_W * maxLen)), INDEX_FONT_MIN, Math.min(INDEX_FONT_MAX, cellPx));
+    return { fontPx: fontPx, maxLen: maxLen };
+  }
+
   function layoutOf(pattern, opts) {
     var w = Math.max(0, Math.floor((pattern && pattern.w) || 0));
     var h = Math.max(0, Math.floor((pattern && pattern.h) || 0));
     var cellPx = opts.cellPx;
-    var gridW = w * cellPx, gridH = h * cellPx;
+    // 冻结几何：图纸区 = (m+2R)×(n+2R) 格；原图纸 (r,c) 左上角 = (pad + (c+R)*cellPx, pad + (r+R)*cellPx)
+    var gridW = (w + 2 * INDEX_RING) * cellPx;
+    var gridH = (h + 2 * INDEX_RING) * cellPx;
     var ruler = rulerMetrics(cellPx);
     var maxDigits = String(Math.max(w, h, 1)).length;
-    var pad = padOf(opts, gridW, gridH, ruler, maxDigits);
+    // pad 的输入仍是**原图纸** m×n（沿用上一轮规则逐值不变），所以 app 侧的 pad 推导不需要改
+    var pad = padOf(opts, w * cellPx, h * cellPx, ruler, maxDigits);
+    // 色卡的「行宽」= 图纸区宽 gridW（8 个块 + 7 个间距正好撑满）
     var table = opts.annotate ? annotateLayout(pattern, opts, gridW) : null;
-    // 内容宽只看网格与用量块：角标**绝不参与** contentW/width（hitTestCell 依赖 width - w*cellPx 反推 pad）
     var contentW = Math.max(gridW, table ? table.tableW : 0);
-    var gridDX = Math.round((contentW - gridW) / 2);          // 表格更宽时网格整体居中
+    var gridDX = Math.round((contentW - gridW) / 2);          // 内容比图纸区宽时整体居中（色卡恒等于 gridW，正常为 0）
     if (table) {
-      table.dx = Math.round((contentW - table.tableW) / 2);   // 相对网格原点
-      table.dy = gridH + table.gap;                            // 表格在网格下方，绝不重叠
+      table.dx = Math.round((contentW - table.tableW) / 2);   // 相对图纸区原点
+      table.dy = gridH + table.gap;                            // 色卡在图纸区下方，绝不重叠
     }
     var width = pad * 2 + contentW;
-    // 角标可用内宽 = 从角标左边缘(pad+gridDX)到画布右边缘再留一个 pad。
-    // gridDX = 0（无更宽的用量块）时它就等于 width - 2*pad = contentW。
+    // 角标可用内宽 = 从角标左边缘(pad+gridDX)到画布右边缘再留一个 pad（gridDX=0 时 = width - 2*pad）
     var availW = Math.max(0, contentW - gridDX);
     var cap = captionFit(pattern, opts, availW);
     return {
       w: w,
       h: h,
       cellPx: cellPx,
+      ring: INDEX_RING * cellPx,
       pad: pad,
       gridW: gridW,
       gridH: gridH,
       contentW: contentW,
       gridDX: gridDX,
-      rulerFontPx: ruler.fontPx,
-      rulerGap: ruler.gap,
+      index: indexMetrics(w, h, cellPx),
       table: table,
       caption: cap,
       width: width,
       height: pad * 2 + gridH + (table ? table.gap + table.tableH : 0) + cap.h
     };
-  }
-
-  // 板边界位置：29, 58, 87 …；末格外框也补一条（它同样是板的边）
-  function boardPositions(n) {
-    var out = [], k;
-    for (k = BOARD; k <= n; k += BOARD) out.push(k);
-    if (n > 0 && out[out.length - 1] !== n) out.push(n);
-    return out;
-  }
-
-  // 刻度文字位置：恒定每 5 格一个数字（与 cellPx 无关）；29 的板边界额外补标（重合时只标一次）
-  function rulerPositions(n) {
-    var boards = boardPositions(n), boardSet = {}, seen = {}, out = [], i, k;
-    for (i = 0; i < boards.length; i++) boardSet[boards[i]] = 1;
-    for (k = 5; k <= n; k += 5) {
-      seen[k] = 1;
-      out.push({ at: k, board: boardSet[k] === 1 });
-    }
-    for (i = 0; i < boards.length; i++) {
-      k = boards[i];
-      if (!seen[k]) { seen[k] = 1; out.push({ at: k, board: true }); }
-    }
-    out.sort(function (a, b) { return a.at - b.at; });
-    return out;
   }
 
   /* --------------------------------------------------------------- 统计 */
@@ -665,45 +717,48 @@
   }
 
   function paintGrid(ctx, pattern, lay, ox, oy) {
-    var w = lay.w, h = lay.h, cellPx = lay.cellPx, i, x, y, k, vb, hb;
+    var cellPx = lay.cellPx, i, x, y, cols, rows, flw, ilw;
 
-    // 细网格线：一次成路径、一次 stroke（性能）
+    // 细网格线：整块（含索引圈）**完全均匀**——29 的整数倍位置上没有任何额外更粗/更深的线。
+    // 一次成路径、一次 stroke（性能）。
+    cols = lay.w + 2 * INDEX_RING;
+    rows = lay.h + 2 * INDEX_RING;
     ctx.beginPath();
     ctx.strokeStyle = C.grid;
     ctx.lineWidth = 1;
-    for (i = 0; i <= w; i++) {
+    for (i = 0; i <= cols; i++) {
       x = ox + i * cellPx + GRID_HALF;
       ctx.moveTo(x, oy + GRID_HALF);
       ctx.lineTo(x, oy + lay.gridH + GRID_HALF);
     }
-    for (i = 0; i <= h; i++) {
+    for (i = 0; i <= rows; i++) {
       y = oy + i * cellPx + GRID_HALF;
       ctx.moveTo(ox + GRID_HALF, y);
       ctx.lineTo(ox + lay.gridW + GRID_HALF, y);
     }
     ctx.stroke();
 
-    // 29 格板边界：每一条单独成路径并单独 stroke，便于数清也便于后续调线型
-    vb = boardPositions(w);
-    hb = boardPositions(h);
-    ctx.strokeStyle = C.board;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'butt';
-    for (k = 0; k < vb.length; k++) {
-      x = ox + vb[k] * cellPx;
-      ctx.beginPath();
-      ctx.moveTo(x, oy - 2);
-      ctx.lineTo(x, oy + lay.gridH + 2);
-      ctx.stroke();
-    }
-    for (k = 0; k < hb.length; k++) {
-      y = oy + hb[k] * cellPx;
-      ctx.beginPath();
-      ctx.moveTo(ox - 2, y);
-      ctx.lineTo(ox + lay.gridW + 2, y);
-      ctx.stroke();
-    }
-    return { v: vb.length, h: hb.length };
+    // 原图纸外沿：索引圈**内侧**一圈明显的边框（与最外围外框是内外两条不同的线）。
+    // 画在原图纸边界上（内外各半），所以格子坐标一格都不动。
+    ilw = clamp(Math.round(cellPx * INNER_LINE_RATIO), INNER_LINE_MIN, INNER_LINE_MAX);
+    ctx.strokeStyle = C.inner;
+    ctx.lineWidth = ilw;
+    ctx.lineJoin = 'miter';
+    ctx.beginPath();
+    ctx.rect(ox + INDEX_RING * cellPx - ilw / 2, oy + INDEX_RING * cellPx - ilw / 2,
+      lay.w * cellPx + ilw, lay.h * cellPx + ilw);
+    ctx.closePath();
+    ctx.stroke();
+
+    // 最外围外框：最粗最深的一圈（比细网格与图纸外沿都更粗更深）
+    flw = clamp(Math.round(cellPx * FRAME_LINE_RATIO), FRAME_LINE_MIN, FRAME_LINE_MAX);
+    ctx.strokeStyle = C.frame;
+    ctx.lineWidth = flw;
+    ctx.beginPath();
+    ctx.rect(ox - flw / 2, oy - flw / 2, lay.gridW + flw, lay.gridH + flw);
+    ctx.closePath();
+    ctx.stroke();
+    return { frame: flw, inner: ilw };
   }
 
   // 逐格标签：只写真色号（A1/A10/M15）。数字编号模式已删除，本函数只服务 'code' 一种模式。
@@ -737,53 +792,25 @@
     return drawn;
   }
 
-  function paintRuler(ctx, lay, ox, oy) {
-    var w = lay.w, h = lay.h, cellPx = lay.cellPx;
-    var size = lay.rulerFontPx;
-    var gap = lay.rulerGap;
-    var long = Math.max(7, Math.round(size * 0.9));
-    var short = Math.max(4, Math.round(size * 0.5));
-    var pos, i, k, x, y, len;
-
-    // 刻度线
-    ctx.strokeStyle = C.rulerLine;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    pos = rulerPositions(w);
-    for (i = 0; i < pos.length; i++) {
-      k = pos[i].at;
-      len = (k % 10 === 0 || pos[i].board) ? long : short;
-      x = ox + k * cellPx + GRID_HALF;
-      ctx.moveTo(x, oy - GRID_HALF);
-      ctx.lineTo(x, oy - len);
-    }
-    pos = rulerPositions(h);
-    for (i = 0; i < pos.length; i++) {
-      k = pos[i].at;
-      len = (k % 10 === 0 || pos[i].board) ? long : short;
-      y = oy + k * cellPx + GRID_HALF;
-      ctx.moveTo(ox - GRID_HALF, y);
-      ctx.lineTo(ox - len, y);
-    }
-    ctx.stroke();
-
-    // 刻度数字：每 5 格一个（外加 29 的板边界），恒定，不随 cellPx 变密
-    ctx.font = size + 'px ' + FONT_SANS;
-    pos = rulerPositions(w);
+  // 索引圈：四边**逐格**一个数字（上/下 = 列号 1..m，左/右 = 行号 1..n），四角留空。
+  // 数字画在圈格的中心，所以绝不侵入原图纸区域（圈宽 = 1 格）。
+  function paintIndexRing(ctx, lay, ox, oy) {
+    var w = lay.w, h = lay.h, cellPx = lay.cellPx, R = INDEX_RING;
+    var sz = lay.index.fontPx, half = cellPx / 2;
+    var i, x, y;
+    ctx.font = sz + 'px ' + FONT_SANS;
+    ctx.fillStyle = C.indexText;
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    for (i = 0; i < pos.length; i++) {
-      k = pos[i].at;
-      ctx.fillStyle = pos[i].board ? C.rulerBoardText : C.rulerText;
-      ctx.fillText(String(k), ox + k * cellPx, oy - gap);
-    }
-    pos = rulerPositions(h);
-    ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-    for (i = 0; i < pos.length; i++) {
-      k = pos[i].at;
-      ctx.fillStyle = pos[i].board ? C.rulerBoardText : C.rulerText;
-      ctx.fillText(String(k), ox - gap, oy + k * cellPx);
+    for (i = 0; i < w; i++) {                        // 列号：上圈 + 下圈
+      x = ox + (i + R) * cellPx + half;
+      ctx.fillText(String(i + 1), x, oy + R * cellPx - half);
+      ctx.fillText(String(i + 1), x, oy + (h + R) * cellPx + half);
+    }
+    for (i = 0; i < h; i++) {                        // 行号：左圈 + 右圈
+      y = oy + (i + R) * cellPx + half;
+      ctx.fillText(String(i + 1), ox + R * cellPx - half, y);
+      ctx.fillText(String(i + 1), ox + (w + R) * cellPx + half, y);
     }
   }
 
@@ -796,42 +823,37 @@
     ctx.rect(x, y, w, h);
   }
 
-  // 单个用量块：圆角色块 + 色号 + 颗数
+  // 单个用量块：**底色 = 该色号本色**（圆角），文字 = 自动选的对比色（纯黑/纯白，WCAG ≥ 4.5:1）。
+  // 不再画单独的小色块 —— 整块就是那个颜色，「一眼看出这是什么颜色」。
+  // 文字分两段：色号（等宽粗体）+ `(颗数)`（同色同字号、常规字重），形态对齐用户参考图 `A2 (17)`。
   function paintChip(ctx, chip, x, y, t) {
     var f = t.fontPx, h = t.chipH, mid = y + h / 2;
-    var sx = x + t.chipPadX, sy = mid - t.swatch / 2;
-    var sr = Math.max(2, Math.round(t.swatch * 0.3));
+    var ink = chip.ink || chipInk(chip.hex);
+    var countText = chip.countText || ('(' + chip.count + ')');
+    var textW = Math.ceil(estTextW(chip.code, f)) + t.inner + Math.ceil(estTextW(countText, f));
     var tx;
 
-    ctx.fillStyle = C.chipBg;
+    ctx.fillStyle = chip.hex;
     roundRectPath(ctx, x, y, chip.w, h, t.chipR);
     ctx.fill();
+    // 描边：浅色块在白纸上不能糊成一片
     ctx.strokeStyle = C.chipLine;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = Math.max(1, Math.round(h * 0.06));
     roundRectPath(ctx, x + GRID_HALF, y + GRID_HALF, chip.w, h, t.chipR);
     ctx.stroke();
 
-    ctx.fillStyle = chip.hex;
-    roundRectPath(ctx, sx, sy, t.swatch, t.swatch, sr);
-    ctx.fill();
-    ctx.strokeStyle = C.swatchEdge;
-    ctx.lineWidth = 1;
-    roundRectPath(ctx, sx + GRID_HALF, sy + GRID_HALF, t.swatch, t.swatch, sr);
-    ctx.stroke();
-
-    tx = sx + t.swatch + t.inner;
+    tx = x + Math.round((chip.w - textW) / 2);      // 块被撑宽 → 文字居中（左对齐会在右侧留一大片空白）
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
-    ctx.fillStyle = C.title;
-    ctx.font = '600 ' + f + 'px ' + FONT_MONO;
+    ctx.fillStyle = ink;
+    ctx.font = '600 ' + f + 'px ' + FONT_MONO;      // 色号：同一号字、粗体
     ctx.fillText(chip.code, tx, mid);
     tx += Math.ceil(estTextW(chip.code, f)) + t.inner;
-    ctx.fillStyle = C.chipCount;
-    ctx.font = f + 'px ' + FONT_SANS;
-    ctx.fillText(chip.count + ' 颗', tx, mid);
+    ctx.font = f + 'px ' + FONT_MONO;               // 颗数：同一号字、常规字重（不靠透明度区分），形态 `(17)`
+    ctx.fillText(chip.countText || ('(' + chip.count + ')'), tx, mid);
   }
 
-  // 横向排布、每行居中；返回画出的块数
+  // 固定 8 列的表格：每行从左边界开始、列对齐（最后一行不足 8 个也左对齐），返回画出的块数
   function paintTable(ctx, lay, ox, oy) {
     var t = lay.table;
     if (!t || !t.lines || !t.lines.length) return 0;
@@ -839,7 +861,7 @@
     var drawn = 0, li, ci, line, cx, cy;
     for (li = 0; li < t.lines.length; li++) {
       line = t.lines[li];
-      cx = x0 + Math.round((t.tableW - line.w) / 2);
+      cx = x0;
       cy = y0 + li * (t.chipH + t.chipGapY);
       for (ci = 0; ci < line.items.length; ci++) {
         paintChip(ctx, line.items[ci], cx, cy, t);
@@ -852,14 +874,15 @@
 
   /* --------------------------------------------------- 绘制：图纸（核心） */
 
-  // 在 (ox, oy) = 网格左上角处绘制一张完整图纸；调用方负责白底与画布尺寸
+  // 在 (ox, oy) = **图纸区（含索引圈）**左上角处绘制一张完整图纸；原图纸原点再内缩 INDEX_RING 格。
   function paintPatternAt(ctx, pattern, opts, lay, ox, oy, stat) {
     var pal = paletteCache(pattern);
-    var res = paintCells(ctx, pattern, opts, lay, ox, oy, pal);
+    var px = ox + INDEX_RING * lay.cellPx, py = oy + INDEX_RING * lay.cellPx;   // 原图纸 (0,0) 左上角
+    var res = paintCells(ctx, pattern, opts, lay, px, py, pal);
     paintGrid(ctx, pattern, lay, ox, oy);
     var labels = 0;
-    if (stat && stat.fit && stat.fit.draw) labels = paintCodes(ctx, pattern, lay, ox, oy, stat.fit, pal);
-    if (opts.showRuler) paintRuler(ctx, lay, ox, oy);
+    if (stat && stat.fit && stat.fit.draw) labels = paintCodes(ctx, pattern, lay, px, py, stat.fit, pal);
+    if (opts.showRuler) paintIndexRing(ctx, lay, ox, oy);
     if (lay.table) paintTable(ctx, lay, ox, oy);
     return { cellsDrawn: res.cellsDrawn, markers: res.markers, labelsDrawn: labels };
   }

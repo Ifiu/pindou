@@ -63,6 +63,27 @@ function near(name, actual, expected, tol) {
 }
 const info = (msg) => console.log('  INFO  ' + msg);
 
+/* ── 套件完整性兜底（两层，缺一不可）──────────────────────────────────────
+   起因：顶层脚本一旦抛异常就**当场结束进程**，文件末尾的汇总根本不执行 ——
+   后面的组「静默不执行」，输出里只剩一堆红和一个更小的总数，极易被读成「几乎全绿」。
+   第 1 层：正常走到末尾时，对照「应执行的组清单」，缺组显式 FAIL（见文件末尾）。
+   第 2 层：异常中断时（末尾根本到不了）用 exit 钩子把「哪些组没跑到」说出来。 */
+const EXPECTED_GROUP_KEYWORDS = ['模块加载', '色表', '色彩引擎', '主管线', '渲染', '产物', '界面契约', '原图编辑'];
+let summaryPrinted = false;
+const missingGroupNames = () => EXPECTED_GROUP_KEYWORDS.filter((k) => !groupStats.some((g) => g.title.includes(k)));
+process.on('exit', (code) => {
+  if (summaryPrinted) return;
+  const titles = groupStats.map((g) => g.title);
+  const missing = missingGroupNames();
+  console.log('\n════════════ 异常中断（套件未跑到末尾）════════════');
+  console.log('  最后一个开始执行的分组：' + (titles[titles.length - 1] || '(还没开始任何组)'));
+  console.log('  已执行到的分组数：' + titles.length + ' / ' + EXPECTED_GROUP_KEYWORDS.length);
+  if (missing.length) {
+    console.log('  缺组告警：' + missing.join('、') + ' **未执行** —— 上面的通过数不包含这些组，不要读成几乎全绿。');
+  }
+  console.log('  已记录的断言：' + assertions + ' 条（' + pass + ' 过 / ' + fail + ' 败）；exit code = ' + code);
+});
+
 /* ══════════════════════════════════════════════════ 模块加载（唯一可靠姿势） */
 /* 各模块的全局解析方式不一致：
  *   palette.js 裸用 window ；color.js 用 typeof window 判断 ；pipeline.js 无条件写 globalThis ；
@@ -341,18 +362,20 @@ function checkInvariants(label, pat) {
   );
   eq(label + ' | cells.length === w*h', pat.cells.length, pat.w * pat.h);
   eq(label + ' | stats.usedColors === colors.length', pat.stats.usedColors, pat.colors.length);
-  ok(label + ' | stats.boardX/Y 与 29 格/板一致', pat.stats.boardX === Math.ceil(pat.w / 29) && pat.stats.boardY === Math.ceil(pat.h / 29));
   return nonEmpty;
 }
 
 const srcBig = synth(1000, 500, (x, y) => [(x * 7) % 256, (y * 5) % 256, ((x + y) * 3) % 256]);
 const srcWide = synth(1000, 50, (x, y) => [(x * 3) % 256, (y * 17) % 256, 90]);
+/* 「29 格一块板」概念已彻底删除：`boards` 不再是参数；尺寸回落只有一条规则
+   —— 长边 = MAX_DIM = 100 格，短边按原图宽高比推导后夹到 [1,100]（极端比例不强行方形）。 */
 const DIM_CASES = [
-  { label: '1000×500 + boards:1', img: srcBig, w: 1000, h: 500, opts: { boards: 1 }, ew: 29, eh: 15 },
-  { label: '1000×500 + boards:2', img: srcBig, w: 1000, h: 500, opts: { boards: 2 }, ew: 58, eh: 29 },
-  { label: '1000×500 + boards:3', img: srcBig, w: 1000, h: 500, opts: { boards: 3 }, ew: 87, eh: 44 },
-  { label: '1000×50 + boards:1', img: srcWide, w: 1000, h: 50, opts: { boards: 1 }, ew: 29, eh: 1 },
-  { label: '1000×500 + 显式 gridW:200（应夹到 116）', img: srcBig, w: 1000, h: 500, opts: { gridW: 200 }, ew: 116, eh: 58 },
+  { label: '1000×500（2:1，未给尺寸）', img: srcBig, w: 1000, h: 500, opts: {}, ew: 100, eh: 50 },
+  { label: '1000×50（20:1，未给尺寸）', img: srcWide, w: 1000, h: 50, opts: {}, ew: 100, eh: 5 },
+  { label: '1000×1（1000:1，未给尺寸，短边夹到 1）', img: synth(1000, 1, () => [10, 20, 30]), w: 1000, h: 1, opts: {}, ew: 100, eh: 1 },
+  { label: '1000×500 + 显式 gridW:200（应夹到 100）', img: srcBig, w: 1000, h: 500, opts: { gridW: 200 }, ew: 100, eh: 50 },
+  { label: '1000×500 + 显式 gridW:60 / gridH:40', img: srcBig, w: 1000, h: 500, opts: { gridW: 60, gridH: 40 }, ew: 60, eh: 40 },
+  { label: '1000×500 + 只给 gridH:30（按原图比例推宽）', img: srcBig, w: 1000, h: 500, opts: { gridH: 30 }, ew: 60, eh: 30 },
 ];
 for (const c of DIM_CASES) {
   const pat = Pipeline.generateFromRGBA(c.img, c.w, c.h, c.opts);
@@ -362,31 +385,33 @@ for (const c of DIM_CASES) {
   ok(c.label + ' | warnings 为数组', Array.isArray(pat.warnings));
 }
 
-/* ── MAX_DIM 从 87 提到 116：116 必须真的可用，而不是被静默夹回 ───────────── */
+/* ── 单边上限 = 100（不再是 116）：100 必须真的可用，而不是被静默夹回 ───────── */
 const srcMed = synth(240, 240, (x, y) => [(x * 7) % 256, (y * 5) % 256, ((x + y) * 3) % 256]);
-const pat116 = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 116, gridH: 116 });
-eq('116×116 | pattern.w === 116', pat116.w, 116);
-eq('116×116 | pattern.h === 116', pat116.h, 116);
-eq('116×116 | warnings 原文为空（没有任何夹取提示）', pat116.warnings, []);
-ok('116×116 | warnings 里不出现「夹到」', !pat116.warnings.some((w) => String(w).includes('夹到')), JSON.stringify(pat116.warnings));
-eq('116×116 | stats.boardX === ceil(116/29) === 4', pat116.stats.boardX, 4);
-eq('116×116 | stats.boardY === 4', pat116.stats.boardY, 4);
-eq('116×116 | cells.length === 116*116', pat116.cells.length, 116 * 116);
-eq('116×116 | stats.total === 116*116（源图无透明像素）', pat116.stats.total, 116 * 116);
-checkInvariants('116×116', pat116);
+const patMax = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 100, gridH: 100 });
+eq('100×100 | pattern.w === 100', patMax.w, 100);
+eq('100×100 | pattern.h === 100', patMax.h, 100);
+eq('100×100 | warnings 原文为空（没有任何夹取提示）', patMax.warnings, []);
+ok('100×100 | warnings 里不出现「夹到」', !patMax.warnings.some((w) => String(w).includes('夹到')), JSON.stringify(patMax.warnings));
+eq('100×100 | cells.length === 100*100', patMax.cells.length, 100 * 100);
+eq('100×100 | stats.total === 100*100（源图无透明像素）', patMax.stats.total, 100 * 100);
+checkInvariants('100×100（上限）', patMax);
 
-/* 上限真的是 116 而不是 87：117 必须被夹回 116，且告警文案由 MAX_DIM 拼出 */
-const pat117 = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 117, gridH: 117 });
-eq('117 → 夹到 116（上限不是 87）', [pat117.w, pat117.h], [116, 116]);
-ok('117 夹取告警含 [1,116]（文案不再硬编码 87）', pat117.warnings.some((w) => String(w).includes('[1,116]')), JSON.stringify(pat117.warnings));
-ok('117 夹取告警里不出现 87', !pat117.warnings.some((w) => String(w).includes('87')), JSON.stringify(pat117.warnings));
+/* 上限真的是 100：101 必须被夹回 100，且告警文案由 MAX_DIM 拼出 */
+const pat101 = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 101, gridH: 101 });
+eq('101 → 夹到 100（上限就是 100）', [pat101.w, pat101.h], [100, 100]);
+ok('101 夹取告警含 [1,100]（文案由 MAX_DIM 拼出，不硬编码）', pat101.warnings.some((w) => String(w).includes('[1,100]')), JSON.stringify(pat101.warnings));
+ok('101 夹取告警里不出现 116 / 87（旧上限文案已彻底清除）', !pat101.warnings.some((w) => /116|87/.test(String(w))), JSON.stringify(pat101.warnings));
 
-/* 100 与 116 都不是 29 的整数倍/整倍数：末格补线规则由渲染层负责，此处只锁 boardX/Y */
-const pat100 = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 100, gridH: 100 });
-eq('100×100 | w/h', [pat100.w, pat100.h], [100, 100]);
-eq('100×100 | stats.boardX === ceil(100/29) === 4', pat100.stats.boardX, 4);
-eq('100×100 | stats.boardY === 4', pat100.stats.boardY, 4);
-eq('100×100 | warnings 原文为空', pat100.warnings, []);
+/* 未给任何尺寸 → 回落 100 长边（等价于「预设尺寸」）；方形源必须正好 100×100 */
+const patFallback = Pipeline.generateFromRGBA(srcMed, 240, 240, {});
+eq('回落 | 方形源未给尺寸 → 100×100（等于预设尺寸）', [patFallback.w, patFallback.h], [100, 100]);
+eq('回落 | stats 键恰好是 total / usedColors / cmW / cmH（不再有 boardX/boardY）',
+  Object.keys(patFallback.stats).sort(), ['cmH', 'cmW', 'total', 'usedColors']);
+ok('回落 | stats 里没有 boards 字段残留', !('boards' in patFallback.stats) && !('boardX' in patFallback.stats) && !('boardY' in patFallback.stats));
+ok('回落 | Pattern 上也没有 boardX/boardY/boards 字段', !('boardX' in patFallback) && !('boardY' in patFallback) && !('boards' in patFallback));
+ok('回落 | Pipeline.DEFAULT_OPTS 里不再有 boards 字段', !('boards' in Pipeline.DEFAULT_OPTS), Object.keys(Pipeline.DEFAULT_OPTS).join(','));
+ok('回落 | 管线不再接受 boards：传 {boards:99} 也不影响尺寸（约定外字段被忽略）',
+  (function () { const p = Pipeline.generateFromRGBA(srcMed, 240, 240, { boards: 99 }); return p.w === 100 && p.h === 100; })());
 
 const flatPat = Pipeline.generateFromRGBA(synth(60, 60, () => [10, 200, 60]), 60, 60, { boards: 1 });
 eq('纯色图 | colors.length === 1', flatPat.colors.length, 1);
@@ -406,13 +431,12 @@ eq('透明图 | Σcounts.count = 8（空格不计入）', alphaPat.counts.reduce
 eq('透明图 | 只剩 1 个色号', alphaPat.colors.length, 1);
 
 const q16Pat = Pipeline.generateFromRGBA(synth(60, 60, (x, y) => [(x * 9) % 256, (y * 11) % 256, ((x * y) * 5) % 256]), 60, 60, {
-  boards: 1,
   quantize: { enabled: true, maxColors: 16 },
 });
 ok('quantize.maxColors=16 | colors.length ≤ 16', q16Pat.colors.length <= 16, '实际 ' + q16Pat.colors.length);
 eq('quantize.maxColors=16 | colors.length === counts.length', q16Pat.colors.length, q16Pat.counts.length);
 
-const detOpts = { boards: 1, method: 'fs', ditherStrength: 0.4, preprocess: { brightness: 5, contrast: 10, saturation: -10, autoWB: true, autoLevels: true } };
+const detOpts = { method: 'fs', ditherStrength: 0.4, preprocess: { brightness: 5, contrast: 10, saturation: -10, autoWB: true, autoLevels: true } };
 const detImg = synth(50, 40, (x, y) => [(x * 21) % 256, (y * 33) % 256, ((x + 2 * y) * 13) % 256]);
 const detSnap = JSON.stringify(detOpts);
 const detA = Pipeline.generateFromRGBA(detImg, 50, 40, detOpts);
@@ -424,10 +448,10 @@ ok('确定性 | 未传 prevPattern 时 opts 里不出现新键', Object.keys(det
 
 /* ─────────────────────────────────━━ 锁定格（最易崩的一环） */
 const lockImg = synth(60, 60, (x, y) => [40 + (x % 3), 90 + (y % 3), 160]);
-const lockOpts = { boards: 1, method: 'nearest', quantize: { enabled: true, maxColors: 1 } };
+const lockOpts = { method: 'nearest', quantize: { enabled: true, maxColors: 1 } };
 const basePat = Pipeline.generateFromRGBA(lockImg, 60, 60, lockOpts);
 eq('锁定 | 基准图（maxColors:1）只有 1 个色号', basePat.colors.length, 1);
-eq('锁定 | 基准图非空格 = 29×29', basePat.stats.total, basePat.w * basePat.h);
+eq('锁定 | 基准图非空格 = w×h（100×100，尺寸由新的 100 长边回落决定）', basePat.stats.total, basePat.w * basePat.h);
 const baseCode = basePat.colors[0].code;
 const lockIdx = 3 * basePat.w + 5;
 
@@ -474,7 +498,7 @@ ok('锁定 | 上一张 Pattern 调用后未被修改', JSON.stringify(basePat) =
 
 /* ── 边界与契约回退（探到即回归） ───────────────────────────── */
 const edgeGray = synth(40, 40, (x, y) => [80 + (x % 5), 80 + (y % 5), 90]);
-const nilPat = Pipeline.generateFromRGBA(synth(20, 20, () => [0, 0, 0, 0]), 20, 20, { boards: 1 });
+const nilPat = Pipeline.generateFromRGBA(synth(20, 20, () => [0, 0, 0, 0]), 20, 20, {});
 eq('边界 | 全透明图 → colors 为空', nilPat.colors.length, 0);
 eq('边界 | 全透明图 → counts 为空', nilPat.counts.length, 0);
 eq('边界 | 全透明图 → stats.total = 0', nilPat.stats.total, 0);
@@ -487,12 +511,11 @@ const mismatched = {
   colors: [{ code: 'A1', hex: '#FAF5CD', rgb: [250, 245, 205], group: 'A' }],
   locked: new Uint8Array(81).fill(1),
 };
-const misPat = Pipeline.generateFromRGBA(edgeGray, 40, 40, { boards: 1, quantize: { enabled: true, maxColors: 1 }, prevPattern: mismatched });
+const misPat = Pipeline.generateFromRGBA(edgeGray, 40, 40, { quantize: { enabled: true, maxColors: 1 }, prevPattern: mismatched });
 ok('边界 | prevPattern 尺寸不符 → 告警且忽略锁定（不崩）', misPat.warnings.some((w) => w.includes('不一致')), JSON.stringify(misPat.warnings));
 eq('边界 | prevPattern 尺寸不符 → 仍照常出图', misPat.warnings.length >= 1 && misPat.colors.length, 1);
 
-eq('边界 | 1000×1 极端宽比的短边夹到 1', Pipeline.generateFromRGBA(synth(1000, 1, () => [10, 20, 30]), 1000, 1, { boards: 1 }).h, 1);
-eq('边界 | boards 参数仍夹到 3（长边 87，与 MAX_DIM 116 是两套口径；app.js 永远显式给 gridW/gridH 故不触发）', Pipeline.generateFromRGBA(edgeGray, 40, 40, { boards: 99 }).w, 87);
+eq('边界 | 1000×1 极端宽比的短边夹到 1', Pipeline.generateFromRGBA(synth(1000, 1, () => [10, 20, 30]), 1000, 1, {}).h, 1);
 const onePat = Pipeline.generateFromRGBA(edgeGray, 40, 40, { gridW: 0, gridH: 0 });
 eq('边界 | gridW/gridH = 0 夹到 1×1', [onePat.w, onePat.h], [1, 1]);
 ok('边界 | 尺寸被夹时给出告警', onePat.warnings.some((w) => w.includes('夹到合法范围')), JSON.stringify(onePat.warnings));
@@ -518,7 +541,7 @@ try {
   noDomThrew = e.message;
 }
 ok('边界 | 无 DOM 时 generate() 抛错并指路 generateFromRGBA', noDomThrew.includes('generateFromRGBA'), noDomThrew);
-eq('边界 | ImageData 形状入参 → 自动走 generateFromRGBA', Pipeline.generate({ data: synth(30, 30, () => [200, 30, 30]), width: 30, height: 30 }, { boards: 1 }).w, 29);
+eq('边界 | ImageData 形状入参 → 自动走 generateFromRGBA', Pipeline.generate({ data: synth(30, 30, () => [200, 30, 30]), width: 30, height: 30 }, {}).w, 100);
 ok('边界 | 非法 method → 回退 nearest 并告警', Pipeline.generateFromRGBA(edgeGray, 40, 40, { method: 'nope' }).warnings.some((w) => w.includes('method')));
 const badPalPat = Pipeline.generateFromRGBA(edgeGray, 40, 40, { paletteId: 'no-such-lineage' });
 eq('边界 | 不存在的 paletteId → 回退到第一个可用谱系', badPalPat.paletteId, palKeys[0]);
@@ -526,7 +549,7 @@ ok('边界 | 不存在的 paletteId → 告警', badPalPat.warnings.some((w) => 
 
 /* 锁定色号只存在于上一张 colors（用户换过色表）→ 必须沿用历史色值，而不是丢格 */
 const ghost = { code: 'ZZ9', hex: '#123456', rgb: [18, 52, 86], group: 'Z' };
-const ghostBase = Pipeline.generateFromRGBA(edgeGray, 40, 40, { boards: 1, quantize: { enabled: true, maxColors: 1 } });
+const ghostBase = Pipeline.generateFromRGBA(edgeGray, 40, 40, { quantize: { enabled: true, maxColors: 1 } });
 const ghostPrev = {
   w: ghostBase.w,
   h: ghostBase.h,
@@ -536,7 +559,7 @@ const ghostPrev = {
 };
 ghostPrev.cells[7] = ghostBase.colors.length;
 ghostPrev.locked[7] = 1;
-const ghostPat = Pipeline.generateFromRGBA(edgeGray, 40, 40, { boards: 1, quantize: { enabled: true, maxColors: 1 }, prevPattern: ghostPrev });
+const ghostPat = Pipeline.generateFromRGBA(edgeGray, 40, 40, { quantize: { enabled: true, maxColors: 1 }, prevPattern: ghostPrev });
 eq('边界 | 色表里没有的锁定色号 → 沿用历史色值', ghostPat.colors[ghostPat.cells[7]].hex + ' ' + ghostPat.colors[ghostPat.cells[7]].code, '#123456 ZZ9');
 eq('边界 | 0 尺寸栅格 ditherFS 返回长度 0', CK.ditherFS(new Float32Array(0), 0, 0, mat, 0).length, 0);
 eq('边界 | 0 尺寸栅格 quantize 返回空 used', CK.quantize(new Float32Array(0), 0, 0, 8, mat).used, []);
@@ -581,7 +604,7 @@ function makeMockCanvas() {
     save() { rec.save++; },
     restore() { rec.restore++; },
     fillRect(x, y, w, h) { rec.fillRect.push({ x, y, w, h, fillStyle: String(this.fillStyle) }); },
-    strokeRect(x, y, w, h) { rec.strokeRect.push({ x, y, w, h, strokeStyle: String(this.strokeStyle) }); },
+    strokeRect(x, y, w, h) { rec.strokeRect.push({ x, y, w, h, strokeStyle: String(this.strokeStyle), lineWidth: this.lineWidth }); },
     drawImage(...a) { rec.drawImage.push(a); },
     fillText(t, x, y) {
       const item = { text: String(t), x, y, fillStyle: String(this.fillStyle), font: this.font, textAlign: this.textAlign, textBaseline: this.textBaseline };
@@ -599,6 +622,38 @@ function makeMockCanvas() {
   const canvas = canvasCaps({ width: 0, height: 0, _rec: rec, getContext(kind) { return kind === '2d' ? ctx : null; } });
   return canvas;
 }
+/* ── 按几何识别图纸上的线（不用线色/数量差值去猜）────────────────────────
+   本轮加了「图纸外框」之后，任何用 `strokes.length - 1` 数板边界线的写法都会 +1；
+   外框与板边界是两种东西（外框是闭合环，板边界是单轴长直线），所以按几何区分。 */
+const strokeBBox = (path) => {
+  const xs = [], ys = [];
+  for (const op of (path || [])) {
+    if (op[0] === 'M' || op[0] === 'L') { xs.push(op[1]); ys.push(op[2]); }
+    else if (op[0] === 'R' || op[0] === 'RR') { xs.push(op[1], op[1] + op[3]); ys.push(op[2], op[2] + op[4]); }
+  }
+  return xs.length ? [Math.min.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, xs), Math.max.apply(null, ys)] : null;
+};
+const cellRectsOf = (rec, cellPx) => rec.fillRect.filter((f) => f.w === cellPx && f.h === cellPx);
+const gridBBoxOf = (rec, cellPx) => {
+  const cs = cellRectsOf(rec, cellPx);
+  if (!cs.length) return null;
+  return [Math.min.apply(null, cs.map((c) => c.x)), Math.min.apply(null, cs.map((c) => c.y)),
+    Math.max.apply(null, cs.map((c) => c.x + c.w)), Math.max.apply(null, cs.map((c) => c.y + c.h))];
+};
+/* 29 格板边界线：单轴、长（≥ 80% 网格边长）、线宽 > 1 的描边 —— 外框（闭合环）与细网格（1px）都被排除 */
+const boardLinesOf = (rec, cellPx) => {
+  const gb = gridBBoxOf(rec, cellPx);
+  if (!gb) return [];
+  const span = Math.max(gb[2] - gb[0], gb[3] - gb[1]);
+  return rec.strokes.filter((s) => {
+    if (!(s.lineWidth > 1)) return false;
+    const b = strokeBBox(s.path);
+    if (!b) return false;
+    const w = b[2] - b[0], h = b[3] - b[1];
+    const single = w <= 1 || h <= 1;
+    return single && Math.max(w, h) >= 0.8 * span;
+  });
+};
 const EMPTY = 65535;
 const HP = {
   w: 5,
@@ -615,8 +670,14 @@ const HP = {
 };
 HP.locked[3] = 1;
 const HP_NONEMPTY = 18;
-const HP_PAD = Math.max(40, 12 * 3 + 20); // cellPx=12 → 56
+const HP_PAD = Math.max(40, 12 * 3 + 20); // cellPx=12 → 56（这是**外边距**，不含索引圈那一格）
 const HP_CELL = 12;
+/* 索引圈：图纸区 = (m+2)×(n+2)，四周各一圈 1 格宽的数字。
+   原图纸首格原点 = pad + RING 格；画布宽 = 2*pad + (m+2*RING)*cellPx。 */
+const RING = 1;
+/* 角标带公式（与实现一致）：top = max(4, round(cellPx*0.35))；带高 = top + 字号 + max(3, round(字号*0.35)) */
+const capTop = (cellPx) => Math.max(4, Math.round(cellPx * 0.35));
+const HP_ORIGIN = HP_PAD + RING * HP_CELL;
 const hpSnap = JSON.stringify({ c: Array.from(HP.cells), l: Array.from(HP.locked), colors: HP.colors });
 
 function expectedFills(pat, cellPx, pad) {
@@ -661,14 +722,6 @@ function makePat(w, h, colorCount) {
   return { w, h, colors, cells, locked: new Uint8Array(w * h), counts, stats: { total: w * h } };
 }
 
-/* 板边界「格子下标 × cellPx」的独立重述（29 的整数倍 + 末格补线） */
-function expectBoardOffsets(n, cellPx) {
-  const out = [];
-  for (let k = 29; k <= n; k += 29) out.push(k * cellPx);
-  if (n > 0 && out[out.length - 1] !== n * cellPx) out.push(n * cellPx);
-  return out;
-}
-
 const cv1 = makeMockCanvas();
 /* padMode:'normal' 是 render.js 保留的向后兼容路径（旧公式 max(40, cellPx*3+20)），
  * 所有旧几何断言都走它；新默认是 'tight'，几何另有专项断言。 */
@@ -679,8 +732,10 @@ const capH = (cellPx) => {
   const top = Math.max(4, Math.round(cellPx * 0.35));
   return top + f + Math.max(3, Math.round(f * 0.35));
 };
-eq('drawPattern | 画布宽 = pad*2 + w*cellPx', cv1.width, HP_PAD * 2 + HP.w * HP_CELL);
-eq('drawPattern | 画布高 = pad*2 + h*cellPx + 尺寸标注高', cv1.height, HP_PAD * 2 + HP.h * HP_CELL + capH(HP_CELL));
+eq('drawPattern | 画布宽 = pad*2 + (m+2R)*cellPx', cv1.width, HP_PAD * 2 + (HP.w + 2 * RING) * HP_CELL);
+const hpCapFont = parseInt(String((cv1._rec.caption[0] || {}).font), 10);
+const hpCapBand = capTop(HP_CELL) + hpCapFont + Math.max(3, Math.round(hpCapFont * 0.35));
+eq('drawPattern | 画布高 = pad*2 + (n+2R)*cellPx + 角标带（带高 = top + 字号 + 底部余量）', cv1.height, HP_PAD * 2 + (HP.h + 2 * RING) * HP_CELL + hpCapBand);
 eq('drawPattern | 换算式 pad = max(40, cellPx*3+20)', HP_PAD, 56);
 eq('drawPattern | cellsDrawn === 非空格子数', r1.cellsDrawn, HP_NONEMPTY);
 /* 新标签规则：code 模式最小 cellPx = 20（本图最长色号 2 字符），12px 必然被抑制 */
@@ -688,23 +743,44 @@ eq('drawPattern | cellPx=12 + cellLabel:code → codesDrawn === false（阈值�
 eq('drawPattern | cellPx=12 + cellLabel:code → labelsSuppressed === true', r1.labelsSuppressed, true);
 eq('drawPattern | cellPx=12 + cellLabel:code → labelMinPx === 20', r1.labelMinPx, 20);
 eq('drawPattern | 每格恰好一次填色（数量）', cellFillsOf(cv1).length, HP_NONEMPTY);
-eq('drawPattern | 每格位置与颜色逐格精确匹配', cellFillsOf(cv1), expectedFills(HP, 12, HP_PAD));
+eq('drawPattern | 每格位置与颜色逐格精确匹配（原点 = pad + 索引圈 1 格）', cellFillsOf(cv1), expectedFills(HP, 12, HP_ORIGIN));
 ok(
   'drawPattern | 空格（65535）零填色',
   [7, 8].every((i) => {
-    const x = HP_PAD + (i % HP.w) * 12;
-    const y = HP_PAD + Math.floor(i / HP.w) * 12;
+    const x = HP_ORIGIN + (i % HP.w) * 12;
+    const y = HP_ORIGIN + Math.floor(i / HP.w) * 12;
     return !cellFillsOf(cv1).some((r) => r.x === x && r.y === y);
   })
 );
 eq('drawPattern | 纸张底色先铺满画布', cv1._rec.fillRect[0], { x: 0, y: 0, w: cv1.width, h: cv1.height, fillStyle: '#FFFFFF' });
 eq('drawPattern | 标签被抑制时 fillText 0 次（showRuler:false）', cv1._rec.fillText.length, 0);
-eq('drawPattern | 细网格线一次成路径：2*((w+1)+(h+1)) = 22 个路径操作', cv1._rec.strokes[0].path.length, 22);
+eq('drawPattern | 细网格线一次成路径：2*((m+2R+1)+(n+2R+1)) = 2*((5+3)+(4+3)) = 30 个路径操作', cv1._rec.strokes[0].path.length, 2 * ((HP.w + 2 * RING + 1) + (HP.h + 2 * RING + 1)));
 eq('drawPattern | 细网格线线宽 1', cv1._rec.strokes[0].lineWidth, 1);
-eq('drawPattern | 板边界单独 stroke：竖 1 + 横 1 = 2 条', cv1._rec.strokes.length - 1, 2);
+/* 「29 格一块板」已彻底删除：均匀网格上**不许**再出现「更粗/更深」的特殊线。
+   注意这不是「把期望从 2 改成 0」—— 同一条里还要证明画布上确实有描边（细网格 + 外框环），
+   否则这个 0 就是「什么都没画」的空判据。 */
+eq('drawPattern | 板边界线已彻底删除（单轴加粗线 0 条）', boardLinesOf(cv1._rec, 12).length, 0);
+ok('drawPattern | 反向对照：细网格（1px）与外框（闭合环）仍然在 → 上面那个 0 不是「没画东西」',
+  cv1._rec.strokes.filter((s) => s.lineWidth === 1).length >= 1
+  && cv1._rec.strokes.some((s) => {
+    if (!(s.lineWidth > 1)) return false;
+    const b = strokeBBox(s.path);
+    return !!b && (b[2] - b[0]) > 1 && (b[3] - b[1]) > 1;
+  }),
+  JSON.stringify(cv1._rec.strokes.map((s) => [s.lineWidth, strokeBBox(s.path)])));
+ok('drawPattern | 29 的整数倍位置也没有特殊线（逐位置扫：这些 x/y 上不存在加粗描边）',
+  (function () {
+    const gb = gridBBoxOf(cv1._rec, 12);
+    if (!gb) return false;
+    return cv1._rec.strokes.every((s) => {
+      if (!(s.lineWidth > 1)) return true;
+      const b = strokeBBox(s.path);
+      if (!b) return true;
+      const single = (b[2] - b[0]) <= 1 || (b[3] - b[1]) <= 1;
+      return !single;                      /* 加粗线只能是外框那种闭合环 */
+    });
+  })());
 eq('drawPattern | 首条细网格线起点 x = pad + 0.5', cv1._rec.strokes[0].path[0], ['M', HP_PAD + 0.5, HP_PAD + 0.5]);
-eq('drawPattern | 竖板边界在 x = pad + w*cellPx', cv1._rec.strokes[1].path[0][1], HP_PAD + HP.w * 12);
-eq('drawPattern | 横板边界在 y = pad + h*cellPx', cv1._rec.strokes[2].path[0][2], HP_PAD + HP.h * 12);
 
 /* 'index'（格内数字编号）已被用户要求彻底删除：它不再是一种模式。
    传 'index' 必须等价于「不画」（fail-safe），绝不能回退成数字编号。 */
@@ -722,7 +798,7 @@ const r8 = Render.drawPattern(HP, cv8, { cellPx: 8, cellLabel: 'none', showRuler
 eq('drawPattern | cellPx=8 + cellLabel:none → 返回 codesDrawn:false', r8.codesDrawn, false);
 eq('drawPattern | cellPx=8 → 不写编号（fillText 0 次）', cv8._rec.fillText.length, 0);
 eq('drawPattern | cellPx=8 → 仍然逐格填色', cellFillsOf(cv8).length, HP_NONEMPTY);
-eq('drawPattern | cellPx=8 → pad = max(40, 8*3+20) = 44，画布宽 128', cv8._rec.fillRect[0].w, Math.max(40, 8 * 3 + 20) * 2 + HP.w * 8);
+eq('drawPattern | cellPx=8 → 外边距 = max(40, 8*3+20) = 44，画布宽 = 2*44 + (m+2R)*8 = 144', cv8._rec.fillRect[0].w, Math.max(40, 8 * 3 + 20) * 2 + (HP.w + 2 * RING) * 8);
 
 const cv9 = makeMockCanvas();
 const r9 = Render.drawPattern(HP, cv9, { cellPx: 9, cellLabel: 'index', showRuler: false, padMode: 'normal' });
@@ -749,20 +825,21 @@ const cvR = makeMockCanvas();
    不给就测不到「code 模式在 12px 被抑制」这件事本身（断言意图不变，只是把隐式默认写成显式）。 */
 const rR = Render.drawPattern(realPat, cvR, { cellPx: 12, cellLabel: 'code', padMode: 'normal' });
 eq('整合 | 真实 Pattern（' + realPat.w + '×' + realPat.h + '）cellsDrawn === 非空格数', cvR._rec.fillRect.length - 1, realNonEmpty);
-eq('整合 | 真实 Pattern 逐格填色位置与颜色精确匹配', cellFillsOf(cvR), expectedFills(realPat, 12, 56));
+eq('整合 | 真实 Pattern 逐格填色位置与颜色精确匹配（原点 = 外边距 56 + 索引圈 12）', cellFillsOf(cvR), expectedFills(realPat, 12, 56 + 12));
 /* cellPx=12 下 code 模式被抑制 → 只剩刻度数字：w=29 有 6 个刻度、h=22 有 5 个刻度 */
-eq('整合 | cellPx=12 → 标签被抑制，fillText 只剩刻度 6+5=11 个', cvR._rec.fillText.length, 11);
+eq('整合 | cellPx=12 → 格内标签被抑制，fillText 只剩索引圈数字 2*(m+n) = ' + (2 * (realPat.w + realPat.h)) + ' 个', cvR._rec.fillText.length, 2 * (realPat.w + realPat.h));
 eq('整合 | cellPx=12 → labelsSuppressed === true', rR.labelsSuppressed, true);
 /* 显式 cellLabel + cellPx ≥ 20 时才是「非空格数 + 刻度数」（原 index 用例改为 code：index 已删除） */
 const cvR2 = makeMockCanvas();
 const rR2 = Render.drawPattern(realPat, cvR2, { cellPx: 20, cellLabel: 'code', padMode: 'normal' });
-eq('整合 | cellPx=20 + cellLabel:code → fillText = 非空格数 + 刻度数', cvR2._rec.fillText.length, realNonEmpty + 11, 'w=29 有 6 个刻度、h=22 有 5 个刻度');
+eq('整合 | cellPx=20 + cellLabel:code → fillText = 非空格数 + 索引圈数字 2*(m+n)', cvR2._rec.fillText.length, realNonEmpty + 2 * (realPat.w + realPat.h), 'm=' + realPat.w + ' n=' + realPat.h);
 eq('整合 | cellPx=20 + cellLabel:code → labelsDrawn === true', rR2.labelsDrawn, true);
 
 /* ══════════════════════════════════ 新增覆盖：标签模式 / 版式 / 守卫 / 刻度 / 板边界 */
 /* 本次用 HP（5×4，色号 2 字符）作为标签用例的载体：只剩 code 一档阈值 20（index 已删除） */
 const LABEL_PX = 24;
-const LABEL_PAD = Math.max(40, LABEL_PX * 3 + 20);          // 92
+const LABEL_PAD = Math.max(40, LABEL_PX * 3 + 20);          // 92（外边距）
+const LABEL_ORIGIN = LABEL_PAD + RING * LABEL_PX;          // 图纸首格原点 = 外边距 + 索引圈 1 格 = 116
 const drawHP = (opts) => {
   const cv = makeMockCanvas();
   const r = Render.drawPattern(HP, cv, Object.assign({ showRuler: false, padMode: 'normal' }, opts));
@@ -773,8 +850,8 @@ const code24 = drawHP({ cellPx: LABEL_PX, cellLabel: 'code' });
 const index24 = drawHP({ cellPx: LABEL_PX, cellLabel: 'index' });
 const none24 = drawHP({ cellPx: LABEL_PX, cellLabel: 'none' });
 eq('新增 | cellPx=24 + cellLabel:code → codesDrawn true 且填字次数 = 非空格数', [code24.r.codesDrawn, code24.texts.length], [true, HP_NONEMPTY]);
-eq('新增 | cellLabel:code → 逐格文字 === colors[cells[i]].code', code24.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD).map((o) => o.text));
-eq('新增 | cellLabel:code → 逐格位置 === 格中心', code24.pos, expectedLabels(HP, LABEL_PX, LABEL_PAD).map((o) => [o.x, o.y]));
+eq('新增 | cellLabel:code → 逐格文字 === colors[cells[i]].code', code24.texts, expectedLabels(HP, LABEL_PX, LABEL_ORIGIN).map((o) => o.text));
+eq('新增 | cellLabel:code → 逐格位置 === 格中心', code24.pos, expectedLabels(HP, LABEL_PX, LABEL_ORIGIN).map((o) => [o.x, o.y]));
 eq('新增 | cellLabel:none → 零 fillText', none24.texts.length, 0);
 eq('新增 | cellLabel:none → labelsDrawn/labelsSuppressed/labelMinPx', [none24.r.labelsDrawn, none24.r.labelsSuppressed, none24.r.labelMinPx], [false, false, 0]);
 eq('新增 | cellLabel:none → 仍然逐格填色', cellFillsOf(none24.cv).length, HP_NONEMPTY);
@@ -802,7 +879,7 @@ eq('新增 | 兼容 | {showCodes:false} → 零标签', oldFalse.texts.length, 0
 eq('新增 | 兼容 | {showCodes:false} → codesDrawn false', oldFalse.r.codesDrawn, false);
 ok('新增 | 兼容 | {showCodes:true} 单独给出 → 绝不画数字编号（index 已删除）',
   !oldTrue.texts.some((t) => /^\d+$/.test(String(t))), JSON.stringify(oldTrue.texts.slice(0, 6)));
-eq('新增 | 兼容 | 两者同给时 cellLabel 优先（code 赢过 showCodes:true）', both.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD).map((o) => o.text));
+eq('新增 | 兼容 | 两者同给时 cellLabel 优先（code 赢过 showCodes:true）', both.texts, expectedLabels(HP, LABEL_PX, LABEL_ORIGIN).map((o) => o.text));
 ok('新增 | 兼容 | cellLabel:"index" 时 showCodes:false 仍不画任何文字（已删除的模式 fail-safe 成 none）',
   both2.texts.length === 0 && both2.r.labelsDrawn === false, JSON.stringify(both2.texts.slice(0, 4)));
 /* 本轮 render.js 改了缺省契约（见其 normCellLabel 注释）：没给 cellLabel / 给 null / 空串
@@ -811,23 +888,23 @@ ok('新增 | 兼容 | cellLabel:"index" 时 showCodes:false 仍不画任何文�
 eq('新增 | 缺省 | 两个键都不给 → 按缺省 none 处理（不画任何格内文字）', [noKey.texts.length, noKey.r.labelsDrawn, noKey.r.labelMinPx], [0, false, 0]);
 eq('新增 | 缺省 | cellLabel 给空串 / null 时同样回落到 showCodes（结果仍是 none）',
   [drawHP({ cellPx: LABEL_PX, cellLabel: '' }).texts.length, drawHP({ cellPx: LABEL_PX, cellLabel: null }).texts.length], [0, 0]);
-eq('新增 | 缺省 | showCodes:true 单独给出 → 仍然画色号（旧键的合同没被破坏）', oldTrue.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD).map((o) => o.text));
+eq('新增 | 缺省 | showCodes:true 单独给出 → 仍然画色号（旧键的合同没被破坏）', oldTrue.texts, expectedLabels(HP, LABEL_PX, LABEL_ORIGIN).map((o) => o.text));
 eq('新增 | 缺省 | showCodes:true + cellLabel:none → cellLabel 优先，仍然不画', drawHP({ cellPx: LABEL_PX, cellLabel: 'none', showCodes: true }).texts.length, 0);
 
 /* padMode：normal 复现旧公式；tight 在 116 格 @24px 时白边约 4%，且不大于 normal */
 const BIG = 116;
 const bigPat = makePat(BIG, BIG, 3);
-const dimsOf = (cv) => ({ pad: (cv.width - BIG * LABEL_PX) / 2, w: cv.width, h: cv.height });
+const dimsOf = (cv) => ({ pad: (cv.width - (BIG + 2 * RING) * LABEL_PX) / 2, origin: (cv.width - (BIG + 2 * RING) * LABEL_PX) / 2 + RING * LABEL_PX, w: cv.width, h: cv.height });
 const cvNormal = makeMockCanvas();
 Render.drawPattern(bigPat, cvNormal, { cellPx: LABEL_PX, cellLabel: 'none', padMode: 'normal' });
 const cvTight = makeMockCanvas();
 Render.drawPattern(bigPat, cvTight, { cellPx: LABEL_PX, cellLabel: 'none', padMode: 'tight' });
 const dN = dimsOf(cvNormal);
 const dT = dimsOf(cvTight);
-eq('新增 | padMode:normal 复现旧公式 max(40, cellPx*3+20)', dN.pad, Math.max(40, LABEL_PX * 3 + 20));
+eq('新增 | padMode:normal 的外边距仍是 max(40, cellPx*3+20) = 92；图纸首格再加索引圈 1 格 = 116', [dN.pad, dN.origin], [Math.max(40, LABEL_PX * 3 + 20), Math.max(40, LABEL_PX * 3 + 20) + RING * LABEL_PX]);
 const tightRatio = (dT.w - BIG * LABEL_PX) / dT.w;
 ok('新增 | padMode:tight 白边占比在 3%–6%（实测 ' + (tightRatio * 100).toFixed(2) + '%）', tightRatio >= 0.03 && tightRatio <= 0.06, tightRatio);
-eq('新增 | padMode:tight 的 pad 实测 56（= round(2784×2%)，受刻度下限抬升）', dT.pad, 56);
+eq('新增 | padMode:tight 的外边距实测 56（= round(2784×2%)，受索引数字下限抬升）；图纸首格 = 56 + 24 = 80', [dT.pad, dT.origin], [56, 56 + RING * LABEL_PX]);
 ok('新增 | tight 的白边 ≤ normal 的白边', dT.pad <= dN.pad, dT.pad + ' vs ' + dN.pad);
 eq('新增 | 未给 padMode 时默认 tight（与 tight 显式结果一致）', (() => { const cv = makeMockCanvas(); Render.drawPattern(bigPat, cv, { cellPx: LABEL_PX, cellLabel: 'none' }); return cv.width; })(), cvTight.width);
 
@@ -837,35 +914,57 @@ Render.drawPattern(bigPat, cvAnnOff, { cellPx: LABEL_PX, cellLabel: 'none', padM
 const cvAnnOn = makeMockCanvas();
 Render.drawPattern(bigPat, cvAnnOn, { cellPx: LABEL_PX, cellLabel: 'none', padMode: 'tight', annotate: true });
 ok('新增 | annotate:true 画布更高（下方追加用量块）', cvAnnOn.height > cvAnnOff.height, cvAnnOff.height + ' → ' + cvAnnOn.height);
-eq('新增 | annotate:false 时宽度不变、高度 = 宽度 + 尺寸标注高（网格本身是正方形）', [cvAnnOff.width, cvAnnOff.height - capH(LABEL_PX)], [cvAnnOn.width, cvAnnOn.width]);
+eq('新增 | annotate:false 时宽度与 annotate:true 相同（用量表不比图纸宽就不撑宽画布）', [cvAnnOff.width, cvAnnOn.width], [cvAnnOn.width, cvAnnOn.width]);
 eq('新增 | annotate:false 与 true 的宽度相同（块不比网格宽时不撑宽画布）', cvAnnOff.width, cvAnnOn.width);
 
-const chipFills = cvAnnOn._rec.fills.filter((f) => f.fillStyle === '#F5F7FA');
+/* ── 本轮（图纸下方色卡：底色改色号本色 + 自动对比色 + 放大 + 图纸外框）─────────
+   「有没有画用量块」的稳定判据：块底是**宽大于高的圆角矩形**（胶囊），
+   与正方形色块（w === h）自然区分。**不再用任何具体底色**——
+   底色改成「色号本色」之后，用 '#F5F7FA' 判断会红、或退化成恒真，两种都糟。 */
+const chipBgsOf = (rec) => rec.fills.filter((f) => f.path && f.path[0] && f.path[0][0] === 'RR' && f.path[0][3] > f.path[0][4]);
+const chipBoxesOf = (rec) => chipBgsOf(rec).map((f) => ({ x: f.path[0][1], y: f.path[0][2], w: f.path[0][3], h: f.path[0][4], hex: String(f.fillStyle) }));
+/* 对比度独立实现（WCAG 2.x 相对亮度）：绝不从实现里读文字色，只用**画出来的 fillStyle** */
+const wcagLin = (c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+const wcagLum = (hex) => {
+  const h = String(hex).replace('#', '');
+  return 0.2126 * wcagLin(parseInt(h.slice(0, 2), 16)) + 0.7152 * wcagLin(parseInt(h.slice(2, 4), 16)) + 0.0722 * wcagLin(parseInt(h.slice(4, 6), 16));
+};
+const wcagRatio = (a, b) => { const la = wcagLum(a), lb = wcagLum(b); const hi = Math.max(la, lb), lo = Math.min(la, lb); return (hi + 0.05) / (lo + 0.05); };
+/* 公式自检：不动点必须对得上，否则下面「全部 ≥ 4.5」可能因为公式被写钝而恒真 */
+near('对比度公式自检 | 黑底白字 = 21:1', wcagRatio('#000000', '#FFFFFF'), 21, 0.01);
+near('对比度公式自检 | #777777 对白字 ≈ 4.48:1（正好卡在 4.5 门槛下方）', wcagRatio('#777777', '#FFFFFF'), 4.478, 0.01);
+near('对比度公式自检 | 同色对同色 = 1:1', wcagRatio('#39E158', '#39E158'), 1, 1e-9);
+
+const chipFills = chipBgsOf(cvAnnOn._rec);
 eq('新增 | 每个色号一个圆角底块', chipFills.length, bigPat.counts.length);
 ok('新增 | 底块走的是 roundRect（圆角），不是直角 fillRect', chipFills.length > 0 && chipFills.every((f) => f.path[0][0] === 'RR'), JSON.stringify(chipFills[0] ? chipFills[0].path[0] : null));
 ok('新增 | 圆角半径为正（真的是圆角）', cvAnnOn._rec.roundRect.every((r) => r.r >= 1), JSON.stringify(cvAnnOn._rec.roundRect.slice(0, 2)));
-const chipBoxes = chipFills.map((f) => ({ x: f.path[0][1], y: f.path[0][2], w: f.path[0][3], h: f.path[0][4] }));
-const gridBottom = dT.pad + BIG * LABEL_PX;
+const chipBoxes = chipBoxesOf(cvAnnOn._rec);
+const gridBottom = dT.pad + (BIG + 2 * RING) * LABEL_PX;      /* 索引圈底 */
 const chipTop = Math.min.apply(null, chipBoxes.map((b) => b.y));
 ok('新增 | 用量块顶 > 网格底（不遮挡网格）', chipTop > gridBottom, chipTop + ' > ' + gridBottom);
-eq('新增 | 用量块顶 = 网格底 + gap（gap = max(2, round(cellPx*0.5))）', chipTop, gridBottom + Math.max(2, Math.round(LABEL_PX * 0.5)));
+eq('新增 | 用量块顶 = 索引圈底 + gap（gap = max(2, round(cellPx*0.5))）', chipTop, gridBottom + Math.max(2, Math.round(LABEL_PX * 0.5)));
 ok('新增 | 所有块都在画布内', chipBoxes.every((b) => b.x >= 0 && b.y >= 0 && b.x + b.w <= cvAnnOn.width && b.y + b.h <= cvAnnOn.height), JSON.stringify(chipBoxes.slice(0, 2)));
 
 const annTexts = cvAnnOn._rec.fillText.map((t) => t.text);
 for (const row of bigPat.counts) {
   ok('用量块含色号 ' + row.code, annTexts.includes(row.code));
-  ok('用量块含颗数 ' + row.count + ' 颗', annTexts.includes(row.count + ' 颗'));
+  ok('用量块含颗数 (' + row.count + ')', annTexts.includes('(' + row.count + ')'));
   ok('用量块画了该色号的圆角块 ' + row.hex, cvAnnOn._rec.fills.some((f) => String(f.fillStyle).toUpperCase() === String(row.hex).toUpperCase()));
 }
 ok('用量块不再输出 HEX 文字（用户只要 色块 + 色号 + 颗数）', !annTexts.some((t) => String(t).startsWith('#')), JSON.stringify(annTexts.filter((t) => String(t).startsWith('#')).slice(0, 4)));
-ok('新增 | annotate:false 时零用量块（无底块、无 HEX 文字）', !cvAnnOff._rec.fills.some((f) => f.fillStyle === '#F5F7FA') && !cvAnnOff._rec.fillText.some((t) => String(t.text).startsWith('#')));
+/* 原写法：`!fills.some(f => f.fillStyle === '#F5F7FA')`。底色改成色号本色后它**恒真**（再没有 #F5F7FA 的底块），
+   等于什么都没测。改成同一个几何判据：预览路径下**一块都没有**，并加一条反向对照证明该判据不是恒假。 */
+eq('新增 | annotate:false 时零用量块（胶囊底块 0 个）', chipBgsOf(cvAnnOff._rec).length, 0);
+ok('新增 | 反向对照：同一个判据在 annotate:true 上 > 0（证明上面那条不是恒真）', chipFills.length > 0, String(chipFills.length));
+ok('新增 | annotate:false 时也没有 HEX 文字', !cvAnnOff._rec.fillText.some((t) => String(t.text).startsWith('#')));
 
 /* 换行：窄容器下多个块必须自动折行，同一行内不重叠、全部在画布内 */
-const wrapPat = makePat(7, 7, 5);
+const wrapPat = makePat(7, 7, 9);          /* 9 个色号：8 列 → 折成 2 行（最后一行 1 个） */
 const cvWrap = makeMockCanvas();
 Render.drawPattern(wrapPat, cvWrap, { cellPx: 20, cellLabel: 'none', padMode: 'tight', annotate: true });
-const wrapBoxes = cvWrap._rec.fills.filter((f) => f.fillStyle === '#F5F7FA').map((f) => ({ x: f.path[0][1], y: f.path[0][2], w: f.path[0][3], h: f.path[0][4] }));
-eq('换行 | 5 个块全部画出', wrapBoxes.length, 5);
+const wrapBoxes = chipBoxesOf(cvWrap._rec);
+eq('换行 | 9 个块全部画出', wrapBoxes.length, 9);
 const rowYs = Array.from(new Set(wrapBoxes.map((b) => b.y))).sort((a, b) => a - b);
 ok('换行 | 窄容器下确实折成了多行', rowYs.length > 1, rowYs.length + ' 行');
 let rowOverlap = 0, wrapOutside = 0;
@@ -877,34 +976,312 @@ for (const b of wrapBoxes) if (b.x < 0 || b.y < 0 || b.x + b.w > cvWrap.width ||
 eq('换行 | 同一行内的块不重叠', rowOverlap, 0);
 eq('换行 | 所有块都在画布内', wrapOutside, 0);
 const shortLine = wrapBoxes.filter((b) => b.y === rowYs[rowYs.length - 1]);
-ok('换行 | 末行也比画布（容器）更靠内 → 该行有水平居中留白', shortLine.length > 0 && shortLine[0].x > 0, JSON.stringify(shortLine[0] || null));
+ok('换行 | 末行左对齐（固定 8 列后首块仍贴左缘）', shortLine.length > 0 && shortLine[0].x > 0, JSON.stringify(shortLine[0] || null));
 
 /* 左下角尺寸标注：内容从 pattern 推导（不读 stats）、位置在网格左下、算进画布高 */
-const capTop = (cellPx) => Math.max(4, Math.round(cellPx * 0.35));
 const cvCap = makeMockCanvas();
 const capPat = makePat(7, 4, 3);
 capPat.beadMM = 2.6;
-capPat.stats = { total: 0, usedColors: 0, boardX: 99, boardY: 99, cmW: 999, cmH: 999 };  // 故意写错：标注若读 stats 就会露馅
+capPat.stats = { total: 0, usedColors: 0, cmW: 999, cmH: 999 };  // 故意写错：标注若读 stats 就会露馅
 const rCap = Render.drawPattern(capPat, cvCap, { cellPx: 20, cellLabel: 'none', padMode: 'tight', annotate: false });
 eq('尺寸标注 | 恰好画一次', cvCap._rec.caption.length, 1);
 const capItem = cvCap._rec.caption[0] || { text: '', x: -1, y: -1, textAlign: '', textBaseline: '' };
-eq('尺寸标注 | 文字全部由 pattern 推导（stats 故意写错 99 板 / 999cm 也不受影响）', capItem.text, '实际 7×4 格 · 共 28 颗');
+eq('尺寸标注 | 文字全部由 pattern 推导（stats 故意写错 999cm 也不受影响）', capItem.text, '实际 7×4 格 · 共 28 颗');
 eq('尺寸标注 | 左对齐', capItem.textAlign, 'left');
 eq('尺寸标注 | 顶对齐（便于按底边定位）', capItem.textBaseline, 'top');
-const capPad = (cvCap.width - 7 * 20) / 2;
-eq('尺寸标注 | x 与网格左边缘对齐（左下角，不是画布最左）', capItem.x, capPad);
-eq('尺寸标注 | y = 网格底 + 标注上间距', capItem.y, capPad + 4 * 20 + capTop(20));
-ok('尺寸标注 | 落在网格下方（不遮挡图纸）', capItem.y > capPad + 4 * 20, capItem.y + ' > ' + (capPad + 4 * 20));
-eq('尺寸标注 | 画布高 = 网格 + 标注高（标注确实被计入布局）', rCap.height, capPad * 2 + 4 * 20 + capH(20));
+const capPad = (cvCap.width - (7 + 2 * RING) * 20) / 2;      /* 外边距（索引圈不计入）*/
+const capFont1 = parseInt(String(capItem.font), 10);
+const capBand1 = capTop(20) + capFont1 + Math.max(3, Math.round(capFont1 * 0.35));   /* 实现：h = top + 字号 + 底部余量 */
+eq('尺寸标注 | x 与外边距左缘对齐（左下角，不是画布最左；索引圈不参与对齐）', capItem.x, capPad);
+eq('尺寸标注 | y = 索引圈底 + 标注上间距', capItem.y, capPad + (4 + 2 * RING) * 20 + capTop(20));
+ok('尺寸标注 | 落在图纸下方（不遮挡图纸）', capItem.y > capPad + (4 + 2 * RING) * 20, capItem.y + ' > ' + (capPad + (4 + 2 * RING) * 20));
+eq('尺寸标注 | 画布高 = 外边距*2 + (n+2R)*cellPx + 角标带（带高 = top + 字号 + 底部余量）', rCap.height, capPad * 2 + (4 + 2 * RING) * 20 + capBand1);
 const cvCapAnn = makeMockCanvas();
 Render.drawPattern(capPat, cvCapAnn, { cellPx: 20, cellLabel: 'none', padMode: 'tight', annotate: true });
 eq('尺寸标注 | 开用量块时也画一次', cvCapAnn._rec.caption.length, 1);
 const capItem2 = cvCapAnn._rec.caption[0] || { y: -1 };
-const chipTopY = Math.min.apply(null, cvCapAnn._rec.fills.filter((f) => f.fillStyle === '#F5F7FA').map((f) => f.path[0][2]));
-ok('尺寸标注 | 开用量块时标注在用量块【下方】（不重叠）', capItem2.y >= chipTopY + 24, capItem2.y + ' vs chips@' + chipTopY);
+const chipBoxesAnn = chipBoxesOf(cvCapAnn._rec);
+const chipTopY = Math.min.apply(null, chipBoxesAnn.map((b) => b.y));
+const chipBottomY = Math.max.apply(null, chipBoxesAnn.map((b) => b.y + b.h));
+ok('尺寸标注 | 开用量块时标注在整张用量表【下方】（不重叠：y ≥ 最后一行的底）',
+  capItem2.y >= chipBottomY, capItem2.y + ' vs tableBottom@' + chipBottomY);
 eq('尺寸标注 | 标注不混进「标签 + 刻度」的计数', cvCapAnn._rec.fillText.some((t) => /共 \d+ 颗/.test(String(t.text))), false);
 
+/* ═════════ 本轮新增：色卡底色＝本色 + 自动对比色 + 放大 + 图纸外框 ═════════
+   冻结行为：用量块底色 = 该色号自己的 hex；块内文字（色号 + 颗数）自动选对比色，
+   对全部 221 个色号 WCAG 对比度 ≥ 4.5:1；字号与块高比改动前明显变大；
+   图纸新增一圈外框（比 1px 细网格线更粗、更深，预览与导出两条路径都有）。 */
+const chipPat = makePat(20, 20, 7);
+/* 细网格线的颜色**从画出来的描边里取**（lineWidth === 1 那条，bbox 就是网格外廓），
+   不从实现常量里读；外框的「更深」按 WCAG 相对亮度比它低来判定。 */
+const gridLineLumOf = (rec, cellPx) => {
+  const gb = gridBBoxOf(rec, cellPx);
+  if (!gb) return null;
+  const hit = rec.strokes.filter((s) => s.lineWidth === 1).map((s) => ({ s: s, b: strokeBBox(s.path) }))
+    .filter((o) => o.b && Math.abs(o.b[0] - gb[0]) <= 1.5 && Math.abs(o.b[3] - gb[3]) <= 1.5);
+  return hit.length ? wcagLum(hit[0].s.strokeStyle) : null;
+};
+/* 外框判据：四条边都被「线宽 > 1 且比细网格线更深」的描边覆盖（一条闭合环或四条分开的边都算）。
+   描边有两种画法：路径描边（rec.strokes）与 ctx.strokeRect（rec.strokeRect）——两种都必须认。 */
+const frameEdgesOf = (rec, cellPx) => {
+  const gb = gridBBoxOf(rec, cellPx);
+  const thinLum = gridLineLumOf(rec, cellPx);
+  const covers = { top: false, right: false, bottom: false, left: false };
+  if (!gb) return { covers: covers, thick: 0, darkThick: 0 };
+  const ops = rec.strokes.map((s) => ({ lineWidth: s.lineWidth, strokeStyle: s.strokeStyle, bbox: strokeBBox(s.path) }))
+    .concat((rec.strokeRect || []).map((r) => ({ lineWidth: r.lineWidth, strokeStyle: r.strokeStyle, bbox: [r.x, r.y, r.x + r.w, r.y + r.h] })));
+  let thick = 0, darkThick = 0;
+  for (const s of ops) {
+    if (!(s.lineWidth > 1)) continue;
+    thick++;
+    if (thinLum !== null && !(wcagLum(s.strokeStyle) < thinLum)) continue;
+    darkThick++;
+    const b = s.bbox;
+    if (!b) continue;
+    const w = b[2] - b[0], h = b[3] - b[1];
+    if (b[1] <= gb[1] + 2.5 && w >= 0.8 * (gb[2] - gb[0])) covers.top = true;
+    if (b[3] >= gb[3] - 2.5 && w >= 0.8 * (gb[2] - gb[0])) covers.bottom = true;
+    if (b[0] <= gb[0] + 2.5 && h >= 0.8 * (gb[3] - gb[1])) covers.left = true;
+    if (b[2] >= gb[2] - 2.5 && h >= 0.8 * (gb[3] - gb[1])) covers.right = true;
+  }
+  return { covers: covers, thick: thick, darkThick: darkThick };
+};
+/* 板边界线用上面（更早定义的）boardLinesOf —— 外框之外必须仍然保留 */
+
+/* ① 全 221 色号：底色 = 本色 + 文字对比度（独立 WCAG 公式复算，绝不读实现里的文字色） */
+const ALL_PAL = (function () {
+  const keys = Object.keys(globalThis.PINDOU_PALETTES);
+  return { id: keys[0], colors: globalThis.PINDOU_PALETTES[keys[0]].colors };
+})();
+const hexOfCode = {};
+for (const c of ALL_PAL.colors) hexOfCode[String(c.code)] = String(c.hex).toUpperCase();
+const contrastSeen = [];
+const bgMismatch = [];
+const seenCodes = new Set();
+const orderSeen = [];
+let pairMisses = 0;
+const CHUNK = 30;
+for (let start = 0; start < ALL_PAL.colors.length; start += CHUNK) {
+  const slice = ALL_PAL.colors.slice(start, start + CHUNK);
+  /* 故意用「宽而矮」的网格：用量块所在行会排下多块 —— 这样下面「按块配对文字」必须真的按
+     **块内 x 区间**过滤才成立（只按 y 过滤会把同一行别的块的文字配到本块上，
+     之前 6×5 的网格每行只排得下一块，恰好掩盖了这个问题）。 */
+  const w = slice.length;
+  const h = 1;
+  const cells = new Array(w * h).fill(EMPTY);
+  slice.forEach((c, i) => { cells[i] = i; });
+  const pat = {
+    w: w, h: h, cells: cells, locked: new Array(w * h).fill(0), paletteId: ALL_PAL.id,
+    colors: slice.map((c) => ({ code: c.code, hex: c.hex, rgb: c.rgb })),
+    counts: slice.map((c) => ({ code: c.code, hex: c.hex, count: 1 })),
+    stats: { total: slice.length }
+  };
+  const cv = makeMockCanvas();
+  const r = Render.drawPattern(pat, cv, { cellPx: 24, cellLabel: 'none', showRuler: false, annotate: true, padMode: 'normal' });
+  if (!r.ok) continue;
+  const chunkItems = [];
+  const chipRowCount = {};
+  const boxList = chipBoxesOf(cv._rec);
+  for (const b of boxList) chipRowCount[b.y] = (chipRowCount[b.y] || 0) + 1;
+  /* 配对方式：**按行内左→右的顺序一一对应**（第 k 个块配第 k 条色号文字）。
+     宽块里文字可能溢出块外，用「x 落在块内」会漏配；按行序配对对溢出免疫，
+     而且仍然真的在验证「每个块自己那条文字」（顺序错位就会配错）。 */
+  const textRow = (t) => {
+    const b = boxList.find((bb) => Math.abs(Number(t.y) - (bb.y + bb.h / 2)) < 1.5);
+    return b ? b.y : null;
+  };
+  const codeTexts = cv._rec.fillText.filter((t) => hexOfCode[String(t.text)] !== undefined);
+  const countTexts = cv._rec.fillText.filter((t) => /^\(\d+\)$/.test(String(t.text)));
+  const orderPair = [];
+  for (const y of Object.keys(chipRowCount).map(Number)) {
+    const chips = boxList.filter((b) => b.y === y).sort((a, b) => a.x - b.x);
+    const codes = codeTexts.filter((t) => Math.abs(Number(t.y) - (y + chips[0].h / 2)) < 1.5).sort((a, b) => a.x - b.x);
+    const counts = countTexts.filter((t) => Math.abs(Number(t.y) - (y + chips[0].h / 2)) < 1.5).sort((a, b) => a.x - b.x);
+    for (let i = 0; i < chips.length; i++) orderPair.push({ chip: chips[i], code: codes[i], count: counts[i] });
+  }
+  let unpaired = 0;
+  for (const pair of orderPair) {
+    const b = pair.chip;
+    const codeItem = pair.code;
+    const countItem = pair.count;
+    if (!codeItem || !countItem) { unpaired++; continue; }
+    const code = String(codeItem.text);
+    seenCodes.add(code);
+    if (String(b.hex).toUpperCase() !== hexOfCode[code]) bgMismatch.push(code + ':底=' + b.hex + ' 本色=' + hexOfCode[code]);
+    contrastSeen.push({ code: code, bg: String(b.hex), text: String(codeItem.fillStyle), ratio: wcagRatio(String(codeItem.fillStyle), String(b.hex)) });
+    contrastSeen.push({ code: '(颗数)' + code, bg: String(b.hex), text: String(countItem.fillStyle), ratio: wcagRatio(String(countItem.fillStyle), String(b.hex)) });
+    chunkItems.push({ y: b.y, x: b.x, code: code });
+  }
+  pairMisses += unpaired;
+  orderSeen.push({ items: chunkItems, codes: slice.map((c) => String(c.code)) });
+}
+eq('色卡 | 覆盖到全部 221 个色号（对比度不是抽样）', seenCodes.size, ALL_PAL.colors.length);
+eq('色卡 | 反向对照：每个块都配到了自己那条色号文字与颗数文字（一个都没漏配）', pairMisses, 0);
+eq('色卡 | 每块底色 = 该色号自己的 hex（逐块比对，无一例外）', bgMismatch, []);
+ok('色卡 | 底色不再是统一的 chipBg #F5F7FA（每块都是自己的本色，见上一条逐块比对）',
+  contrastSeen.every((c) => String(c.bg).toUpperCase() !== '#F5F7FA'),
+  JSON.stringify(contrastSeen.filter((c) => String(c.bg).toUpperCase() === '#F5F7FA').slice(0, 3)));
+eq('色卡 | 对比度样本数 = 覆盖色号数 × 2（色号 + 颗数各一条，防止空转）', contrastSeen.length, seenCodes.size * 2);
+const worstContrast = contrastSeen.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+ok('★色卡 | 全部 ' + contrastSeen.length + ' 条文字对底色的 WCAG 对比度 ≥ 4.5:1', contrastSeen.every((c) => c.ratio >= 4.5),
+  '最差 ' + worstContrast.code + ' 底=' + worstContrast.bg + ' 字=' + worstContrast.text + ' 比值=' + worstContrast.ratio.toFixed(2) + ':1');
+info('色卡对比度实测 | 最差 = ' + worstContrast.code + '（底色 ' + worstContrast.bg + ' / 文字 ' + worstContrast.text
+  + '）= ' + worstContrast.ratio.toFixed(2) + ':1；共 ' + contrastSeen.length + ' 条文字、' + seenCodes.size + ' 个色号；'
+  + '全库最小比值 ' + contrastSeen.reduce((m, c) => Math.min(m, c.ratio), 99).toFixed(2) + ':1');
+const naturalCmp = (a, b) => {
+  const pa = String(a).match(/\d+|\D+/g) || [], pb = String(b).match(/\d+|\D+/g) || [];
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] === undefined ? '' : pa[i], y = pb[i] === undefined ? '' : pb[i];
+    if (x === y) continue;
+    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y);
+    if (nx && ny) return Number(x) - Number(y);
+    return x < y ? -1 : 1;
+  }
+  return 0;
+};
+/* 调色板的块顺序：**每个画布各自判断**（不同 chunk 是两个独立画布，y/x 不可跨画布比较） */
+const orderBad = [];
+for (const chunk of orderSeen) {
+  const byPos = chunk.items.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x)).map((o) => o.code);
+  const want = chunk.codes.slice().sort(naturalCmp);
+  if (JSON.stringify(byPos) !== JSON.stringify(want)) orderBad.push(JSON.stringify([byPos.slice(0, 5), want.slice(0, 5)]));
+}
+eq('色卡 | 每个画布内的块顺序仍是色号自然序（不是颗数序、也不是 colors 下标序）', orderBad, []);
+
+/* ② 放大：同等 cellPx 下字号 / 块高 > 改动前（基线是本轮开工时从当时的 render.js 实测的） */
+/* 字号/块高算例：色卡改成「固定 8 列撑满」后，**窄图**每块只有 (gridW-7*gap)/8 宽，
+   字号必然被压小（20 宽 @24 的块宽只有 60.75px，字号只能 9~10）——这是「每行 8 个」的代价，
+   不能拿它断言「字号 ≥ 改动前」。所以：宽图（29 宽 / 100 宽）断言字号确实变大；
+   窄图（20 宽）只断言「受 8 列约束仍不低于下限 9」。基线值是上一轮实测的旧字号。 */
+const PRE_CHANGE_FONT = { 29: { 24: 15, 48: 30 }, 100: { 12: 12, 24: 15, 48: 30 } };
+const pxOf = (font) => { const m = /(\d+(?:\.\d+)?)px/.exec(String(font)); return m ? Number(m[1]) : 0; };
+const cardOf = (pat, cellPx) => {
+  const cv = makeMockCanvas();
+  Render.drawPattern(pat, cv, { cellPx: cellPx, cellLabel: 'none', padMode: 'normal', annotate: true });
+  const boxes = chipBoxesOf(cv._rec);
+  const counts = cv._rec.fillText.filter((t) => /^\(\d+\)$/.test(String(t.text)));
+  const codeT = cv._rec.fillText.filter((t) => /^[A-Z]\d+$/.test(String(t.text)));
+  const rows = {};
+  for (const bx of boxes) rows[bx.y] = (rows[bx.y] || 0) + 1;
+  return {
+    chipH: boxes.length ? boxes[0].h : 0, chipW: boxes.length ? boxes[0].w : 0, chips: boxes.length,
+    rows: Object.keys(rows).length, perRow: Object.values(rows),
+    countFont: counts.length ? pxOf(counts[0].font) : 0,
+    codeFont: codeT.length ? pxOf(codeT[0].font) : 0,
+    gridW: (pat.w + 2 * RING) * cellPx
+  };
+};
+const wide29 = makePat(29, 29, 9);
+const wide100 = makePat(100, 100, 9);
+const narrow20 = makePat(20, 20, 9);
+const cardSizes = {};
+for (const [label, pat, cellPx, oldFont] of [
+  ['29 宽 @24（旧字号 15）', wide29, 24, PRE_CHANGE_FONT[29][24]],
+  ['29 宽 @48（旧字号 30）', wide29, 48, PRE_CHANGE_FONT[29][48]],
+  ['100 宽 @12（旧字号 12）', wide100, 12, PRE_CHANGE_FONT[100][12]],
+  ['100 宽 @24（旧字号 15）', wide100, 24, PRE_CHANGE_FONT[100][24]],
+  ['100 宽 @48（旧字号 30）', wide100, 48, PRE_CHANGE_FONT[100][48]]
+]) {
+  const now = cardOf(pat, cellPx);
+  cardSizes[label] = now;
+  ok('色卡放大 | ' + label + ' → 字号 ' + now.countFont + ' > 改动前 ' + oldFont, now.countFont > oldFont, String(now.countFont));
+  eq('色卡放大 | ' + label + ' → 色号与颗数同号字', now.codeFont, now.countFont);
+  ok('色卡 8 列 | ' + label + ' → 每行最多 8 块（满行恰好 8）',
+    now.perRow.every((n) => n <= 8) && now.perRow.slice(0, -1).every((n) => n === 8), JSON.stringify(now.perRow));
+}
+const narrowCard = cardOf(narrow20, 24);
+ok('色卡 8 列 | 窄图（20 宽 @24）受 8 列约束，字号被压到 ' + narrowCard.countFont + '，但仍不低于下限 9',
+  narrowCard.countFont >= 9, String(narrowCard.countFont));
+ok('色卡 8 列 | 窄图块宽 ' + narrowCard.chipW.toFixed(2) + 'px 明显小于图纸宽的 1/8 + 余量（确实被压窄）',
+  narrowCard.chipW < narrowCard.gridW / 8 + 8, String(narrowCard.chipW));
+/* 8 列撑满：满行宽度逐像素 === 图纸宽（= (m+2R)*cellPx）；末行左对齐；块恒为横条 */
+for (const [label, pat, cellPx] of [['29 宽 @24', wide29, 24], ['100 宽 @24', wide100, 24], ['20 宽 @24', narrow20, 24]]) {
+  const cv = makeMockCanvas();
+  Render.drawPattern(pat, cv, { cellPx: cellPx, cellLabel: 'none', padMode: 'normal', annotate: true });
+  const boxes = chipBoxesOf(cv._rec);
+  const firstRowY = Math.min.apply(null, boxes.map((bx) => bx.y));
+  const row = boxes.filter((bx) => bx.y === firstRowY).sort((x, y) => x.x - y.x);
+  const rowW = Math.max.apply(null, row.map((bx) => bx.x + bx.w)) - Math.min.apply(null, row.map((bx) => bx.x));
+  const expectW = (pat.w + 2 * RING) * cellPx;
+  eq('色卡 8 列 | ' + label + ' 满行宽度逐像素 === 图纸宽 ' + expectW, Math.round(rowW), expectW);
+  eq('色卡 8 列 | ' + label + ' 满行块数 = 8', row.length, 8);
+  ok('色卡 8 列 | ' + label + ' 块恒为横条（chipW > chipH）', row.every((bx) => bx.w > bx.h), JSON.stringify(row.map((bx) => [bx.w, bx.h]).slice(0, 2)));
+  let overlap = 0;
+  for (let i = 1; i < row.length; i++) if (row[i].x <= row[i - 1].x + row[i - 1].w - 0.01) overlap++;
+  eq('色卡 8 列 | ' + label + ' 同行块不重叠', overlap, 0);
+  const lastRows = boxes.filter((bx) => bx.y > firstRowY);
+  eq('色卡 8 列 | ' + label + ' 末行左对齐（每块 x === 满行首块 x）', lastRows.map((bx) => bx.x), Array(lastRows.length).fill(row[0].x));
+}
+info('色卡尺寸实测 | 29 宽：@24 → ' + cardSizes['29 宽 @24（旧字号 15）'].countFont + '（旧 15）、@48 → ' + cardSizes['29 宽 @48（旧字号 30）'].countFont + '（旧 30）；100 宽：@12 → ' + cardSizes['100 宽 @12（旧字号 12）'].countFont + '（旧 12）、@24 → ' + cardSizes['100 宽 @24（旧字号 15）'].countFont + '（旧 15）、@48 → ' + cardSizes['100 宽 @48（旧字号 30）'].countFont + '（旧 30）；块恒为横条，满行恰好 8 块且宽度 = 图纸宽。');
+
+/* ③ 图纸外框：预览与导出两条路径都要有；比 1px 细网格线更粗更深；板边界线必须仍在 */
+for (const annotate of [false, true]) {
+  const cv = makeMockCanvas();
+  const r = Render.drawPattern(chipPat, cv, { cellPx: 24, cellLabel: 'none', annotate: annotate, padMode: 'normal' });
+  const fe = frameEdgesOf(cv._rec, 24);
+  const allEdges = fe.covers.top && fe.covers.right && fe.covers.bottom && fe.covers.left;
+  ok('外框 | ' + (annotate ? '导出（带用量块）' : '预览') + '路径四条边都被「>1px 且比细网格线更深」的描边覆盖',
+    r.ok && allEdges, JSON.stringify({ covers: fe.covers, thick: fe.thick, darkThick: fe.darkThick }));
+  ok('外框 | ' + (annotate ? '导出' : '预览') + '路径：板边界线已彻底删除（这条路径上同样一条都不许有）',
+    boardLinesOf(cv._rec, 24).length === 0, String(boardLinesOf(cv._rec, 24).length));
+}
+
+/* 颜色层次（三条线）：细网格 → 原图纸外沿 → 最外围外框，越来越深、越来越粗。
+   用「画出来的 strokeStyle」按 WCAG 相对亮度排序判定，不读实现里的色值常量；
+   同时给出色值作为独立二次确认（不参与判据）。 */
+const hierCv = makeMockCanvas();
+Render.drawPattern(makePat(29, 29, 3), hierCv, { cellPx: 24, cellLabel: 'none', annotate: false, padMode: 'normal' });
+const hierThin = hierCv._rec.strokes.filter((st) => st.lineWidth === 1);
+const hierThick = hierCv._rec.strokes.filter((st) => st.lineWidth > 1).sort((a, b) => a.lineWidth - b.lineWidth);
+eq('颜色层次 | 全图恰好 2 条粗线（原图纸外沿 + 最外围外框）', hierThick.length, 2);
+eq('颜色层次 | 反向对照：细网格线确实存在且线宽 1（证明上面那个「只有 2 条」不是「什么都没画」）',
+  [hierThin.length, hierThin[0] ? hierThin[0].lineWidth : 0], [1, 1]);
+ok('颜色层次 | L(最外围外框) < L(原图纸外沿) < L(细网格)',
+  wcagLum(hierThick[1].strokeStyle) < wcagLum(hierThick[0].strokeStyle)
+  && wcagLum(hierThick[0].strokeStyle) < wcagLum(hierThin[0].strokeStyle),
+  JSON.stringify([hierThin[0].strokeStyle, hierThick[0].strokeStyle, hierThick[1].strokeStyle].map((c) => [c, wcagLum(c).toFixed(4)])));
+ok('颜色层次 | 两条粗线都比细网格粗（外沿 ' + hierThick[0].lineWidth + 'px、外框 ' + hierThick[1].lineWidth + 'px vs 1px）',
+  hierThick[0].lineWidth > hierThin[0].lineWidth && hierThick[1].lineWidth > hierThick[0].lineWidth,
+  JSON.stringify([hierThick[0].lineWidth, hierThick[1].lineWidth]));
+eq('颜色层次 | 三条线的色值（细网格 / 外沿 / 外框，独立二次确认）',
+  [hierThin[0].strokeStyle, hierThick[0].strokeStyle, hierThick[1].strokeStyle].map((c) => String(c).toUpperCase()),
+  ['#A6AEBA', '#3E4753', '#0E1218']);
+const hierDigits = hierCv._rec.fillText.filter((t) => /^\d+$/.test(String(t.text)));
+ok('颜色层次 | 索引数字对底色（纸白）的对比度 ≥ 4.5:1（实测 ' + (hierDigits.length ? wcagRatio(String(hierDigits[0].fillStyle), '#FFFFFF').toFixed(2) : 'n/a') + ':1）',
+  hierDigits.length > 0 && hierDigits.every((t) => wcagRatio(String(t.fillStyle), '#FFFFFF') >= 4.5),
+  hierDigits.length ? String(hierDigits[0].fillStyle) : 'no-digits');
+
+/* ④ ★不变量：预览路径（annotate:false）的 width/height 与改动前逐值相同 ——
+     色卡不参与预览，contentW = gridW；app.js 的 hitTestCell 靠画布宽度反推 pad。 */
+const PREVIEW_WH = { 12: [278, 294], 24: [528, 551], 48: [1046, 1093] };   /* gridW=gridH=20，本轮开工时实测 */
+const PREVIEW_FIRST_CELL = { 12: [19, 19], 24: [24, 24], 48: [43, 43] };   /* 首个格子的起点，同上 */
+for (const cellPx of [12, 24, 48]) {
+  const cv = makeMockCanvas();
+  const r = Render.drawPattern(chipPat, cv, { cellPx: cellPx, showCodes: true, cellLabel: 'code', annotate: false });
+  /* 索引圈落地后画布必然变宽：不变量从「逐值相同」换成「新宽 = 旧宽 + 2×cellPx」。 */
+  eq('★索引圈 | 预览 width = 旧宽 + 2×cellPx（cellPx=' + cellPx + '，' + PREVIEW_WH[cellPx][0] + ' → +' + 2 * cellPx + '）', r.width, PREVIEW_WH[cellPx][0] + 2 * cellPx);
+  const first = cellRectsOf(cv._rec, cellPx).sort((a, b) => (a.y - b.y) || (a.x - b.x))[0] || {};
+  /* 外边距本身与上一轮逐值相同（索引圈不改 pad），而图纸首格 = 外边距 + 索引圈 1 格。 */
+  const padNow = (r.width - (chipPat.w + 2 * RING) * cellPx) / 2;
+  eq('★索引圈 | 外边距与改动前逐值相同（cellPx=' + cellPx + '）', padNow, PREVIEW_FIRST_CELL[cellPx][0]);
+  eq('★索引圈 | 图纸首格 = 外边距 + 索引圈 1 格（cellPx=' + cellPx + '）', [first.x, first.y], [padNow + RING * cellPx, padNow + RING * cellPx]);
+  ok('★索引圈 | 画布高 > 外边距*2 + (n+2R)*cellPx（角标带为正；cellPx=' + cellPx + '）',
+    r.height > 2 * padNow + (chipPat.h + 2 * RING) * cellPx, r.height + ' vs ' + (2 * padNow + (chipPat.h + 2 * RING) * cellPx));
+}
+
+/* ⑤ 面积守卫仍把用量块（tableH）与外框算进去：整张画布面积 - 1 必须拒绝，恰好等于才通过 */
+const guardCv = makeMockCanvas();
+const guardOn = Render.drawPattern(chipPat, guardCv, { cellPx: 24, cellLabel: 'none', annotate: true, padMode: 'normal' });
+const guardArea = guardOn.width * guardOn.height;
+const guardUnder = Render.drawPattern(chipPat, makeMockCanvas(), { cellPx: 24, cellLabel: 'none', annotate: true, padMode: 'normal', maxPixels: guardArea - 1 });
+eq('面积守卫 | maxPixels = 整张画布面积 - 1 → 拒绝（用量块/外框都算进去了）', [guardUnder.ok, guardUnder.reason], [false, 'too-large']);
+const guardExact = Render.drawPattern(chipPat, makeMockCanvas(), { cellPx: 24, cellLabel: 'none', annotate: true, padMode: 'normal', maxPixels: guardArea });
+eq('面积守卫 | maxPixels = 整张画布面积 → 通过', guardExact.ok, true);
+const guardOff = Render.drawPattern(chipPat, makeMockCanvas(), { cellPx: 24, cellLabel: 'none', annotate: false, padMode: 'normal', maxPixels: guardArea - 1 });
+eq('面积守卫 | 反向对照：预览（无用量块）在同一 maxPixels 下通过 → 上面的拒绝确实来自「用量块也被计入」', guardOff.ok, true);
+
 /* ═════════════ 角标（新格式 + 分段降级 + captionDrawn）═════════════════
+
    新格式：【标题 ·】实际 a×b 格 · 共 N 颗【· 预计 X 小时 / X 分钟】
    —— 已无板数、无成品 cm。尺寸 = 非空格子包围盒；颗数 = 非空格子数；
    时长 = count / beadRate，不足 1 小时且分钟取整后 < 60 才写分钟（不出现「60 分钟」）。
@@ -991,8 +1368,10 @@ const capEmptyPat = capPatOf(10, 8, 0);
 const capEmpty = drawCaption(capEmptyPat, capPlain());
 eq('角标 | 非空格子为 0 → 角标一次 fillText 都不画', [capEmpty.items.length, capEmpty.cv._rec.fillText.length], [0, 0]);
 eq('角标 | 非空格子为 0 → captionDrawn === false', capEmpty.r.captionDrawn, false);
-eq('角标 | 非空格子为 0 → 画布高 = pad*2 + gridH（角标带高度 0）', capEmpty.r.height, capPadN(20) * 2 + 8 * 20);
-eq('角标 | 非空格子为 0 → 比同尺寸「有角标」的图矮一整个角标带 capH', bboxRes.r.height - capEmpty.r.height, capH(20));
+eq('角标 | 非空格子为 0 → 画布高 = 外边距*2 + (n+2R)*cellPx（角标带高度 0）', capEmpty.r.height, capPadN(20) * 2 + (8 + 2 * RING) * 20);
+const bboxCapFont = parseInt(String((bboxRes.item || {}).font), 10);
+eq('角标 | 非空格子为 0 → 比同尺寸「有角标」的图矮一整个角标带（top + 字号 + 底部余量）',
+  bboxRes.r.height - capEmpty.r.height, capTop(20) + bboxCapFont + Math.max(3, Math.round(bboxCapFont * 0.35)));
 
 /* d) 标题：空 / 全空白 / 非字符串 → 整段省略；> 24 码点 → 23 字 + 「…」 */
 for (const t of [['空串', ''], ['全空白', '   '], ['number', 123], ['null', null], ['undefined', undefined], ['对象', {}]]) {
@@ -1008,26 +1387,64 @@ eq('角标 | 标题 | 去首尾空白后使用', capSegs(drawCaption(capWide, ca
 
 /* e) 分段降级：先掉标题 → 再掉时长 → 再掉尺寸 */
 const lad1 = drawCaption(capWide, capOpts({ captionName: CAP_TITLE24 }));
-const lad2 = drawCaption(capRate, capPlain({ cellPx: 8, captionName: CAP_TITLE24, beadRate: 500 }));
-const lad3 = drawCaption(capSmall, capPlain({ cellPx: 9, captionName: CAP_TITLE24, beadRate: 500 }));
-const lad4 = drawCaption(capTiny, capPlain({ cellPx: 9, captionName: CAP_TITLE24, beadRate: 500 }));
+const lad2 = drawCaption(capSmall, capPlain({ cellPx: 12, captionName: CAP_TITLE24, beadRate: 500 }));
+const lad3 = drawCaption(capSmall, capPlain({ cellPx: 9, captionName: CAP_TITLE24, beadRate: 500 }));   /* 20×20@9 + 24 字标题 */
+const lad4 = drawCaption(capTiny, capPlain({ cellPx: 8 }));                                        /* 5×5@8 → 只剩「共 25 颗」*/
 eq('角标 | 降级 | 档 1（116×116@24）四段全在', capSegs(lad1.text).length, 4);
 ok('角标 | 降级 | 档 1 的内容 = 标题 + 尺寸 + 颗数 + 时长',
   capSegs(lad1.text)[0] === CAP_TITLE24 && capSegs(lad1.text)[1] === '实际 116×116 格'
   && capSegs(lad1.text)[2] === '共 13456 颗' && /^预计 [\d.]+ (小时|分钟)$/.test(capSegs(lad1.text)[3]), lad1.text);
-eq('角标 | 降级 | 档 2（29×29@8 + 标题 + rate500）先掉标题、保时长', lad2.text, '实际 29×29 格 · 共 841 颗 · 预计 1.7 小时');
-eq('角标 | 降级 | 档 3（20×20@9 + 标题 + rate500）再掉时长，只剩尺寸 + 颗数', lad3.text, '实际 20×20 格 · 共 400 颗');
-eq('角标 | 降级 | 档 4（5×5@9）「共 N 颗」是最后幸存者', lad4.text, '共 25 颗');
+eq('角标 | 降级 | 档 2（20×20@12 + 24 字标题）先掉标题、保时长', lad2.text, '实际 20×20 格 · 共 400 颗 · 预计 48 分钟');
+eq('角标 | 降级 | 档 3（20×20@9 + 24 字标题）再掉时长，只剩尺寸 + 颗数', lad3.text, '实际 20×20 格 · 共 400 颗');
+eq('角标 | 降级 | 档 4（5×5@8）「共 N 颗」是最后幸存者', lad4.text, '共 25 颗');
 eq('角标 | 降级 | 段数逐档递减 4 → 3 → 2 → 1', [lad1, lad2, lad3, lad4].map((x) => capSegs(x.text).length), [4, 3, 2, 1]);
 ok('角标 | 降级 | 次序证据 1：存在「没有标题但有时长」的一档（掉标题早于掉时长）',
   lad2.text.indexOf(CAP_TITLE24) < 0 && lad2.text.indexOf('预计 ') > 0, lad2.text);
 ok('角标 | 降级 | 次序证据 2：存在「有尺寸但没有时长」的一档（掉时长早于掉尺寸）',
   /^实际 /.test(lad3.text) && lad3.text.indexOf('预计') < 0, lad3.text);
-const capTinyRes = drawCaption(capTiny, capPlain({ cellPx: 8, captionName: CAP_TITLE24, beadRate: 500 }));
-eq('角标 | 降级 | 极窄（5×5@8）→ captionDrawn === false', capTinyRes.r.captionDrawn, false);
-eq('角标 | 降级 | 极窄 → 角标带高度 0（画布高 = pad*2 + gridH）', capTinyRes.r.height, capPadN(8) * 2 + 5 * 8);
+
+/* 角标契约（信息优先）：**候选外层 C1→C4、字号内层 40→9**，第一个能放下的候选胜出。
+   这里逐条钉住「永不溢出 / 字号上下限 / 尺寸段仍是原图纸 m×n（不含索引圈）」三件事。 */
+const contractCases = [
+  ['C1 116×116@24 + 24 字标题', capWide, capOpts({ captionName: CAP_TITLE24 })],
+  ['29×29@24 + 24 字标题', capRate, capOpts({ captionName: CAP_TITLE24 })],
+  ['C2 20×20@12 + 24 字标题', capSmall, capPlain({ cellPx: 12, captionName: CAP_TITLE24, beadRate: 500 })],
+  ['C3 20×20@9 + 24 字标题', capSmall, capPlain({ cellPx: 9, captionName: CAP_TITLE24, beadRate: 500 })],
+  ['C4 5×5@8', capTiny, capPlain({ cellPx: 8 })]
+];
+const contractBad = { overflow: [], font: [], size: [] };
+for (const [label, pat, opts] of contractCases) {
+  const res = drawCaption(pat, opts);
+  const availW = (pat.w + 2 * RING) * opts.cellPx;              /* 可用内宽 = 图纸宽（含索引圈） */
+  const f = capFontPx(res.item);
+  if (estCaptionW(res.item.text, f) > availW + 0.5) contractBad.overflow.push(label + ' estW=' + estCaptionW(res.item.text, f).toFixed(1) + ' > ' + availW);
+  if (!(f >= 9 && f <= 40)) contractBad.font.push(label + ':' + f);
+  if (/实际 /.test(res.item.text) && res.item.text.indexOf('实际 ' + pat.w + '×' + pat.h + ' 格') < 0) contractBad.size.push(label + ':' + res.item.text);
+}
+eq('角标契约 | 每个算例的最终文字都不溢出可用内宽（estW(最终文字) ≤ 图纸宽）', contractBad.overflow, []);
+eq('角标契约 | 每个算例的字号都落在 [9,40]', contractBad.font, []);
+eq('角标契约 | 尺寸段写的是原图纸 m×n（绝不含索引圈 → 不是 (m+2)×(n+2)）', contractBad.size, []);
+ok('角标契约 | 候选按「信息优先」逐档可触发：4 / 3 / 2 / 1 段各至少有一个算例',
+  [4, 3, 2, 1].every((k) => contractCases.some((c) => capSegs(drawCaption(c[1], c[2]).item.text).length === k)),
+  JSON.stringify(contractCases.map((c) => capSegs(drawCaption(c[1], c[2]).item.text).length)));
+ok('角标契约 | 「共 N 颗」仍然在角标里（单位没丢，色卡改形态不影响它）',
+  contractCases.every((c) => /共 \d+ 颗/.test(drawCaption(c[1], c[2]).item.text)),
+  contractCases.map((c) => drawCaption(c[1], c[2]).item.text).join(' | ').slice(0, 160));
+ok('角标契约 | 字号是「该信息量内尽可能大」：同尺寸下信息量越少字号越大（C3≥C2≥C1 的示意图纸内单调）',
+  (function () {
+    const f1 = capFontPx(drawCaption(capSmall, capPlain({ cellPx: 9, captionName: CAP_TITLE24, beadRate: 500 })).item);
+    const f4 = capFontPx(drawCaption(capSmall, capPlain({ cellPx: 9, beadRate: 500 })).item);
+    return f4 >= f1;
+  })());
+/* 「放不下就不画」这条分支必须仍然真实存在。原算例 5×5@8 现在**会画**（共 25 颗 @12px，有比没有好，已由作者确认），
+   所以换成更窄的 2×2@8：可用内宽 32px，连「共 4 颗」@9px 都要 51.5px。 */
+const capNoFit = makePat(2, 2, 2);
+const capTinyRes = drawCaption(capNoFit, capPlain({ cellPx: 8, captionName: CAP_TITLE24, beadRate: 500 }));
+eq('角标 | 降级 | 极窄（2×2@8）→ captionDrawn === false（兜底分支仍在）', capTinyRes.r.captionDrawn, false);
+eq('角标 | 降级 | 极窄 → 角标带高度 0（画布高 = 外边距*2 + (n+2R)*cellPx）', capTinyRes.r.height, capPadN(8) * 2 + (capNoFit.h + 2 * RING) * 8);
 eq('角标 | 降级 | 极窄 → 与「无标题无速率」的同尺寸算例画布高完全相同',
-  capTinyRes.r.height, drawCaption(capTiny, { cellPx: 8, cellLabel: 'none', showRuler: false, padMode: 'normal' }).r.height);
+  capTinyRes.r.height, drawCaption(capNoFit, { cellPx: 8, cellLabel: 'none', showRuler: false, padMode: 'normal' }).r.height);
+eq('角标 | 降级 | 极窄 → 5×5@8 现在会画（「有比没有好」）', drawCaption(capTiny, capPlain({ cellPx: 8 })).r.captionDrawn, true);
 
 /* f) 返回值键集：正常 9 键 / too-large 12 键；captionDrawn 的四个 false 分支 */
 const capKeys = (o) => Object.keys(o).sort().join(',');
@@ -1115,24 +1532,62 @@ const rulerCounts = [12, 24, 64].map((px) => {
   Render.drawPattern(bigPat, cv, { cellPx: px, cellLabel: 'none', padMode: 'normal' });
   return cv._rec.fillText.length;
 });
-eq('新增 | 116 格刻度标签数 = rulerPositions(116)×2 = 27×2 = 54', rulerCounts[1], 54);
-ok('新增 | 刻度标签数远小于格数（< 60）', rulerCounts[1] < 60, rulerCounts[1]);
+/* 旧口径（每 5 格一个刻度、标签数 54、rulerPositions/paintRuler/C.rulerLine/C.rulerText/C.rulerBoardText/BOARD）已整体作废：
+   索引圈改成**一格一写**，四角留空 → m×n 图纸共 2*(m+n) 个数字。 */
+eq('新增 | 索引圈数字条数 = 2*(m+n)（四角留空；116 格 → 464）', rulerCounts[1], 2 * (BIG + BIG));
+ok('新增 | 索引圈数字数与该尺寸的 (m+n) 严格对应：12 / 24 / 64 三档同式',
+  rulerCounts.every((c) => c === 2 * (BIG + BIG)), JSON.stringify(rulerCounts));
+
+/* 索引圈契约（逐格数字）：条数 = 2*(m+n)、零侵入原图纸、四角留空、最长数字宽度 ≤ cellPx、
+   showRuler:false 时一个数字都不画（预览与导出两条路径）。 */
+const fpxOf = (font) => { const m = /(\d+(?:\.\d+)?)px/.exec(String(font)); return m ? Number(m[1]) : 0; };
+const estW = (t, f) => { let w = 0; for (const ch of String(t)) w += (ch.charCodeAt(0) > 0x2E80 ? f : 0.62 * f); return w; };
+for (const [m, n, cp] of [[29, 29, 24], [100, 100, 24], [7, 5, 24], [20, 20, 12]]) {
+  const cv = makeMockCanvas();
+  Render.drawPattern(makePat(m, n, 3), cv, { cellPx: cp, cellLabel: 'none', annotate: false, padMode: 'normal' });
+  const labels = cv._rec.fillText.filter((t) => /^\d+$/.test(String(t.text)));
+  const cellBoxes = cv._rec.fillRect.filter((f) => f.w === cp && f.h === cp);
+  const originX = Math.min.apply(null, cellBoxes.map((b) => b.x));
+  const originY = Math.min.apply(null, cellBoxes.map((b) => b.y));
+  eq('索引圈 | ' + m + '×' + n + '@' + cp + ' 数字条数 = 2*(m+n) = ' + 2 * (m + n), labels.length, 2 * (m + n));
+  const intruding = labels.filter((t) => {
+    const w = estW(String(t.text), fpxOf(t.font)), fh = fpxOf(t.font);
+    const bx0 = Number(t.x) - w / 2, bx1 = Number(t.x) + w / 2, by0 = Number(t.y) - fh / 2, by1 = Number(t.y) + fh / 2;
+    return bx1 > originX + 0.01 && bx0 < originX + m * cp - 0.01 && by1 > originY + 0.01 && by0 < originY + n * cp - 0.01;
+  });
+  eq('索引圈 | ' + m + '×' + n + '@' + cp + ' 数字零侵入原图纸（文字外框与图纸区域不相交）', intruding.map((t) => t.text), []);
+  const cornerCells = [[originX - cp, originY - cp], [originX + m * cp, originY - cp], [originX - cp, originY + n * cp], [originX + m * cp, originY + n * cp]];
+  const inCorner = labels.filter((t) => cornerCells.some((c) => Number(t.x) >= c[0] && Number(t.x) <= c[0] + cp && Number(t.y) >= c[1] && Number(t.y) <= c[1] + cp));
+  eq('索引圈 | ' + m + '×' + n + '@' + cp + ' 四角格没有数字', inCorner.map((t) => t.text), []);
+  const maxW = Math.max.apply(null, labels.map((t) => estW(String(t.text), fpxOf(t.font))));
+  ok('索引圈 | ' + m + '×' + n + '@' + cp + ' 最长数字宽度 ' + maxW.toFixed(1) + 'px ≤ 格宽 ' + cp + 'px（塞得进一格）', maxW <= cp, String(maxW));
+}
+for (const annotate of [false, true]) {
+  const cv = makeMockCanvas();
+  Render.drawPattern(makePat(29, 29, 3), cv, { cellPx: 24, cellLabel: 'none', showRuler: false, annotate: annotate, padMode: 'normal' });
+  const digits = cv._rec.fillText.filter((t) => /^\d+$/.test(String(t.text)));
+  eq('索引圈 | showRuler:false（' + (annotate ? '导出' : '预览') + '路径）→ 一个数字都不画', digits.length, 0);
+}
 ok('新增 | 刻度数与 cellPx 无关（12 / 24 / 64 相同）', rulerCounts[0] === rulerCounts[1] && rulerCounts[1] === rulerCounts[2], rulerCounts.join(' / '));
 
-/* 板边界线：ceil(宽/29) + ceil(高/29) 条，末格补线正确（100 / 116 都不是 29 的整数倍关系） */
+/* 板边界线已彻底删除：这些尺寸（含 29 的整数倍 29/87）上**都不许**出现加粗单轴线。
+   n 列表去掉 116：新上限是 100（100 取代 116 作为「最大的那张」）。 */
 const BOARD_PX = 4;
-for (const n of [29, 87, 100, 116]) {
+for (const n of [29, 87, 100]) {
   const pat = makePat(n, n, 2);
   const cv = makeMockCanvas();
   Render.drawPattern(pat, cv, { cellPx: BOARD_PX, cellLabel: 'none', padMode: 'normal' });
-  const strokes = cv._rec.strokes;
-  const perSide = Math.ceil(n / 29);
-  const pad = Math.max(40, BOARD_PX * 3 + 20);
-  eq('新增 | 板边界 | ' + n + '×' + n + ' 的线数 = 2×ceil(' + n + '/29) + 刻度 1', strokes.length - 1, 2 * perSide + 1);
-  eq('新增 | 板边界 | ' + n + '×' + n + ' 竖线位置（末格补线）', strokes.slice(1, 1 + perSide).map((s) => s.path[0][1] - pad), expectBoardOffsets(n, BOARD_PX));
-  eq('新增 | 板边界 | ' + n + '×' + n + ' 横线位置（末格补线）', strokes.slice(1 + perSide, 1 + 2 * perSide).map((s) => s.path[0][2] - pad), expectBoardOffsets(n, BOARD_PX));
+  const boardStrokes = boardLinesOf(cv._rec, BOARD_PX);
+  eq('新增 | 板边界 | ' + n + '×' + n + ' 上不再有任何单轴加粗线（29 的整数倍也不例外）', boardStrokes.length, 0);
+  /* 反向对照：证明上面那个 0 不是「什么都画了」——细网格与外框都必须在 */
+  ok('新增 | 板边界 | ' + n + '×' + n + ' 反向对照：细网格（1px）与外框（加粗闭合环）都在',
+    cv._rec.strokes.some((s) => s.lineWidth === 1) && cv._rec.strokes.some((s) => {
+      if (!(s.lineWidth > 1)) return false;
+      const b = strokeBBox(s.path);
+      return !!b && (b[2] - b[0]) > 1 && (b[3] - b[1]) > 1;
+    }), JSON.stringify(cv._rec.strokes.map((s) => [s.lineWidth, strokeBBox(s.path)])));
 }
-eq('新增 | 板边界 | 细网格线仍是第 1 条路径（116×116 的 2×(117+117)）', (() => { const cv = makeMockCanvas(); Render.drawPattern(makePat(116, 116, 2), cv, { cellPx: BOARD_PX, cellLabel: 'none', padMode: 'normal' }); return cv._rec.strokes[0].path.length; })(), 2 * (117 + 117));
+eq('新增 | 细网格线仍是第 1 条描边，路径操作数 = 2*((m+2R+1)+(n+2R+1))（116 格 → 476）', (() => { const cv = makeMockCanvas(); Render.drawPattern(makePat(BIG, BIG, 2), cv, { cellPx: BOARD_PX, cellLabel: 'none', padMode: 'normal' }); return cv._rec.strokes[0].path.length; })(), 2 * ((BIG + 2 * RING + 1) + (BIG + 2 * RING + 1)));
 
 /* exportCSV */
 const csvA = Render.exportCSV(HP);
@@ -1206,7 +1661,7 @@ eq('用量条前置 | 非空格子总数 = 28（7 个色号各有颗数）', Arr
 
 const usageCv = makeMockCanvas();
 Render.drawPattern(usagePat, usageCv, { cellPx: 24, cellLabel: 'none', showRuler: false, annotate: true, padMode: 'normal' });
-eq('用量条 | 画了 7 个圆角块（每个色号一个）', usageCv._rec.fills.filter((f) => f.fillStyle === '#F5F7FA').length, 7);
+eq('用量条 | 画了 7 个圆角块（每个色号一个）', chipBgsOf(usageCv._rec).length, 7);
 const usageTextSeq = usageCv._rec.fillText.map((t) => String(t.text));
 const usageCodeSeq = usageTextSeq.filter((t) => USAGE_NATURAL.includes(t));
 eq('用量条 | 色号文字序列 = 自然序 A1,A2,A9,A10,B1,B2,M1', usageCodeSeq, USAGE_NATURAL);
@@ -1219,7 +1674,7 @@ const usageSwatchSeq = usageCv._rec.fills
   .map((s) => Object.keys(USAGE_HEX_OF).filter((k) => USAGE_HEX_OF[k] === s)[0]);
 eq('用量条 | 色块（fill）顺序同样是自然序（独立于文字的第二个信号）', usageSwatchSeq, USAGE_NATURAL);
 for (const code of USAGE_NATURAL) {
-  ok('用量条 | ' + code + ' 的颗数文字 = ' + USAGE_REV_COUNT[code] + ' 颗', usageTextSeq.includes(USAGE_REV_COUNT[code] + ' 颗'));
+  ok('用量条 | ' + code + ' 的颗数文字 = (' + USAGE_REV_COUNT[code] + ')', usageTextSeq.includes('(' + USAGE_REV_COUNT[code] + ')'));
 }
 
 /* B) 图例 / CSV：colors 乱序时仍然不重排（用户只要求改图上那一条） */
@@ -1597,12 +2052,14 @@ if (!productExists) {
   ok('产物第 5 段（src/srcedit.js）重新 eval 无抛错', srceditErr === null, srceditErr ? srceditErr.message : '');
   ok('重新 eval 后 window.SourceEdit 挂上了', typeof globalThis.SourceEdit === 'object' && globalThis.SourceEdit !== null);
   ok('重新 eval 后 typeof window.SourceEdit.mount === "function"', typeof globalThis.window.SourceEdit.mount === 'function');
-  /* 行为证明（不是读常量）：产物里的 pipeline MAX_DIM 必须是 116 —— 让它真的生一张 116×116 */
-  const productSrc = synth(116, 116, (x, y) => [(x * 5) % 256, (y * 3) % 256, ((x + y) * 7) % 256]);
-  const patProduct116 = globalThis.Pipeline.generateFromRGBA(productSrc, 116, 116, { gridW: 116, gridH: 116 });
-  eq('产物内 pipeline MAX_DIM = 116（行为证明：116×116 不被夹回）', [patProduct116.w, patProduct116.h], [116, 116]);
-  eq('产物内 pipeline 的 116×116 零告警（没有"夹到"提示）', patProduct116.warnings, []);
-  eq('产物内 pipeline 的 116×116 boardX/Y = 4', [patProduct116.stats.boardX, patProduct116.stats.boardY], [4, 4]);
+  /* 行为证明（不是读常量）：产物里的 pipeline MAX_DIM 必须是 100 —— 让它真的把 120 夹到 100 */
+  const productSrc = synth(120, 120, (x, y) => [(x * 5) % 256, (y * 3) % 256, ((x + y) * 7) % 256]);
+  const patProduct100 = globalThis.Pipeline.generateFromRGBA(productSrc, 120, 120, { gridW: 120, gridH: 120 });
+  eq('产物内 pipeline MAX_DIM = 100（行为证明：120 被夹到 100，不再有 116 上限）', [patProduct100.w, patProduct100.h], [100, 100]);
+  ok('产物内 pipeline 夹取告警含 [1,100]（文案由 MAX_DIM 拼出）',
+    patProduct100.warnings.some((w) => String(w).includes('[1,100]')), JSON.stringify(patProduct100.warnings));
+  const patProductDefault = globalThis.Pipeline.generateFromRGBA(productSrc, 120, 120, {});
+  eq('产物内 pipeline 无尺寸参数时回落 100×100（方形源）', [patProductDefault.w, patProductDefault.h], [100, 100]);
 
   /* 第 6 段（app.js）只断言「能加载、不炸、不破坏上面 5 个全局」——
    * 它的全局名与函数名属实现细节，硬断言会误报。 */
@@ -1672,7 +2129,7 @@ function makeRecCtx() {
     save() { rec.save++; }, restore() { rec.restore++; },
     setTransform() { rec.setTransform++; }, clearRect() { rec.clearRect++; },
     fillRect(x, y, w, h) { rec.fillRect.push({ x, y, w, h }); },
-    strokeRect(x, y, w, h) { rec.strokeRect.push({ x, y, w, h }); },
+    strokeRect(x, y, w, h) { rec.strokeRect.push({ x, y, w, h, strokeStyle: String(ctx.strokeStyle), lineWidth: ctx.lineWidth }); },
     drawImage() { rec.drawImage++; },
     fillText(t, x, y) { rec.fillText.push({ text: String(t), x, y }); },
     beginPath() { ctx._path = []; rec.paths++; },
@@ -1809,20 +2266,80 @@ eq('boot 后 state.booted === true', st.booted, true);
 ok('模块描述符 ok（palettes/pipeline/render 均在；SourceEdit 属可选项，不进 missing）', ui.modules().ok === true, JSON.stringify(ui.modules()));
 ok('SourceEdit 缺失时给出降级提示（不阻塞其它功能）', String(els.srceditHint.textContent).includes('SourceEdit'), els.srceditHint.textContent);
 
-/* ── 尺寸：gridW 200 → 116；预设 100；拼板 4×4 → 116 ─────────────────── */
+/* ── 尺寸：单边上限 100（不再是 116）；「拼板规格」下拉已彻底删除 ─────────── */
 els.gridW.value = '200';
 els.gridH.value = '200';
 fire(els.gridW, 'input');
-eq('尺寸 | gridW 输入 200 → options().gridW 夹到 116', ui.options().gridW, 116);
-eq('尺寸 | 输入框里的值也被回写夹到 116', String(els.gridW.value), '116');
+eq('尺寸 | gridW 输入 200 → options().gridW 夹到 100', ui.options().gridW, 100);
+eq('尺寸 | 输入框里的值也被回写夹到 100', String(els.gridW.value), '100');
+const gridWTag = (UI_HTML.match(/<input\b[^>]*\bid="gridW"[^>]*>/) || [''])[0];
+const gridHTag = (UI_HTML.match(/<input\b[^>]*\bid="gridH"[^>]*>/) || [''])[0];
+ok('尺寸 | #gridW 的 max 属性 = 100（与 app.js / pipeline 的 MAX_DIM 一致）', /max="100"/.test(gridWTag), gridWTag);
+ok('尺寸 | #gridH 的 max 属性 = 100', /max="100"/.test(gridHTag), gridHTag);
+ok('尺寸 | #gridW / #gridH 的默认 value 都是 100', /value="100"/.test(gridWTag) && /value="100"/.test(gridHTag), gridWTag + ' | ' + gridHTag);
 els.sizePreset.value = '100';
 fire(els.sizePreset, 'change');
 eq('尺寸 | 预设 100 → options().gridW === 100', ui.options().gridW, 100);
 eq('尺寸 | 预设 100 是正方形（gridH 也是 100）', ui.options().gridH, 100);
-els.boardsSelect.value = '4';
-fire(els.boardsSelect, 'change');
-eq('尺寸 | 拼板规格 4×4 → 116', ui.options().gridW, 116);
-eq('尺寸 | 拼板规格 4×4 → gridH 也是 116（无源图时按 1:1）', ui.options().gridH, 116);
+eq('尺寸 | 启动后预设默认停在 100 档', String(els.sizePreset.value), '100');
+ok('尺寸 | 「拼板规格」下拉已彻底删除（ui.html 里没有 boardsSelect id）',
+  !UI_HTML.includes('boardsSelect') && !htmlIds.includes('boardsSelect'));
+const presetBlock = (UI_HTML.match(/<select id="sizePreset">[\s\S]*?<\/select>/) || [''])[0];
+ok('尺寸 | 预设里不再有 116 × 116（旧上限残留）', presetBlock.length > 0 && !/116/.test(presetBlock), presetBlock.replace(/\s+/g, ' ').slice(0, 120));
+ok('尺寸 | 预设里保留 100 × 100 且标为 selected', /<option value="100"[^>]*selected/.test(presetBlock), presetBlock.replace(/\s+/g, ' ').slice(0, 160));
+ok('尺寸 | 摘要面板不再有「拼板 X × Y 板」那一行（板材概念已移除）',
+  (function () {
+    st.pattern = Pipeline.generateFromRGBA(synth(20, 20, (x) => [x * 9 % 256, 120, 60]), 20, 20, {});
+    ui.finishErase(0);                       /* 走真实收尾路径触发 renderSummary（它未导出） */
+    const box = String((els.summaryBox || {}).innerHTML || '');
+    return box.length > 0 && !/板/.test(box) && /成品尺寸/.test(box) && /图纸格数/.test(box);
+  })(), String((els.summaryBox || {}).innerHTML).replace(/\s+/g, ' ').slice(0, 200));
+
+/* ── Render 接口：恰好 4 个键，且**不得有 hitTest**（app.js 会优先调用它，
+      一旦存在就会绕过已验证的画布宽度反推 pad 的命中换算） ───────────────── */
+eq('Render 接口 | 恰好这 4 个键', Object.keys(Render).sort(), ['drawPattern', 'exportCSV', 'exportPNG', 'legendHTML']);
+ok("Render 接口 | 不存在 'hitTest'（存在就会绕过已验证的命中换算）", ('hitTest' in Render) === false, Object.keys(Render).join(','));
+
+/* ── DEFAULTS 与 Pipeline.DEFAULT_OPTS 的重叠字段必须逐字段一致（boards 两边都已删）── */
+const pd = Pipeline.DEFAULT_OPTS;
+const defOverlap = [];
+if ('gridW' in pd && pd.gridW !== null) defOverlap.push('gridW');
+if ('gridH' in pd && pd.gridH !== null) defOverlap.push('gridH');
+for (const k of ['method', 'bayerN', 'ditherStrength']) {
+  if (k in pd) { const dv = ui.options()[k === 'bayerN' ? 'bayerN' : k]; if (String(dv) !== String(pd[k]) && Number(dv) !== Number(pd[k])) defOverlap.push(k + ':ui=' + dv + ' pipe=' + pd[k]); }
+}
+ok('DEFAULTS | 与 Pipeline.DEFAULT_OPTS 重叠的字段逐字段一致（method / bayerN / ditherStrength）',
+  defOverlap.filter((x) => String(x).includes(':')).length === 0, JSON.stringify(defOverlap));
+ok('DEFAULTS | 两边都没有 boards 字段', !('boards' in pd) && !('boards' in ui.options()), JSON.stringify(Object.keys(pd)));
+eq('DEFAULTS | quantize 两边逐字段一致',
+  [ui.options().quantize.enabled, ui.options().quantize.maxColors],
+  [pd.quantize.enabled, pd.quantize.maxColors]);
+eq('DEFAULTS | 默认尺寸 100×100（与 pipeline 的 100 长边回落一致）', [ui.options().gridW, ui.options().gridH], [100, 100]);
+
+/* ── 默认 100×100 的首屏路径：预览能画出来、缩放下限可算、导出 8× 被面积守卫拒绝 ── */
+const bootPat100 = Pipeline.generateFromRGBA(synth(60, 60, (x, y) => [(x * 11) % 256, (y * 7) % 256, 90]), 60, 60, {});
+eq('首屏 100 | 方形源未给尺寸 → 100×100', [bootPat100.w, bootPat100.h], [100, 100]);
+eq('首屏 100 | 非方形源按比例回落（3:2 → 100×67，短边按比例推）',
+  (function () { const p = Pipeline.generateFromRGBA(synth(60, 40, (x) => [x * 9 % 256, 90, 40]), 60, 40, {}); return [p.w, p.h]; })(), [100, 67]);
+st.pattern = bootPat100;
+st.viewOpts = ui.viewOpts();
+eq('首屏 100 | 预览 drawPattern 成功且画布尺寸与返回值一致',
+  (function () {
+    const cv = dom.map.patternCanvas;
+    const r = Render.drawPattern(bootPat100, cv, ui.viewOpts());
+    return r.ok && r.width === cv.width && r.height === cv.height;
+  })(), true);
+eq('首屏 100 | 缩放下限能算出来且不高于 0.25（不会因为 100×100 变大而缩不出去）',
+  (function () { ui.setViewZoom(0.0001); return st.viewZoom <= 0.25 && st.viewZoom >= 0.01; })(), true);
+/* 导出 8× 在 100×100 下会被面积守卫拒绝：属预期，按 too-large 的口径断言（提示给出路 + 零下载） */
+els.exportScale.value = '8';
+const anchorsBefore8x = dom.created.anchors.length;
+fire(els.btnExportPng, 'click');
+const msg8x = String(els.statusText.textContent);
+ok('首屏 100 | 导出 8× 被面积守卫拒绝（提示同时给出原因与出路「降低倍数」）',
+  /降低/.test(msg8x) && /倍数/.test(msg8x) && /超出|上限|太大/.test(msg8x), msg8x);
+eq('首屏 100 | 被拒绝时零下载（没有新建 <a>）', dom.created.anchors.length, anchorsBefore8x);
+els.exportScale.value = '2';
 
 /* ── 预览缩放与导出解耦 ────────────────────────────────────────────── */
 ui.setViewZoom(0.25);
@@ -2017,7 +2534,8 @@ const TAB_NEW_IDS = ['tabBasic', 'tabAdvanced', 'panelBasic', 'panelAdvanced', '
 ok('控件清单 | 上一轮新增、本轮仍在的 11 个 id 全在 ui.html 里', TAB_NEW_IDS.every((id) => htmlIds.includes(id)), TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
 ok('控件清单 | 且这 11 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 /* 本轮增删后的精确计数：90（上一轮）+ 7（移动端：inputHint / saveOverlay / saveTip / saveImage / saveText / saveCopy / saveClose）= 97 */
-eq('控件清单 | ui.html 的 id 总数 = 102（97 + 本轮新增 5）', htmlIds.length, 102);
+eq('控件清单 | ui.html 的 id 总数 = 101（102 − 本轮删除的 boardsSelect）', htmlIds.length, 101);
+ok('控件清单 | 本轮删除的 boardsSelect 已不在 id 集合里', !htmlIds.includes('boardsSelect') && !appRefs.includes('boardsSelect'));
 eq('控件清单 | 上一轮删除的 3 个 id 一个都不在产物 id 集合里',
   ['cellLabelMode', 'maxColorsVal', 'btnExportCompare'].filter((id) => htmlIds.includes(id)), []);
 const MOBILE_NEW_IDS = ['inputHint', 'saveOverlay', 'saveTip', 'saveImage', 'saveText', 'saveCopy', 'saveClose'];
@@ -2376,6 +2894,58 @@ eq('橡皮刷坐标 | 落在网格左侧留白 → 返回未命中 -1', ui.hitTe
 ok('橡皮刷坐标 | 反证：若按「高度反推 pad」就会算出别的行（说明命中判定真的走宽度）',
   erPadWrong !== erPadTrue && Math.floor((erPadTrue + 1 * erPadCell + erPadCell / 2 - erPadWrong) / erPadCell) !== 1,
   'pad(宽度)=' + erPadTrue + ' pad(高度)=' + erPadWrong);
+
+/* ── 接缝：渲染器【实际画下】的首格 === 命中换算认为的第 0 格 ─────────────
+   渲染层与命中层各自独立算几何；两边只要差一圈索引圈，点击就会整体错位。
+   这里用「画出来的格子坐标」当基准，全格回代命中换算。 */
+const sePat = erMkPat(29, 29, () => 0);
+sePat.colors = [{ code: 'A1', hex: '#FF0000', rgb: [255, 0, 0], group: 'A' }];
+st.pattern = sePat;
+st.viewOpts = ui.viewOpts();
+ui.setViewZoom(1);
+/* 「画了什么」用 group 4 的 mock 画布记录（app 的桩画布只有 _ctx，没有调用记录）；
+   命中换算则走 app 自己的画布 —— 两边各自独立算几何，正是要验的接缝。 */
+const seMock = makeMockCanvas();
+const seRes = Render.drawPattern(sePat, seMock, ui.viewOpts());
+const seAppCv = ui.elements().patternCanvas;
+seAppCv.width = seMock.width;
+seAppCv.height = seMock.height;
+seAppCv.clientWidth = seMock.width;
+seAppCv.clientHeight = seMock.height;
+const seRect = seAppCv.getBoundingClientRect();
+const seCell = st.viewOpts.cellPx;
+const drawnCells = seMock._rec.fillRect.filter((f) => f.w === seCell && f.h === seCell).map((f) => ({ x: f.x, y: f.y }));
+const seOX = drawnCells.length ? Math.min.apply(null, drawnCells.map((f) => f.x)) : -1;
+const seOY = drawnCells.length ? Math.min.apply(null, drawnCells.map((f) => f.y)) : -1;
+const seToClient = (px, py) => ({ clientX: px * seRect.width / seMock.width, clientY: py * seRect.height / seMock.height });
+ok('接缝前置 | 渲染器确实画下了 ' + (sePat.w * sePat.h) + ' 格，且首格坐标可读',
+  seRes.ok && drawnCells.length === sePat.w * sePat.h && seOX > 0, drawnCells.length + '@(' + seOX + ',' + seOY + ')');
+eq('★接缝 | 渲染器画下的首格 === 命中换算认为的第 0 格',
+  ui.hitTestCell(seToClient(seOX + seCell / 2, seOY + seCell / 2)), 0);
+let seBad = 0;
+for (let i = 0; i < sePat.w * sePat.h; i++) {
+  const r = Math.floor(i / sePat.w), c = i % sePat.w;
+  const hit = ui.hitTestCell(seToClient(seOX + (c + 0.5) * seCell, seOY + (r + 0.5) * seCell));
+  if (hit !== i) seBad++;
+}
+eq('★接缝 | 逐格全回代：' + (sePat.w * sePat.h) + ' 格（含首行/首列/末行/末列）全部命中自己', seBad, 0);
+const seRingMiss = [];
+for (const [px, py] of [
+  [seOX - seCell / 2, seOY - seCell / 2],
+  [seOX + sePat.w * seCell + seCell / 2, seOY - seCell / 2],
+  [seOX - seCell / 2, seOY + sePat.h * seCell + seCell / 2],
+  [seOX + sePat.w * seCell + seCell / 2, seOY + sePat.h * seCell + seCell / 2],
+  [seOX + seCell / 2, seOY - seCell / 2],
+  [seOX - seCell / 2, seOY + seCell / 2],
+  [seOX + sePat.w * seCell + seCell / 2, seOY + seCell / 2],
+  [seOX + seCell / 2, seOY + sePat.h * seCell + seCell / 2]
+]) {
+  seRingMiss.push(ui.hitTestCell(seToClient(px, py)));
+}
+eq('★接缝 | 索引圈（四角 + 四边中点）点击全部「未命中 -1」（数字圈不是格子）',
+  seRingMiss.filter((v) => v !== -1), []);
+eq('接缝 | 命中换算与画布尺寸一致（宽度反推的图纸原点 = 渲染原点）',
+  (seMock.width - sePat.w * seCell) / 2, seOX);
 
 /* 持久化（核心）：擦掉若干格 → 改参数重新生成 → 被擦格仍是 65535 */
 const genCallCount = { n: 0 };
@@ -3926,6 +4496,25 @@ eq('裁剪门控 | 宿主没有 setCropMode 时 app.js 不抛异常（旧版 Sou
 eq('裁剪门控 | 宿主没有 setCropMode 时 app.js 自己的裁剪状态仍然正确记录', legacyInst.api.state().srcCropMode, true);
 
 /* ═════════════════════════════════════════════════════════════ 汇总 */
+summaryPrinted = true;
+/* 兜底：断言「本应执行的组」都真的执行了（异常中断那条路走 exit 钩子，见文件开头）。
+   本轮的教训：崩溃后第 5–8 组一条都没跑，输出里只看到一堆红和更小的总数。 */
+const ranTitles = groupStats.map((g) => g.title);
+const missingGroups = missingGroupNames();
+assertions++;
+if (missingGroups.length === 0) {
+  pass++;
+  groupStats[groupStats.length - 1].pass++;
+  if (!QUIET) console.log('  PASS  ' + '套件完整性 | 8 个分组全部执行到位（' + ranTitles.length + ' 组）');
+} else {
+  fail++;
+  groupStats[groupStats.length - 1].fail++;
+  const msg = '套件完整性 | 有分组**根本没执行**：缺 ' + JSON.stringify(missingGroups)
+    + '；实际只跑到 ' + ranTitles.length + ' 组（最后一个是「' + (ranTitles[ranTitles.length - 1] || '无') + '」）'
+    + ' —— 上面的「通过数」不包含这些组，别把它读成几乎全绿';
+  failures.push('套件完整性 :: ' + msg);
+  console.log('  FAIL  ' + msg);
+}
 console.log('\n════════════ 分组小结 ════════════');
 for (const g of groupStats) {
   console.log('  ' + (g.fail === 0 ? 'PASS' : 'FAIL') + '  ' + g.title + '  (' + g.pass + ' PASS / ' + g.fail + ' FAIL)');

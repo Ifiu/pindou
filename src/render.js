@@ -41,6 +41,11 @@
   var MAX_CANVAS_PIXELS = 120000000;  // 约 1.2 亿像素，超出即拒绝绘制
   var GRID_HALF = 0.5;       // 1px 线落在像素中心，避免糊边
 
+  // 左下角角标：标题上限 24 字符（超出截到 23 + '…'）；时长按 viewOpts.beadRate 折算（UI 默认 500 颗/小时）
+  var CAPTION_TITLE_MAX = 24;
+  var CAPTION_FONT_MIN = 9;    // 角标字号下限；连它都放不下就不画（与「格内标签太小就不画」同原则）
+  var CAPTION_FONT_MAX = 28;
+
   // 标签可读性：字号 = round(cellPx*0.42)，且必须同时满足「最小可读字号」与「装得下」
   var LABEL_FONT_RATIO = 0.42;
   var LABEL_FONT_MIN = 7;              // 字号落在这个区间之外就不画
@@ -69,7 +74,10 @@
     rulerLine: '#98A2B3',
     rulerText: '#5A6472',
     rulerBoardText: '#39424F',
-    caption: '#5A6472',      // 左下角尺寸标注
+    // 左下角角标专用色：**不与任何其它绘制复用**（rulerText / chipCount 仍是 #5A6472），
+    // 好让测试能按颜色直接认出「这次 fillText 是角标」，不必再依赖易变的文字格式正则。
+    // 同族中性灰、与旧值(rulerText)几乎不可分辨，不引入新色相。
+    caption: '#616B7A',
     title: '#2B3240',
     placeholder: '#EEF1F5',
     placeholderText: '#8A94A6',
@@ -105,6 +113,19 @@
     return 'code';                                  // 新默认
   }
 
+  // 角标标题：只认字符串，去首尾空白；非字符串 / 全空白 = 没有标题（整段省略）
+  function normCaptionName(v) {
+    if (typeof v !== 'string') return '';
+    return v.trim();
+  }
+
+  // 角标时长：只有有限正数才算得出来；缺失 / 0 / 负数 / NaN / 字符串一律让「预计 X 小时」整段消失
+  // （绝不输出 Infinity / NaN）。UI 侧未配置时应主动传 500 颗/小时，这是应用层默认值。
+  function normBeadRate(v) {
+    if (!isNum(v) || v <= 0) return 0;
+    return v;
+  }
+
   function normalizeOpts(viewOpts) {
     var o = viewOpts || {};
     return {
@@ -114,7 +135,9 @@
       annotate: o.annotate === true,                // 默认 false
       showRuler: o.showRuler !== false,             // 默认 true
       cellPx: clampCellPx(o.cellPx),                // 默认 12，夹到 4..256
-      highlightLocked: o.highlightLocked === true   // 默认 false
+      highlightLocked: o.highlightLocked === true,  // 默认 false
+      captionName: normCaptionName(o.captionName),  // 角标标题，默认没有
+      beadRate: normBeadRate(o.beadRate)            // 角标折算速率（颗/小时）
     };
   }
 
@@ -332,24 +355,114 @@
     };
   }
 
-  // 左下角尺寸标注的文字：一切从 pattern 自身推导（不读 stats，避免标注与网格对不上）
-  function captionText(pattern) {
+  // 非空格子的包围盒与颗数：cells 是唯一真源（绝不读 stats，否则角标会与图纸对不上）
+  // 判定口径与 usedScan / paintCells 对齐：空格跳过、越界下标跳过、只扫 w*h 以内的格子
+  function cellsExtent(pattern) {
+    var colors = (pattern && pattern.colors) || [];
+    var cells = (pattern && pattern.cells) || [];
     var w = Math.max(0, Math.floor((pattern && pattern.w) || 0));
     var h = Math.max(0, Math.floor((pattern && pattern.h) || 0));
-    if (!w || !h) return '';
-    var mm = Number(pattern.beadMM) > 0 ? Number(pattern.beadMM) : 2.6;
-    var cw = w * mm / 10, ch = h * mm / 10;
-    return w + ' × ' + h + ' 格 · ' + Math.ceil(w / BOARD) + ' × ' + Math.ceil(h / BOARD) + ' 块板 · 成品约 '
-      + cw.toFixed(1) + ' × ' + ch.toFixed(1) + ' cm';
+    if (!w || !h) return null;
+    var n = colors.length;
+    var total = Math.min(cells.length, w * h);
+    var minX = w, minY = h, maxX = -1, maxY = -1, count = 0, i, idx, x, y;
+    for (i = 0; i < total; i++) {
+      idx = cells[i];
+      if (idx === EMPTY) continue;
+      if (!isNum(idx) || idx < 0 || idx >= n) continue;
+      x = i % w;
+      y = Math.floor(i / w);
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      count++;
+    }
+    if (!count) return null;                       // 一颗都没有 → 没有角标
+    return {
+      minX: minX, minY: minY, maxX: maxX, maxY: maxY,
+      bw: maxX - minX + 1, bh: maxY - minY + 1, count: count
+    };
   }
 
-  // 标注占用的额外高度（上间距 + 一行字 + 底部留白），由 layoutOf 计入画布高度与面积守卫
-  function captionMetrics(pattern, opts) {
-    var text = captionText(pattern);
-    if (!text) return { text: '', fontPx: 0, top: 0, h: 0 };
-    var fontPx = clamp(Math.round(opts.cellPx * 0.45), 9, 28);
+  // 标题截断：按码点切（不切坏代理对）；超过上限就留 23 个字符 + '…'
+  function captionTitle(v) {
+    if (typeof v !== 'string') return '';
+    var s = v.trim();
+    if (!s) return '';
+    var cp = Array.from(s);
+    if (cp.length <= CAPTION_TITLE_MAX) return s;
+    return cp.slice(0, CAPTION_TITLE_MAX - 1).join('') + '…';
+  }
+
+  // 时长段：不足 1 小时按分钟显示 —— `预计 0.0 小时` 是没有意义的数字，而小挂件正是这种工具的常见用途；
+  // 四舍五入到 0 分钟同样没意义，所以最少显示 1 分钟。
+  // 收口：不足 1 小时但四舍五入后已满 60 分钟 → 一律写 `1.0 小时`（60 分钟就是 1 小时，不做两种写法）。
+  // rate 非法时 normBeadRate 已返回 0 → 整段省略。
+  function captionTime(count, rate) {
+    if (!(rate > 0)) return '';
+    var hrs = count / rate;
+    var mins = Math.round(hrs * 60);
+    if (hrs < 1 && mins < 60) return '预计 ' + Math.max(1, mins) + ' 分钟';
+    return '预计 ' + hrs.toFixed(1) + ' 小时';
+  }
+
+  // 角标候选阶梯（从全到简，去重后按此序）：先掉信息，最后才不画。
+  //   C1 标题 + 实际 a×b 格 · 共 N 颗 · 预计 X 小时（rate 非法时退化为 C2）
+  //   C2      实际 a×b 格 · 共 N 颗 · 预计 X 小时   ← 先掉标题
+  //   C3      实际 a×b 格 · 共 N 颗                 ← 再掉时长
+  //   C4      共 N 颗                               ← 再掉尺寸（颗数是最后幸存者）
+  // 损失次序的原则：标题是用户自己提供、能自己改短的数据；尺寸/颗数/时长是程序算出来的事实。
+  // 空间不足时先扔用户可控的那一段，所以「掉标题」早于「掉时长」。
+  // 标题只保留「完整（仍受 24 字上限截断）」或「整段去掉」两种：截断名没有辨识价值。
+  function captionCandidates(ext, opts) {
+    var o = opts || {};
+    var title = captionTitle(o.captionName);
+    var sizeText = '实际 ' + ext.bw + '×' + ext.bh + ' 格';
+    var countText = '共 ' + ext.count + ' 颗';
+    var brief = sizeText + ' · ' + countText;
+    var rate = normBeadRate(o.beadRate);              // 非法速率 → 0 → 没有时长段
+    var timeText = captionTime(ext.count, rate);
+    var full = timeText ? brief + ' · ' + timeText : brief;
+    var list = [], out = [], seen = {}, i, s;
+    list.push(title ? title + ' · ' + full : full);   // C1
+    list.push(full);                                  // C2（掉标题，保时长）
+    list.push(brief);                                 // C3（掉时长）
+    list.push(countText);                             // C4（只留颗数）
+    for (i = 0; i < list.length; i++) {
+      s = list[i];
+      if (!seen[s]) { seen[s] = 1; out.push(s); }
+    }
+    return out;
+  }
+
+  // 自适应角标：**绝不撑宽画布**，只在给定可用内宽里收缩。
+  // 顺序固定：字号从自然值降到 CAPTION_FONT_MIN(9)，每个字号档内按 C1→C4 依次试第一个放得下的；
+  // 所有字号档都不行 → 整条不画（text/h 全 0，不留空白带）。
+  // 先保字号（大字号比一个被截断的名字有价值），所以「宁可掉标题/掉时长，也不轻易缩字号」。
+  // 每一档都满足 estTextW(text, fontPx) <= availW，所以文字永远不会画到画布外。
+  function captionFit(pattern, opts, availW) {
+    var blank = { text: '', fontPx: 0, top: 0, h: 0, drawn: false };
+    var ext = cellsExtent(pattern);
+    if (!ext) return blank;                           // 一颗都没有 → 没有角标
+    var cands = captionCandidates(ext, opts);
+    var nat = clamp(Math.round(opts.cellPx * 0.45), CAPTION_FONT_MIN, CAPTION_FONT_MAX);
     var top = Math.max(4, Math.round(opts.cellPx * 0.35));
-    return { text: text, fontPx: fontPx, top: top, h: top + fontPx + Math.max(3, Math.round(fontPx * 0.35)) };
+    var f, i;
+    for (f = nat; f >= CAPTION_FONT_MIN; f--) {
+      for (i = 0; i < cands.length; i++) {
+        if (estTextW(cands[i], f) <= availW) {
+          return {
+            text: cands[i],
+            fontPx: f,
+            top: top,
+            h: top + f + Math.max(3, Math.round(f * 0.35)),
+            drawn: true
+          };
+        }
+      }
+    }
+    return blank;
   }
 
   function layoutOf(pattern, opts) {
@@ -361,12 +474,18 @@
     var maxDigits = String(Math.max(w, h, 1)).length;
     var pad = padOf(opts, gridW, gridH, ruler, maxDigits);
     var table = opts.annotate ? annotateLayout(pattern, opts, gridW) : null;
-    var cap = captionMetrics(pattern, opts);
+    // 内容宽只看网格与用量块：角标**绝不参与** contentW/width（hitTestCell 依赖 width - w*cellPx 反推 pad）
     var contentW = Math.max(gridW, table ? table.tableW : 0);
+    var gridDX = Math.round((contentW - gridW) / 2);          // 表格更宽时网格整体居中
     if (table) {
       table.dx = Math.round((contentW - table.tableW) / 2);   // 相对网格原点
       table.dy = gridH + table.gap;                            // 表格在网格下方，绝不重叠
     }
+    var width = pad * 2 + contentW;
+    // 角标可用内宽 = 从角标左边缘(pad+gridDX)到画布右边缘再留一个 pad。
+    // gridDX = 0（无更宽的用量块）时它就等于 width - 2*pad = contentW。
+    var availW = Math.max(0, contentW - gridDX);
+    var cap = captionFit(pattern, opts, availW);
     return {
       w: w,
       h: h,
@@ -375,12 +494,12 @@
       gridW: gridW,
       gridH: gridH,
       contentW: contentW,
-      gridDX: Math.round((contentW - gridW) / 2),              // 表格更宽时网格整体居中
+      gridDX: gridDX,
       rulerFontPx: ruler.fontPx,
       rulerGap: ruler.gap,
       table: table,
       caption: cap,
-      width: pad * 2 + contentW,
+      width: width,
       height: pad * 2 + gridH + (table ? table.gap + table.tableH : 0) + cap.h
     };
   }
@@ -708,7 +827,8 @@
       labelsSuppressed: o.labelsSuppressed === true,
       labelMinPx: o.labelMinPx || 0,
       width: o.width || 0,
-      height: o.height || 0
+      height: o.height || 0,
+      captionDrawn: o.captionDrawn === true          // 本次是否真的画了角标（放不下 → false）
     };
     if (o.reason) r.reason = o.reason;
     if (o.needPixels !== undefined) {
@@ -725,7 +845,7 @@
 
   function paintCaption(ctx, lay) {
     var cap = lay.caption;
-    if (!cap || !cap.text) return;
+    if (!cap || !cap.drawn || !cap.text) return;    // 放不下就不画（h 也是 0，不留空白带）
     var blockTop = lay.pad + lay.gridH + (lay.table ? lay.table.gap + lay.table.tableH : 0);
     ctx.fillStyle = C.caption;
     ctx.font = cap.fontPx + 'px ' + FONT_SANS;
@@ -783,6 +903,7 @@
     base.labelsDrawn = res.labelsDrawn > 0;
     base.labelsSuppressed = stat.suppressed && res.cellsDrawn > 0;
     base.labelMinPx = stat.minPx;
+    base.captionDrawn = lay.caption.drawn === true;
     return makeResult(base);
   }
 

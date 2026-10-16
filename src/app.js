@@ -39,6 +39,19 @@
   var HISTORY_MAX = 50;                 /* 撤销栈深上限：超了丢最旧的 */
   var RECENT_MAX = 12;                  /* 最近用过的色号个数 */
   var RECENT_KEY = 'pindou.recentColors.v1';
+  var BEAD_RATE = 500;                  /* 图纸角标的「颗/小时」估算速率（契约固定 500） */
+  var WAND_MAX = 20000;                 /* 魔术棒单次最多擦除的格数：区域再大也不会卡死界面 */
+
+  /* 预处理滑杆的非线性压缩幂次：滑杆 50 → 生效 33，滑杆 20 → 生效 8（见 effCurve） */
+  var EFF_POW = 1.6;
+
+  /* 图纸工具互斥状态：任何时刻只有一个生效 */
+  var TOOL_NONE = 'none';
+  var TOOL_RECOLOR = 'recolor';
+  var TOOL_WAND = 'wand';
+  var TOOL_ERASER = 'eraser';
+  var TAB_BASIC = 'basic';
+  var TAB_ADVANCED = 'advanced';
   var PICKER_SCOPE_USED = 'used';
   var PICKER_SCOPE_ALL = 'all';
 
@@ -74,6 +87,9 @@
     srcEdit: null,       /* SourceEdit.mount() 返回的 api；缺失时为 null */
     srcCropMode: false,
     pattern: null,
+    /* 生成当前这张图纸时真正生效的减色设置：{ enabled, maxColors }；无图纸时为 null。
+       汇总区并排显示「上限 / 实际」时用的是它，而不是当前 DOM 值。 */
+    patternQuantize: null,
     renderFallback: false,
     renderTooLarge: false,
     labelMinPx: {},      /* 渲染层自报的格内文字阈值：{ code: 20, index: 17 } */
@@ -86,6 +102,12 @@
     status: { text: '', kind: 'info' },
     lastMs: 0,
     lockCount: 0,
+    tab: TAB_BASIC,      /* 当前标签页：basic / advanced（只切显隐，不重建 DOM，不需要持久化） */
+    /* 图纸工具互斥状态：none / recolor / wand / eraser。
+       改色复选框 #recolorMode 与它双向同步，点击图纸的行为完全由它决定。 */
+    tool: TOOL_NONE,
+    eraseActive: false,  /* 橡皮刷是否处于一次按住拖动中 */
+    eraseCount: 0,       /* 本次拖动已擦除的格数（pointerup 时统一收尾用） */
     /* 用户是否亲手动过某控件：没动过就跟随 Pipeline.DEFAULT_OPTS，避免两份默认值悄悄错开 */
     touched: { quantizeEnabled: false, maxColors: false }
   };
@@ -389,25 +411,90 @@
   }
 
   function syncLabels() {
-    setText(ui.brightnessVal, signed(num(ui.brightness, 0)));
-    setText(ui.contrastVal, signed(num(ui.contrast, 0)));
-    setText(ui.saturationVal, signed(num(ui.saturation, 0)));
+    setText(ui.brightnessVal, signed(effSlider(ui.brightness, 0)));
+    setText(ui.contrastVal, signed(effSlider(ui.contrast, 0)));
+    setText(ui.saturationVal, signed(effSlider(ui.saturation, 0)));
     setText(ui.ditherStrengthVal, Math.round(clamp(num(ui.ditherStrength, 30), 0, 100)) + '%');
+    setText(ui.maxColorsVal, maxColorsSliderValue());
     setText(ui.cellSizeVal, cellSizeValue() + 'px');
     setText(ui.viewZoomVal, Math.round(state.viewZoom * 100) + '%');
     syncCellLabelHint();
+    syncMaxColorsHint();
+    syncPreprocessHint();
+  }
+
+  /* ------------------------------------------------------- 预处理滑杆压缩 */
+
+  /* 把滑杆位置压成生效值：靠近 0 的一小段变得更精细，滑到底仍是 ±100。
+     幂次 1.6：滑杆 50 → 生效 33；滑杆 20 → 生效 8。
+     量程不缩（滑杆仍是 -100..100，最大强度仍可达），只是把「小幅拖动就变化很大」压回可控。 */
+  function effCurve(v) {
+    var n = Number(v);
+    if (!isFinite(n)) n = 0;
+    var s = n < 0 ? -1 : 1;
+    var a = Math.abs(n);
+    if (a > 100) a = 100;
+    return s * Math.round(100 * Math.pow(a / 100, EFF_POW));
+  }
+
+  /* 滑杆 → 生效值的唯一入口：buildOpts 与读数都走它，避免「读数 50 实际 33」这种撒谎的界面 */
+  function effSlider(el, fallback) {
+    return effCurve(num(el, (fallback === undefined) ? 0 : fallback));
+  }
+
+  function syncPreprocessHint() {
+    if (!ui.preprocessHint) return;
+    setText(ui.preprocessHint, '滑杆经过非线性压缩（幂次 ' + EFF_POW + '）：靠近 0 的一小段更精细，滑到底仍是满强度。'
+      + '当前生效值 亮度 ' + signed(effSlider(ui.brightness, 0))
+      + ' / 对比度 ' + signed(effSlider(ui.contrast, 0))
+      + ' / 饱和度 ' + signed(effSlider(ui.saturation, 0)) + '。');
   }
 
   function signed(v) { return (v > 0 ? '+' : '') + v; }
+
+  /* 色数上限滑杆的当前值（读数与送进 pipeline 的值同源，见 quantizeOpts） */
+  function maxColorsSliderValue() {
+    return Math.round(clamp(num(ui.maxColors, 24), 2, 221));
+  }
 
   function syncEnabledState() {
     var method = methodOf();
     if (ui.bayerN) ui.bayerN.disabled = (method !== 'bayer');
     if (ui.ditherStrength) ui.ditherStrength.disabled = (method === 'nearest');
-    if (ui.maxColors) ui.maxColors.disabled = !(ui.quantizeEnabled && ui.quantizeEnabled.checked);
+    var qOn = !!(ui.quantizeEnabled && ui.quantizeEnabled.checked);
+    if (ui.maxColors) ui.maxColors.disabled = !qOn;
+    /* 减色未启用时读数一起置灰：滑杆灰着而数字亮着会让人以为上限还在生效 */
+    if (ui.maxColorsVal) {
+      ui.maxColorsVal.disabled = !qOn;
+      if (hasClassList(ui.maxColorsVal)) toggleCls(ui.maxColorsVal, 'is-off', !qOn);
+    }
+    if (ui.eraserSize) ui.eraserSize.disabled = (state.tool !== TOOL_ERASER);
+    syncMaxColorsHint();
+  }
+
+  /* 「色数上限」控件下的小字：说的是「设置」而不是「结果」。
+     结果那一侧（实际用了几色、差额怎么解释）在用量汇总里，用生成时真正生效的值。
+     这里的 N 走 quantizeOpts()：它才是实际会送进 Pipeline 的值（没动过控件时跟随 pipeline 默认值）。 */
+  function syncMaxColorsHint() {
+    if (!ui.maxColorsHint) return;
+    var q = quantizeOpts();
+    var text;
+    if (!q.enabled) {
+      text = '未启用减色：不使用色数上限，实际用色由算法与色卡决定。';
+    } else {
+      text = '色数上限 ' + q.maxColors + ' 色，是「最多用几色」而不是精确色数；'
+        + '实际用色受色卡与原图色彩分布限制，可能少于上限（生成后见右侧「用量汇总」）。';
+    }
+    setText(ui.maxColorsHint, text);
   }
 
   function syncMethodState() { syncEnabledState(); }
+
+  /* 图纸标题（角标左下角那段）。空串 = 不显示该段，由 render.js 决定。 */
+  function chartTitleValue() {
+    var v = ui.chartTitle ? String(ui.chartTitle.value === null || ui.chartTitle.value === undefined ? '' : ui.chartTitle.value) : '';
+    return v.replace(/^\s+|\s+$/g, '');
+  }
 
   function viewOpts() {
     var cell = cellSizeValue();
@@ -424,9 +511,15 @@
          「只给 showCodes 不给 cellLabel」→ 退回画数字编号，那样用户要的 A1 就永远不出现。 */
       cellLabel: label,
       padMode: 'normal',
+      /* 角标新格式：【标题】 · 实际 a×b 格 · 共 N 颗 · 预计 X 小时。
+         尺寸与颗数由 render.js 从 cells 现算，这里只给标题与速率。 */
+      captionName: chartTitleValue(),
+      beadRate: BEAD_RATE,
       /* 预览必须 annotate:false —— 绝不能把用量清单画进预览画布！
-         一旦 annotate:true，画布高度会多出下方清单表格的高度，而 hitTestCell 是用
-         (canvas.height - gridH)/2 反推网格原点的：原点会整体下移约 tableH/2，点击落错格。
+         一旦 annotate:true，画布会变高变宽（下方清单表格），而 hitTestCell 要靠画布宽度
+         反推网格原点，宽度方向多出清单列就会把 pad 算错、点击整体偏移。
+         另外 render.js 本来就会在网格下方加一条「成品尺寸/板数」标注带（cap.h），
+         画布高度因此永远不是 2*pad + gridH —— 这也是命中判定只信宽度、不信高度的一半原因。
          用量清单只出现在导出用的离屏画布上（exportViewOpts）。
          不要为了「顺手在预览里也看看清单」把这里改成 true。 */
       annotate: false,
@@ -457,6 +550,8 @@
       highlightLocked: true,
       padMode: 'tight',
       annotate: !!(ui.exportAnnotate && ui.exportAnnotate.checked),
+      captionName: chartTitleValue(),
+      beadRate: BEAD_RATE,
       showNumbers: (label !== 'none'),
       showGrid: true,
       paletteId: state.pattern ? state.pattern.paletteId : paletteIdForOpts()
@@ -467,7 +562,7 @@
     if (!ui.exportHint) return;
     var scale = exportScaleValue();
     var cell = EXPORT_BASE_CELL * scale;
-    var tail = '导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随第 7 组的「显示坐标刻度」。';
+    var tail = '导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随「图纸显示」组的「显示坐标刻度」。';
     var p = state.pattern;
     if (!p) { setText(ui.exportHint, tail); return; }
     setText(ui.exportHint, '当前设置：格子 ' + cell + 'px（24 × ' + scale + '），网格区约 '
@@ -606,9 +701,10 @@
       gridH: dims.h,
       lockAspect: !!(ui.lockAspect && ui.lockAspect.checked),
       preprocess: {
-        brightness: num(ui.brightness, 0),
-        contrast: num(ui.contrast, 0),
-        saturation: num(ui.saturation, 0),
+        /* 送进 pipeline 的必须是生效值（effCurve 压缩后的），不是滑杆原值 */
+        brightness: effSlider(ui.brightness, 0),
+        contrast: effSlider(ui.contrast, 0),
+        saturation: effSlider(ui.saturation, 0),
         autoWB: !!(ui.autoWB && ui.autoWB.checked),
         autoLevels: !!(ui.autoLevels && ui.autoLevels.checked)
       },
@@ -744,6 +840,13 @@
     }
 
     state.pattern = pattern;
+    /* 记下「这一版图纸」实际生效的减色设置：汇总区要拿它和 stats.usedColors 并排显示。
+       不要在这里重新读 DOM —— 用户可能已经改了 #maxColors 但防抖还没重算，
+       那读到的就是「下一次的上限」，会和眼前这张图纸对不上。 */
+    state.patternQuantize = {
+      enabled: !!(opts.quantize && opts.quantize.enabled),
+      maxColors: (opts.quantize && opts.quantize.maxColors) || 0
+    };
     state.viewOpts = viewOpts();
     /* 重新生成 = 新的图纸生命周期：撤销栈里的旧快照尺寸/色表都可能对不上，整栈作废。
        这也正合语义：撤销只覆盖改色与锁定，参数变更（会触发重算）不进历史。 */
@@ -967,8 +1070,9 @@
 
   /* 点击坐标 → 格子下标。
    * 优先使用 Render.hitTest(pattern, canvas, px, py, viewOpts)（若渲染模块提供）；
-   * 否则按「四周对称留白」推断：render.js 的画布为 pad*2 + w*cellPx、(pad, pad) 处起画，
-   * 内置降级渲染器采用同样的对称留白，因此 (canvas 尺寸 - 网格尺寸) / 2 即为原点。
+   * 否则用「画布宽度」反推留白：render.js 与内置降级渲染器都是 (pad, pad) 处起画、
+   * 左右留白相等，且预览为 annotate:false ⇒ 内容宽 == 网格宽，于是
+   * pad = (canvas.width - w*cellPx) / 2，X/Y 共用（见下方为何不能用 height 反推）。
    *
    * 预览缩放（viewZoom）只改 canvas 的 CSS 宽高，不改 canvas.width；
    * getBoundingClientRect() 量到的就是缩放后的 CSS 尺寸，所以 cv.width / rect.width 恰好是 1/zoom，
@@ -992,19 +1096,258 @@
 
     var v = state.viewOpts || {};
     var cell = v.cellSize || v.cellPx || DEFAULT_CELL_PX;
-    var gridW = p.w * cell, gridH = p.h * cell;
-    var offX = (cv.width > gridW) ? Math.floor((cv.width - gridW) / 2) : 0;
-    var offY = (cv.height > gridH) ? Math.floor((cv.height - gridH) / 2) : 0;
-    var col = Math.floor((px - offX) / cell);
-    var row = Math.floor((py - offY) / cell);
+    var gridW = p.w * cell;
+    /* 网格原点 (pad, pad)：两种渲染器都保证「左留白 == 上留白 == 右留白」。
+       但**画布高度不等于 2*pad + gridH**：render.js 会在网格下方追加
+          · annotate 的用量表（预览恒 annotate:false，不出现），
+          · 一行「成品尺寸 / 板数」标注带 cap.h（总是出现，与 annotate 无关）。
+       所以不能用 (cv.height - gridH)/2 反推——那会把原点整体下移 cap.h/2，
+       格子越小越致命（cellPx=8 时正好差一整格，点击全部错行）。
+       画布宽度没有这两条附加带（预览 annotate:false ⇒ 内容宽 == 网格宽），
+       于是 pad 可以从宽度唯一还原，X/Y 共用同一个值。 */
+    var pad = (cv.width > gridW) ? Math.floor((cv.width - gridW) / 2) : 0;
+    var col = Math.floor((px - pad) / cell);
+    var row = Math.floor((py - pad) / cell);
     if (col < 0 || row < 0 || col >= p.w || row >= p.h) return -1;
     return row * p.w + col;
   }
 
+  /* --------------------------------------------------- 标签页（基本 / 高级） */
+
+  /* 只切 hidden：不重建 DOM、不写 innerHTML ⇒ 任何控件状态（滑杆值、勾选、标题文本）都不会丢。 */
+  function setTab(name) {
+    var v = (name === TAB_ADVANCED) ? TAB_ADVANCED : TAB_BASIC;
+    var basic = (v === TAB_BASIC);
+    state.tab = v;
+    if (ui.panelBasic) ui.panelBasic.hidden = !basic;
+    if (ui.panelAdvanced) ui.panelAdvanced.hidden = basic;
+    markTabButton(ui.tabBasic, basic);
+    markTabButton(ui.tabAdvanced, !basic);
+  }
+
+  function markTabButton(btn, on2) {
+    if (!btn) return;
+    toggleCls(btn, 'on', !!on2);
+    if (typeof btn.setAttribute === 'function') {
+      try { btn.setAttribute('aria-selected', on2 ? 'true' : 'false'); } catch (e) { /* 忽略 */ }
+    }
+  }
+
+  /* ------------------------------------------------- 图纸工具（互斥的单选状态） */
+
+  function isTool(v) { return v === TOOL_RECOLOR || v === TOOL_WAND || v === TOOL_ERASER; }
+
+  function toolOf() { return isTool(state.tool) ? state.tool : TOOL_NONE; }
+
+  function toolName(t) {
+    if (t === TOOL_RECOLOR) return '改色';
+    if (t === TOOL_WAND) return '魔术棒';
+    if (t === TOOL_ERASER) return '橡皮刷';
+    return '关闭';
+  }
+
+  /* 工具状态的唯一写入口：三项单选、#recolorMode 复选框、画布光标、锁定提示全部由它对齐。
+     任何时刻只有一个工具生效——勾上改色就自动取消魔术棒 / 橡皮刷的单选，反之亦然。 */
+  function setTool(t, silent) {
+    var v = isTool(t) ? t : TOOL_NONE;
+    var changed = (state.tool !== v);
+    state.tool = v;
+    if (v !== TOOL_ERASER) state.eraseActive = false;   /* 中途换工具：结束这次拖动语义 */
+    setChecked(ui.recolorMode, v === TOOL_RECOLOR);
+    setChecked(ui.toolNone, v === TOOL_NONE);
+    setChecked(ui.toolWand, v === TOOL_WAND);
+    setChecked(ui.toolEraser, v === TOOL_ERASER);
+    if (ui.eraserSize) ui.eraserSize.disabled = (v !== TOOL_ERASER);
+    if (ui.patternCanvas && hasClassList(ui.patternCanvas)) toggleCls(ui.patternCanvas, 'editing', v !== TOOL_NONE);
+    syncToolHint();
+    updateLockInfo();
+    if (changed && !silent) setStatus('图纸工具：' + toolName(v), 'info');
+  }
+
+  function syncToolHint() {
+    if (!ui.toolHint) return;
+    var t = toolOf();
+    var text;
+    if (t === TOOL_WAND) {
+      text = '魔术棒：点击图纸上的一格，会删掉与它上下左右相连（不斜连）、色号相同的整片区域。单次最多擦除 ' + WAND_MAX + ' 格。';
+    } else if (t === TOOL_ERASER) {
+      text = '橡皮刷：在图纸上按住拖动即可擦掉划过的格子（当前 ' + brushSizeValue() + ' × ' + brushSizeValue()
+        + '，越界自动裁剪）。整个一次拖动只算一步撤销。';
+    } else if (t === TOOL_RECOLOR) {
+      text = '当前工具：改色（在上方色板里选目标色号后点击格子）。要抠图请改选「魔术棒」或「橡皮刷」。';
+    } else {
+      text = '未开启任何图纸工具：点击格子不会有任何改动。擦掉的格子会置空并锁定，重新生成时保持为空。';
+    }
+    setText(ui.toolHint, text);
+  }
+
+  function brushSizeValue() {
+    var v = Math.round(num(ui.eraserSize, 1));
+    return (v === 3 || v === 5) ? v : 1;
+  }
+
+  /* 刷子覆盖的下标：以落点为中心对齐，越界直接裁掉（不环绕、不折行） */
+  function brushIndices(p, idx) {
+    var size = brushSizeValue();
+    if (size <= 1) return [idx];
+    var half = (size - 1) / 2;
+    var x = idx % p.w;
+    var y = (idx - x) / p.w;
+    var out = [];
+    for (var dy = -half; dy <= half; dy++) {
+      var yy = y + dy;
+      if (yy < 0 || yy >= p.h) continue;
+      for (var dx = -half; dx <= half; dx++) {
+        var xx = x + dx;
+        if (xx < 0 || xx >= p.w) continue;
+        out.push(yy * p.w + xx);
+      }
+    }
+    return out;
+  }
+
+  /* locked 缺失 / 长度不符时补齐：抠图必须能写下 locked[idx]=1（持久化的关键） */
+  function ensureLocked(p) {
+    if (!p || !p.cells) return;
+    if (p.locked && p.locked.length === p.cells.length) return;
+    var a = [];
+    for (var i = 0; i < p.cells.length; i++) a.push((p.locked && p.locked[i]) ? 1 : 0);
+    p.locked = a;
+  }
+
+  /* 把一组下标置为空 + 锁定；返回真正改变的格数（已经是空的格子不重复计） */
+  function blankCells(p, list) {
+    var n = 0;
+    for (var i = 0; i < list.length; i++) {
+      var idx = list[i];
+      if (idx < 0 || idx >= p.cells.length) continue;
+      if (p.cells[idx] === EMPTY_CELL) continue;
+      p.cells[idx] = EMPTY_CELL;
+      if (p.locked) p.locked[idx] = 1;
+      n++;
+    }
+    return n;
+  }
+
+  /* 擦除的统一收尾：清掉零颗色号 → 重算用量 → 重绘 + 刷新图例 / 汇总 / 锁定计数 */
+  function finishErase(count) {
+    var p = state.pattern;
+    if (!p) return;
+    pruneUnusedColors(p);
+    recount(p);
+    renderPattern();
+    renderLegend();
+    renderSummary();
+    syncRecolorPicker(p);
+    updateLockInfo();
+    syncUndoButton();
+    setStatus('已擦除 ' + count + ' 格（这些格子已置空并锁定，重新生成时保持为空）', 'ok');
+  }
+
+  /* 魔术棒：四连通（上下左右，不斜连）洪泛；条件是与起点同色号且非空。
+     超过 WAND_MAX 格只擦前 WAND_MAX 格并提示，避免一张大图点一下就卡死。 */
+  function wandErase(idx) {
+    var p = state.pattern;
+    if (!p || !p.cells) { setStatus('尚未生成图纸', 'warn'); return 0; }
+    if (idx < 0 || idx >= p.cells.length) return 0;
+    var color = p.cells[idx];
+    if (color === EMPTY_CELL) { setStatus('这一格已经是空的，魔术棒没有可擦除的连通区域', 'warn'); return 0; }
+    var w = p.w, h = p.h;
+    var seen = {};
+    var q = [idx];
+    var head = 0;
+    var region = [];
+    var truncated = false;
+    seen[idx] = 1;
+    while (head < q.length) {
+      if (region.length >= WAND_MAX) { truncated = true; break; }
+      var cur = q[head++];
+      region.push(cur);
+      var x = cur % w;
+      var y = (cur - x) / w;
+      if (x > 0) pushNeighbor(cur - 1);
+      if (x < w - 1) pushNeighbor(cur + 1);
+      if (y > 0) pushNeighbor(cur - w);
+      if (y < h - 1) pushNeighbor(cur + w);
+    }
+    function pushNeighbor(j) {
+      if (seen[j]) return;
+      if (j < 0 || j >= p.cells.length) return;
+      if (p.cells[j] !== color) return;      /* 同色号且非空（color 本身非空） */
+      seen[j] = 1;
+      q.push(j);
+    }
+    if (!region.length) return 0;
+    ensureLocked(p);
+    pushHistory();                           /* 快照必须在改动之前取 */
+    var n = blankCells(p, region);
+    if (!n) { state.history.pop(); syncUndoButton(); return 0; }
+    finishErase(n);
+    if (truncated) {
+      setStatus('已擦除 ' + n + ' 格：连通区域超过单次上限 ' + WAND_MAX + ' 格，本次只擦除了前 ' + WAND_MAX
+        + ' 格，可再次点击继续。', 'warn');
+    }
+    return n;
+  }
+
+  /* 橡皮刷：pointerdown 起手 → pointermove 连续擦除 → pointerup 统一收尾。
+     整段拖动只在 pointerdown 快照一次；move 期间只重绘（不写历史、不 recount），让用户即时看到效果。 */
+  function onEraseDown(evt) {
+    if (toolOf() !== TOOL_ERASER) return;
+    var p = state.pattern;
+    if (!p || !p.cells) { setStatus('尚未生成图纸', 'warn'); return; }
+    var idx = hitTestCell(evt);
+    if (idx < 0) return;
+    ensureLocked(p);
+    var list = brushIndices(p, idx);
+    var any = false;
+    for (var i = 0; i < list.length; i++) { if (p.cells[list[i]] !== EMPTY_CELL) { any = true; break; } }
+    if (!any) return;                        /* 起手就全是空的：不占一步历史 */
+    state.eraseActive = true;
+    state.eraseCount = 0;
+    pushHistory();                           /* 一次拖动 = 一步撤销 */
+    state.eraseCount += blankCells(p, list);
+    scheduleRender();                        /* 即时看到效果（按帧合并，不在 move 里重复重绘） */
+    if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+    var cv = ui.patternCanvas;
+    if (cv && typeof cv.setPointerCapture === 'function' && evt && evt.pointerId !== undefined && evt.pointerId !== null) {
+      try { cv.setPointerCapture(evt.pointerId); } catch (e) { /* 某些环境不支持，忽略 */ }
+    }
+  }
+
+  function onEraseMove(evt) {
+    if (!state.eraseActive) return;
+    var p = state.pattern;
+    if (!p || !p.cells) return;
+    var idx = hitTestCell(evt);
+    if (idx < 0) return;
+    var n = blankCells(p, brushIndices(p, idx));
+    if (n > 0) { state.eraseCount += n; scheduleRender(); }
+  }
+
+  function onEraseUp() {
+    if (!state.eraseActive) return;
+    state.eraseActive = false;
+    var n = state.eraseCount;
+    state.eraseCount = 0;
+    if (!n) { syncUndoButton(); return; }
+    finishErase(n);
+  }
+
   function onPatternClick(evt) {
-    if (!ui.recolorMode || !ui.recolorMode.checked) return;
     var p = state.pattern;
     if (!p) { setStatus('尚未生成图纸', 'warn'); return; }
+    var tool = toolOf();
+    /* 橡皮刷完全由 pointerdown/move/up 驱动：这里什么都不做，免得一次拖动被算成两步 */
+    if (tool === TOOL_ERASER) return;
+    if (tool === TOOL_WAND) {
+      var wi = hitTestCell(evt);
+      if (wi < 0) { setStatus('点击位置不在图纸网格内（可调大「格子像素大小」后重试）', 'warn'); return; }
+      wandErase(wi);
+      return;
+    }
+    if (tool !== TOOL_RECOLOR) return;       /* 未开启任何工具：点击不改动图纸 */
+
     var idx = hitTestCell(evt);
     if (idx < 0) { setStatus('点击位置不在图纸网格内（可调大「格子像素大小」后重试）', 'warn'); return; }
     if (evt && (evt.altKey || evt.shiftKey)) {
@@ -1044,10 +1387,11 @@
     }
     state.lockCount = n;
     if (!ui.lockInfo) return;
-    var editing = !!(ui.recolorMode && ui.recolorMode.checked);
+    var tool = toolOf();
     var lockOn = !(ui.lockToggle && !ui.lockToggle.checked);
     var text = '已锁定 ' + n + ' 格';
-    if (editing) text += '（改色模式已开启' + (lockOn ? '，点击后自动锁定' : '，点击不锁定') + '）';
+    if (tool === TOOL_RECOLOR) text += '（改色模式已开启' + (lockOn ? '，点击后自动锁定' : '，点击不锁定') + '）';
+    else if (tool !== TOOL_NONE) text += '（当前工具：' + toolName(tool) + '，擦掉的格子会自动锁定）';
     setText(ui.lockInfo, text);
   }
 
@@ -1319,7 +1663,7 @@
          （内置渲染器同样会撑爆画布），保留旧内容并给出明确提示。 */
       if (!fell && res && res.ok === false) {
         state.renderTooLarge = true;
-        setStatus('预览无法渲染：' + renderFailReason(res) + '（请调小第 7 组的「格子像素大小」）', 'warn');
+        setStatus('预览无法渲染：' + renderFailReason(res) + '（请调小「图纸显示」组的「格子像素大小」）', 'warn');
         applyViewZoom();
         return;
       }
@@ -1332,7 +1676,7 @@
     if (!fell && (!cv.width || cv.width < 2)) { fell = true; fallbackDrawPattern(cv, p, v); }
     state.renderFallback = fell;
     if (hasClassList(cv)) {
-      toggleCls(cv, 'editing', !!(ui.recolorMode && ui.recolorMode.checked));
+      toggleCls(cv, 'editing', toolOf() !== TOOL_NONE);
     }
     applyViewZoom();
   }
@@ -1346,9 +1690,10 @@
   }
 
   /* 内置降级渲染：render.js 缺失或抛错时仍能看到图纸（不依赖任何外部模块）。
-     预览布局与 render.js 一致：四周对称留白 pad，网格从 (pad, pad) 起画，
-     这样 hitTestCell 的「对称余量」推断对两种渲染器都精确成立。
-     导出（padMode:'tight' + annotate）会额外留出清单栏，但那只走导出路径，与命中判定无关。 */
+     预览布局与 render.js 一致：左右上下留白都是 pad，网格从 (pad, pad) 起画，
+     于是 hitTestCell 的「pad = (画布宽 - w*cellPx)/2」推断对两种渲染器都精确成立。
+     导出（padMode:'tight' + annotate）会额外留出清单栏，但那只走导出路径，与命中判定无关；
+     预览恒 annotate:false，所以宽度方向不会有清单列、高度方向也不会有表格。 */
   function fallbackPad(v, cell, p) {
     if (v.showRuler) return RULER_PAD;
     if (v.padMode !== 'tight') return RULER_PAD;
@@ -1508,15 +1853,42 @@
     var s = p.stats || {};
     var total = (s.total !== null && s.total !== undefined) ? s.total : countBeads(p);
     var used = (s.usedColors !== null && s.usedColors !== undefined) ? s.usedColors : ((p.counts || []).length);
+    /* 减色设置取「生成这张图纸时真正生效的值」；极端情况下（没有记录）才回落到当前设置 */
+    var q = state.patternQuantize || quantizeOpts();
     var html = '';
     html += summaryRow('总颗数', total + ' 颗');
     html += summaryRow('用色数', used + ' 色');
+    /* 只有真的启用了减色才有「上限」可言；没启用就不显示这一行，也不假装有个数字 */
+    if (q && q.enabled) html += summaryRow('减色上限', q.maxColors + ' 色');
     html += summaryRow('成品尺寸', fmt1(s.cmW) + ' × ' + fmt1(s.cmH) + ' cm');
     html += summaryRow('拼板', ((s.boardX !== null && s.boardX !== undefined) ? s.boardX : '—')
       + ' × ' + ((s.boardY !== null && s.boardY !== undefined) ? s.boardY : '—') + ' 板');
     html += summaryRow('图纸格数', p.w + ' × ' + p.h);
     html += summaryRow('色卡', p.paletteId || '—');
+    var note = quantizeNote(q, used);
+    if (note) html += '<p class="hint">' + esc(note) + '</p>';
     ui.summaryBox.innerHTML = html;
+  }
+
+  /* 「用色数」与「减色上限」对不上时，用一句不撒谎的话解释差额。
+   *
+   * 为什么只做中性文案、不做原因归因：要把差额拆成「原图可区分的颜色本来就少」与
+   * 「算法没把上限用满」，需要量化器实际选中的色数（pipeline 里那个 qr.used.length）或
+   * 「最近邻可达色号数」；而 Pattern 契约里只有 stats.usedColors 一个数，
+   * 没有任何可达色数 / 量化器选色数的字段。从外部重新跑一遍去猜是被禁止的，
+   * 而归错因（把算法损失说成「原图颜色少」）比少说一句更糟 —— 所以这里只陈述
+   * 「上限保证的是什么」和「实际受哪些限制」，不指认具体是哪一种。
+   * 判据一旦进契约（例如 stats 暴露量化器选色数），再在这里拆成两条更精确的文案。 */
+  function quantizeNote(q, used) {
+    if (!q || !q.enabled) return '';        /* 没启用减色 = 没有上限，也就没有差额可解释 */
+    if (!(used > 0) || !(q.maxColors > 0)) return '';
+    if (used === q.maxColors) return '';    /* 正好用满，没有差额 */
+    if (used > q.maxColors) {
+      return '实际用色（' + used + ' 色）已超过色数上限 ' + q.maxColors + ' 色：'
+        + '上限只约束算法的自动减色，手动改色新增的色号不受它限制。';
+    }
+    return '实际用色 ' + used + ' 色，少于色数上限 ' + q.maxColors + ' 色。'
+      + '减色保证的只是「不超过上限」，实际用色受色卡与原图色彩分布限制，可能少于上限。';
   }
 
   /* ----------------------------------------------------------- 预览缩放 */
@@ -1925,6 +2297,7 @@
     state.srcW = Math.round(w);
     state.srcH = Math.round(h);
     state.pattern = null;
+    state.patternQuantize = null;     /* 图纸没了，减色上限的记录也一起清掉 */
     state.history.length = 0;         /* 换图 = 新图纸生命周期 */
     state.recolor.selected = '';
     if (state.srcEdit && typeof state.srcEdit.setSource === 'function') {
@@ -2025,10 +2398,17 @@
 
   /* ------------------------------------------------------------- 事件绑定 */
 
+  /* 标题只影响角标（渲染层的事）：走 scheduleRender，绝不触发重算 */
+  function onChartTitleChange() {
+    scheduleRender();
+  }
+
   function onControlInput(id) {
     if (id === 'viewZoom') { setViewZoom(num(ui.viewZoom, ZOOM_DEFAULT)); return; }
-    syncLabels();
+    /* touched 标记必须在 syncLabels() 之前：syncLabels → syncMaxColorsHint → quantizeOpts()
+       读的就是它，晚一步的话「第一次改色数上限时小字还显示 pipeline 默认值」。 */
     if (id === 'maxColors') state.touched.maxColors = true;
+    syncLabels();
     if (id === 'cellSize') { scheduleRender(); return; }
     if (id === 'gridW' || id === 'gridH') normalizeDims(id);
     scheduleRegenerate(DEBOUNCE_MS);
@@ -2039,11 +2419,9 @@
     if (id === 'showRuler') { scheduleRender(); syncExportHint(); return; }
     if (id === 'cellLabelMode') { syncCellLabelHint(); scheduleRender(); return; }
     if (id === 'recolorMode') {
+      setTool(ui.recolorMode && ui.recolorMode.checked ? TOOL_RECOLOR : TOOL_NONE);
       renderPattern();
       updateLockInfo();
-      setStatus(ui.recolorMode && ui.recolorMode.checked
-        ? '改色模式已开启：点击图纸格子即可改成目标色号'
-        : '改色模式已关闭', 'info');
       return;
     }
     if (id === 'lockToggle') { updateLockInfo(); return; }
@@ -2132,6 +2510,7 @@
     applyViewZoom();
     syncLabels();
     syncEnabledState();
+    setTool(DEFAULTS.recolorMode ? TOOL_RECOLOR : TOOL_NONE, true);   /* 工具状态跟着一起复位 */
     state.viewOpts = viewOpts();
     renderPattern();
     updateLockInfo();
@@ -2140,6 +2519,11 @@
       setStatus('已重置微调参数', 'info');
       scheduleRegenerate(0);
     }
+  }
+
+  function bindToolRadio(id, val) {
+    var el = ui[id];
+    on(el, 'change', function () { if (el && el.checked) setTool(val); });
   }
 
   function bindEvents() {
@@ -2180,6 +2564,27 @@
     /* 事件委托：色板网格与「最近用过」会在每次刷新时重建，逐个绑监听会漏 */
     on(ui.recolorGrid, 'click', onRecolorPick);
     on(ui.recolorRecentRow, 'click', onRecolorPick);
+
+    /* 标签页：只切显隐，切换不重建 DOM ⇒ 控件状态不会丢 */
+    on(ui.tabBasic, 'click', function () { setTab(TAB_BASIC); });
+    on(ui.tabAdvanced, 'click', function () { setTab(TAB_ADVANCED); });
+
+    /* 标题只影响角标：input 走 scheduleRender，不触发重算 */
+    on(ui.chartTitle, 'input', onChartTitleChange);
+    on(ui.chartTitle, 'change', onChartTitleChange);
+
+    /* 抠图工具：三选一与 #recolorMode 共用同一个 state.tool，任何时刻只有一个生效 */
+    bindToolRadio('toolNone', TOOL_NONE);
+    bindToolRadio('toolWand', TOOL_WAND);
+    bindToolRadio('toolEraser', TOOL_ERASER);
+    on(ui.eraserSize, 'change', function () { syncToolHint(); });
+    on(ui.patternCanvas, 'pointerdown', onEraseDown);
+    /* move/up 绑在 document 上：拖到画布外面松手也能正确收尾（画布只负责起手） */
+    if (doc && typeof doc.addEventListener === 'function') {
+      doc.addEventListener('pointermove', onEraseMove);
+      doc.addEventListener('pointerup', onEraseUp);
+      doc.addEventListener('pointercancel', onEraseUp);
+    }
 
     on(ui.btnUndo, 'click', undo);
     on(ui.btnRegenerate, 'click', function () { scheduleRegenerate(0); });
@@ -2240,6 +2645,10 @@
       btnPickFile: byId('btnPickFile'),
       dropHint: byId('dropHint'),
       moduleNotice: byId('moduleNotice'),
+      tabBasic: byId('tabBasic'),
+      tabAdvanced: byId('tabAdvanced'),
+      panelBasic: byId('panelBasic'),
+      panelAdvanced: byId('panelAdvanced'),
       brightness: byId('brightness'),
       brightnessVal: byId('brightnessVal'),
       contrast: byId('contrast'),
@@ -2256,6 +2665,9 @@
       ditherStrengthVal: byId('ditherStrengthVal'),
       quantizeEnabled: byId('quantizeEnabled'),
       maxColors: byId('maxColors'),
+      maxColorsVal: byId('maxColorsVal'),
+      maxColorsHint: byId('maxColorsHint'),
+      preprocessHint: byId('preprocessHint'),
       boardsSelect: byId('boardsSelect'),
       sizePreset: byId('sizePreset'),
       gridW: byId('gridW'),
@@ -2265,6 +2677,7 @@
       paletteMeta: byId('paletteMeta'),
       cellLabelMode: byId('cellLabelMode'),
       cellLabelHint: byId('cellLabelHint'),
+      chartTitle: byId('chartTitle'),
       showRuler: byId('showRuler'),
       cellSize: byId('cellSize'),
       cellSizeVal: byId('cellSizeVal'),
@@ -2274,6 +2687,11 @@
       viewZoomOut: byId('viewZoomOut'),
       viewZoomFit: byId('viewZoomFit'),
       recolorMode: byId('recolorMode'),
+      toolNone: byId('toolNone'),
+      toolWand: byId('toolWand'),
+      toolEraser: byId('toolEraser'),
+      eraserSize: byId('eraserSize'),
+      toolHint: byId('toolHint'),
       recolorScope: byId('recolorScope'),
       recolorSearch: byId('recolorSearch'),
       recolorGrid: byId('recolorGrid'),
@@ -2330,6 +2748,7 @@
     state.recolor.recent = readRecentColors();
     syncRecolorPicker(null);
     applyDefaults(false);
+    setTab(state.tab);               /* 默认停在「基本」页，并让 DOM 与 state.tab 一致 */
     mountSourceEdit();
     bindEvents();
     var mods = describeModules();
@@ -2354,6 +2773,23 @@
     clickCell: onPatternClick,
     hitTestCell: hitTestCell,
     applyRecolor: applyRecolor,
+    effCurve: effCurve,
+    setTab: setTab,
+    setTool: setTool,
+    tool: toolOf,
+    eraserSize: brushSizeValue,
+    wandErase: wandErase,
+    eraseBrushAt: function (idx) {
+      /* 测试 / 脚本入口：按当前刷子大小擦一次（不进历史，调用方自行 pushHistory） */
+      var p = state.pattern;
+      if (!p || !p.cells) return 0;
+      ensureLocked(p);
+      return blankCells(p, brushIndices(p, idx));
+    },
+    finishErase: finishErase,
+    onEraseDown: onEraseDown,
+    onEraseMove: onEraseMove,
+    onEraseUp: onEraseUp,
     undo: undo,
     setViewZoom: setViewZoom,
     applyViewZoom: applyViewZoom,

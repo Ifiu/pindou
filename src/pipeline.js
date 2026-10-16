@@ -33,9 +33,15 @@
  * cells 下标全量重映射，并继承 locked 标记；尺寸与上一张不一致时忽略锁定并把原因写进 warnings。
  * 约定外的 opts.locks / keepLocks 本模块一律忽略，不做任何处理。
  *
- * 【已知边界】锁定无法表达「空格」：上一张图里 cells[i] === 65535 且 locked[i] === 1 时，
- * snapshotLockedCode 因下标越界返回 null（见其第 3 行守卫），该格会按新参数正常参与填充，
- * 而不会保留为空格。app.js 的点击改色总是先给该格赋一个色号，所以 UI 路径走不到这个边界。
+ * 【锁定语义：两类，且优先级固定】上一张图里 locked[i] 为真的格子分两类，都按原样保留：
+ *   ① 锁定为空——snapshotLockedEmpty(i) 为真：上一张 cells[i] === 65535（空格）。
+ *      本次必须仍为 65535，且 locked[i] === 1。「抠图」（擦掉背景/多余格）依赖这一类：
+ *      擦掉的格子在改参数重新生成后必须仍然是空的，否则抠图结果会被重新填色。
+ *   ② 锁定色号——snapshotLockedCode(i) 返回色号：上一张 cells[i] 是有效色号下标。
+ *      本次仍为该色号，即使它被减色量化掉（见下方「锁定色号即使被减色丢掉也会并入 colors」）。
+ * 两类互斥（cells[i] === 65535 不是任何颜色的下标），但判定顺序仍然显式固定为
+ *   ① 锁定为空 > ② 锁定色号 > ③ 新图算出空格 > ④ 新图算出色号（命中即停，前者覆盖后者）。
+ * 实现位置：扫描见 buildPattern「锁定格」段，落格见其「全量重映射」段的注释。
  *
  * 【核心决策 2】编号与排序规则（冻结，最易崩的地方）
  * Pattern.colors 恒按「色号自然序」排列：组序固定 A,B,C,D,E,F,G,H,M，组内按数字升序
@@ -460,10 +466,22 @@
     return null;
   }
 
+  /**
+   * 「锁定为空」探测：上一张图里 locked[i] 为真且 cells[i] 是空格标记。
+   * 与 snapshotLockedCode 严格互斥——空格没有色号，有色号就不是空格。
+   */
+  function snapshotLockedEmpty(prev, i) {
+    if (!prev || !prev.locked || !prev.locked[i]) return false;
+    if (!prev.cells || typeof prev.cells.length !== 'number') return false;
+    return prev.cells[i] === EMPTY;
+  }
+
+  /** 「锁定色号」探测：返回色号字符串；不是锁定色号（含「锁定为空」）返回 null。 */
   function snapshotLockedCode(prev, i) {
     if (!prev || !prev.locked || !prev.locked[i]) return null;
     if (!prev.cells || !prev.colors) return null;
     var ci = prev.cells[i];
+    if (ci === EMPTY) return null;         // 空格走 snapshotLockedEmpty，这里不是色号
     if (!(ci >= 0 && ci < prev.colors.length)) return null;
     var c = prev.colors[ci];
     if (!c || c.code === undefined || c.code === null) return null;
@@ -528,8 +546,9 @@
       cells = new Uint16Array(n);
     }
 
-    /* 锁定格：并入色号 → 自然序排序 → 全量重映射下标 */
-    var forcedCode = new Array(n);            // 只对锁定格有值
+    /* 锁定格：① 锁定为空 / ② 锁定色号 → 并入色号 → 自然序排序 → 全量重映射下标 */
+    var forcedCode = new Array(n);            // 只对「锁定色号」的格有值
+    var lockedEmpty = new Uint8Array(n);      // 只对「锁定为空」的格为 1
     var locked = new Uint8Array(n);
     var prev = o.prevPattern;
     if (prev) {
@@ -538,6 +557,8 @@
         && prev.cells.length === n && prev.colors);
       if (sameSize) {
         for (var s = 0; s < n; s++) {
+          // 判定顺序＝契约优先级：先 ① 锁定为空，再 ② 锁定色号（两类互斥，顺序仍显式固定）
+          if (snapshotLockedEmpty(prev, s)) { lockedEmpty[s] = 1; locked[s] = 1; continue; }
           var code = snapshotLockedCode(prev, s);
           if (code === null) continue;
           forcedCode[s] = code;
@@ -563,9 +584,12 @@
       return idx;
     }
     if (redList) {
-      // 只登记「真正被格点用到」的色号：未被用到的色号不进 colors（colors.length === counts.length 依赖这一点）
+      // 只登记「真正被格点用到」的色号：未被用到的色号不进 colors（colors.length === counts.length 依赖这一点）。
+      // 必须跳过两类「最终颜色不取自新图分类」的格子，否则会在 colors 里留下 0 颗的条目：
+      //   · 锁定为空：最终是空格（抠图后某色号可能因此一颗不剩）
+      //   · 锁定色号：最终是强制色号（由下面第二个循环登记），其新图分类结果作废
       for (var m = 0; m < n; m++) {
-        if (empty[m]) continue;
+        if (empty[m] || lockedEmpty[m] || forcedCode[m] !== undefined) continue;
         ensure(redList[cells[m]]);
       }
     }
@@ -585,9 +609,12 @@
     // 3) 全量重映射：cells 下标必须依然指向正确的色号
     var finalCells = new Uint16Array(n);
     for (var z = 0; z < n; z++) {
-      // 锁定格优先于空格判定：用户锁了这格就说明他要求这里保留这颗豆
-      // （边界：只有「锁住一个有豆的格」才走到这里；锁一个空格无法表达，见 snapshotLockedCode）
-      if (forcedCode[z]) { finalCells[z] = byCode.get(forcedCode[z]); continue; }
+      // 判定顺序＝契约优先级 ①→④，命中即停，前者覆盖后者：
+      //   ① 锁定为空：优先级最高，压过下面所有判定——抠掉的背景格必须保持空格
+      //   ② 锁定色号：用户锁了这格就说明他要求这里保留这颗豆（即便新图在这格算出的是空格）
+      //   ③ 新图算出空格   ④ 新图算出色号
+      if (lockedEmpty[z]) { finalCells[z] = EMPTY; continue; }
+      if (forcedCode[z] !== undefined) { finalCells[z] = byCode.get(forcedCode[z]); continue; }
       if (empty[z]) { finalCells[z] = EMPTY; continue; }
       var old = cells[z];
       finalCells[z] = byCode.get(String(redList[old].code));

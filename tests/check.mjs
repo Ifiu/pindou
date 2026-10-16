@@ -541,10 +541,15 @@ eq('边界 | 0 尺寸栅格 quantize 返回空 used', CK.quantize(new Float32Arr
 startGroup('第 4 组 · 渲染（Render）');
 
 /** Mock 2D context：记录每次绘图调用及其当时的 fillStyle / lineWidth；跟踪当前路径。 */
+/* 角标独占色：写死字面量，**不从 render.js 读**（读了就是自证）。
+   与 src/render.js 的 C.caption 必须一致；不一致时本组末尾的独占色断言会红。 */
+const CAPTION_INK = '#616B7A';
 function makeMockCanvas() {
-  // 图纸上有三类文字：格内标签/编号、坐标刻度、左下角尺寸标注。标注单独归到 rec.caption，
-  // 这样断言里的 rec.fillText 仍然精确表示「标签 + 刻度」这两类，不会被标注污染计数。
-  const CAPTION_RE = /格 · \d+ × \d+ 块板 · 成品约 [\d.]+ × [\d.]+ cm$/;
+  // 图纸上有三类文字：格内标签/编号、坐标刻度、左下角角标。角标单独归到 rec.caption，
+  // 这样断言里的 rec.fillText 仍然精确表示「标签 + 刻度」这两类，不会被角标污染计数。
+  // 归类按「独占颜色」而不是文字格式：角标文案已经改过两次，每次按文本正则归类都会连锁打红
+  // 几十条与角标无关的计数断言。C.caption 是 render.js 里角标独占的写法颜色，
+  // 不与格内标签 / 坐标刻度 / 用量块复用（第 4 组末尾有独占色的独立断言兜底）。
   const rec = { fillRect: [], fillText: [], caption: [], strokes: [], fills: [], strokeRect: [], drawImage: [], roundRect: [], save: 0, restore: 0 };
   const ctx = {
     fillStyle: '#000000',
@@ -562,7 +567,7 @@ function makeMockCanvas() {
     drawImage(...a) { rec.drawImage.push(a); },
     fillText(t, x, y) {
       const item = { text: String(t), x, y, fillStyle: String(this.fillStyle), font: this.font, textAlign: this.textAlign, textBaseline: this.textBaseline };
-      if (CAPTION_RE.test(item.text)) rec.caption.push(item); else rec.fillText.push(item);
+      if (String(item.fillStyle) === CAPTION_INK) rec.caption.push(item); else rec.fillText.push(item);
     },
     beginPath() { this._path = []; },
     moveTo(x, y) { this._path.push(['M', x, y]); },
@@ -727,7 +732,7 @@ eq('drawPattern | 无 getContext 的宿主 cellsDrawn === 0', rBad.cellsDrawn, 0
 eq('drawPattern | 无 getContext 的宿主 labelsDrawn === false', rBad.labelsDrawn, false);
 eq('drawPattern | 无 getContext 的宿主 width/height = 0', [rBad.width, rBad.height], [0, 0]);
 eq('drawPattern | 无 getContext 的宿主 width/height 未写进宿主对象', [cvBad.width, cvBad.height], [0, 0]);
-ok('drawPattern | 返回对象含冻结契约的 6 个键', ['ok', 'cellsDrawn', 'labelsDrawn', 'labelsSuppressed', 'labelMinPx', 'width', 'height', 'codesDrawn'].every((k) => k in rBad), Object.keys(rBad).join(','));
+ok('drawPattern | 返回对象含冻结契约的 9 个键（新增 captionDrawn）', ['ok', 'cellsDrawn', 'labelsDrawn', 'labelsSuppressed', 'labelMinPx', 'width', 'height', 'codesDrawn', 'captionDrawn'].every((k) => k in rBad), Object.keys(rBad).join(','));
 eq('drawPattern | codesDrawn 是 labelsDrawn 的别名', rBad.codesDrawn, rBad.labelsDrawn);
 
 /* 真实 Pattern 的渲染整合（刻度开、标签默认 mode = code） */
@@ -867,7 +872,7 @@ capPat.stats = { total: 0, usedColors: 0, boardX: 99, boardY: 99, cmW: 999, cmH:
 const rCap = Render.drawPattern(capPat, cvCap, { cellPx: 20, cellLabel: 'none', padMode: 'tight', annotate: false });
 eq('尺寸标注 | 恰好画一次', cvCap._rec.caption.length, 1);
 const capItem = cvCap._rec.caption[0] || { text: '', x: -1, y: -1, textAlign: '', textBaseline: '' };
-eq('尺寸标注 | 文字全部由 pattern 推导（stats 故意写错 99 块板 / 999cm 也不受影响）', capItem.text, '7 × 4 格 · 1 × 1 块板 · 成品约 1.8 × 1.0 cm');
+eq('尺寸标注 | 文字全部由 pattern 推导（stats 故意写错 99 板 / 999cm 也不受影响）', capItem.text, '实际 7×4 格 · 共 28 颗');
 eq('尺寸标注 | 左对齐', capItem.textAlign, 'left');
 eq('尺寸标注 | 顶对齐（便于按底边定位）', capItem.textBaseline, 'top');
 const capPad = (cvCap.width - 7 * 20) / 2;
@@ -881,7 +886,201 @@ eq('尺寸标注 | 开用量块时也画一次', cvCapAnn._rec.caption.length, 1
 const capItem2 = cvCapAnn._rec.caption[0] || { y: -1 };
 const chipTopY = Math.min.apply(null, cvCapAnn._rec.fills.filter((f) => f.fillStyle === '#F5F7FA').map((f) => f.path[0][2]));
 ok('尺寸标注 | 开用量块时标注在用量块【下方】（不重叠）', capItem2.y >= chipTopY + 24, capItem2.y + ' vs chips@' + chipTopY);
-eq('尺寸标注 | 标注不混进「标签 + 刻度」的计数', cvCapAnn._rec.fillText.some((t) => /块板/.test(String(t.text))), false);
+eq('尺寸标注 | 标注不混进「标签 + 刻度」的计数', cvCapAnn._rec.fillText.some((t) => /共 \d+ 颗/.test(String(t.text))), false);
+
+/* ═════════════ 角标（新格式 + 分段降级 + captionDrawn）═════════════════
+   新格式：【标题 ·】实际 a×b 格 · 共 N 颗【· 预计 X 小时 / X 分钟】
+   —— 已无板数、无成品 cm。尺寸 = 非空格子包围盒；颗数 = 非空格子数；
+   时长 = count / beadRate，不足 1 小时且分钟取整后 < 60 才写分钟（不出现「60 分钟」）。
+   空间不足按固定次序掉段：先掉标题 → 再掉时长 → 再掉尺寸（「共 N 颗」最后幸存）。 */
+
+const capTextsSeen = [];        // 本段画过的每一个角标文字：供「任何算例都不含 60 分钟」整体扫
+function drawCaption(pat, viewOpts) {
+  const cv = makeMockCanvas();
+  const r = Render.drawPattern(pat, cv, viewOpts);
+  const items = cv._rec.caption;
+  const item = items.length ? items[0] : null;
+  const text = item ? String(item.text) : '';
+  if (text) capTextsSeen.push(text);
+  return { cv: cv, r: r, items: items, item: item, text: text };
+}
+/* estTextW 的独立重述：render.js 按 UTF-16 码元算，> 0x2E80（CJK/全角）整字宽，其余 0.62 字宽 */
+function estCaptionW(text, fontPx) {
+  let w = 0;
+  const s = String(text);
+  for (let i = 0; i < s.length; i++) w += (s.charCodeAt(i) > 0x2E80 ? fontPx : 0.62 * fontPx);
+  return w;
+}
+const capFontPx = (item) => parseInt(String(item.font), 10);
+const capPadN = (cellPx) => Math.max(40, cellPx * 3 + 20);   // padOf 的 padMode:'normal' 路径
+const capSegs = (t) => String(t).split(' · ');
+const CAP_TITLE24 = '012345678901234567890123';              // 恰好 24 码点（上限）
+const CAP_TITLE25 = CAP_TITLE24 + '4';                       // 25 码点（必须截断）
+const capBase = { cellPx: 24, cellLabel: 'none', showRuler: false, padMode: 'normal', beadRate: 500 };
+const capOpts = (extra) => Object.assign({}, capBase, extra || {});
+const capPlain = (extra) => Object.assign({ cellPx: 20, cellLabel: 'none', showRuler: false, padMode: 'normal' }, extra || {});
+const capPatOf = (w, h, filled, fn) => {
+  const cells = new Uint16Array(w * h).fill(EMPTY);
+  let n = 0;
+  for (let i = 0; i < w * h; i++) {
+    if (fn ? fn(i % w, Math.floor(i / w)) : i < filled) { cells[i] = 0; n++; }
+  }
+  return { w: w, h: h, colors: [{ code: 'A1', hex: '#FF0000', rgb: [255, 0, 0], group: 'A' }], cells: cells, locked: new Uint8Array(w * h), counts: [], stats: {}, nonEmpty: n };
+};
+const capWide = makePat(116, 116, 2);      // 宽画布，13456 颗
+const capRate = makePat(29, 29, 2);        // 841 颗
+const capSmall = makePat(20, 20, 2);       // 400 颗
+const capTiny = makePat(5, 5, 2);          // 25 颗
+
+/* a) 尺寸 = 非空格子的包围盒（不是 w×h）；颗数 = 非空格子数 */
+const bboxPat = capPatOf(10, 8, 0, (x, y) => x >= 2 && x <= 5 && y >= 3 && y <= 6);
+eq('角标 | 包围盒 | 造出来的算例确实是 16 格非空（10×8 里第 3–6 行 × 第 2–5 列）', bboxPat.nonEmpty, 16);
+const bboxRes = drawCaption(bboxPat, capPlain());
+eq('角标 | 尺寸段 = 非空格子的包围盒（4×4，而不是整张 10×8）', bboxRes.text, '实际 4×4 格 · 共 16 颗');
+eq('角标 | 颗数段 = 自己重数的非空格子数，且 === cellsDrawn',
+  [bboxRes.text.indexOf('共 ' + bboxPat.nonEmpty + ' 颗') >= 0, bboxRes.r.cellsDrawn], [true, bboxPat.nonEmpty]);
+eq('角标 | 全填满时尺寸段 = w×h', drawCaption(makePat(7, 4, 3), capPlain()).text, '实际 7×4 格 · 共 28 颗');
+
+/* b) 时长分支：小时档 / 分钟档 / 接缝（不允许出现「60 分钟」） */
+const capHour = drawCaption(capRate, capPlain({ cellPx: 8, captionName: CAP_TITLE24, beadRate: 500 }));
+ok('角标 | 时长 | 841 颗 @500 → 预计 1.7 小时（回归）', / · 预计 1\.7 小时$/.test(capHour.text), capHour.text);
+const capMin = drawCaption(capSmall, capOpts({ captionName: CAP_TITLE24 }));   // 400 颗 @24
+const capMinM = / · 预计 (\d+) 分钟$/.exec(capMin.text);
+ok('角标 | 时长 | 400 颗 @500 → 不足 1 小时走分钟档（不再有「预计 0.0 小时」）', !!capMinM, capMin.text);
+ok('角标 | 时长 | 分钟数 ≥ 1（不会出现「预计 0 分钟」）', !!capMinM && Number(capMinM[1]) >= 1, capMin.text);
+const cap16 = drawCaption(bboxPat, capPlain({ beadRate: 500 }));               // 16 颗 @20
+eq('角标 | 时长 | 16 颗 @500 → 恰好「实际 4×4 格 · 共 16 颗 · 预计 2 分钟」', cap16.text, '实际 4×4 格 · 共 16 颗 · 预计 2 分钟');
+const cap1 = drawCaption(capPatOf(29, 29, 1), capPlain({ cellPx: 24, beadRate: 500 }));   // 29×29 网格里只放 1 颗
+eq('角标 | 时长 | 1 颗 @500 → 恰好「实际 1×1 格 · 共 1 颗 · 预计 1 分钟」', cap1.text, '实际 1×1 格 · 共 1 颗 · 预计 1 分钟');
+/* 接缝：分钟取整到 60 时必须进位成小时。25×20 = 500 格，前 N 格非空 */
+const seamPat = (n) => capPatOf(25, 20, n);
+const seam = (n) => drawCaption(seamPat(n), capPlain({ cellPx: 24, beadRate: 500 })).text;
+const seamTexts = [494, 495, 496, 497, 499, 500].map((n) => [n, seam(n)]);
+ok('角标 | 时长接缝 | 六个算例的颗数段都写对了（证明算例真的是前 N 格非空）',
+  seamTexts.every((s) => s[1].indexOf('共 ' + s[0] + ' 颗') >= 0), seamTexts.map((s) => s[1]).join(' | '));
+eq('角标 | 时长接缝 | 494 颗 @500 → 预计 59 分钟', / · 预计 59 分钟$/.test(seam(494)), true);
+eq('角标 | 时长接缝 | 495 颗 @500 → 预计 59 分钟（59.4 分钟取整仍是 59）', / · 预计 59 分钟$/.test(seam(495)), true);
+for (const n of [496, 497, 499, 500]) {
+  ok('角标 | 时长接缝 | ' + n + ' 颗 @500 → 预计 1.0 小时（分钟取整到 60 必须进位，不允许「预计 60 分钟」）',
+    / · 预计 1\.0 小时$/.test(seam(n)), seam(n));
+}
+for (const bad of [['0', 0], ['负数 -3', -3], ['NaN', NaN], ['undefined', undefined], ['字符串 "500"', '500'], ['Infinity', Infinity], ['null', null]]) {
+  const badRes = drawCaption(capSmall, capOpts({ captionName: CAP_TITLE24, beadRate: bad[1] }));
+  ok('角标 | 时长 | beadRate=' + bad[0] + ' → 整段省略（无 预计 / 分钟 / 小时 / Infinity / NaN）',
+    /预计|分钟|小时|Infinity|NaN/.test(badRes.text) === false, badRes.text);
+}
+
+/* c) 非空格子为 0 → 没有角标，也不留空白带 */
+const capEmptyPat = capPatOf(10, 8, 0);
+const capEmpty = drawCaption(capEmptyPat, capPlain());
+eq('角标 | 非空格子为 0 → 角标一次 fillText 都不画', [capEmpty.items.length, capEmpty.cv._rec.fillText.length], [0, 0]);
+eq('角标 | 非空格子为 0 → captionDrawn === false', capEmpty.r.captionDrawn, false);
+eq('角标 | 非空格子为 0 → 画布高 = pad*2 + gridH（角标带高度 0）', capEmpty.r.height, capPadN(20) * 2 + 8 * 20);
+eq('角标 | 非空格子为 0 → 比同尺寸「有角标」的图矮一整个角标带 capH', bboxRes.r.height - capEmpty.r.height, capH(20));
+
+/* d) 标题：空 / 全空白 / 非字符串 → 整段省略；> 24 码点 → 23 字 + 「…」 */
+for (const t of [['空串', ''], ['全空白', '   '], ['number', 123], ['null', null], ['undefined', undefined], ['对象', {}]]) {
+  const res = drawCaption(capWide, capOpts({ captionName: t[1] }));
+  eq('角标 | 标题=' + t[0] + ' → 没有标题段（首段就是尺寸段，没有前导「 · 」）', capSegs(res.text)[0], '实际 116×116 格');
+}
+const capT25 = drawCaption(capWide, capOpts({ captionName: CAP_TITLE25 }));
+const capT25Head = capSegs(capT25.text)[0];
+eq('角标 | 标题 | 超 24 码点 → 截断为 23 字 + 「…」', [Array.from(capT25Head).length, capT25Head.slice(-1)], [24, '…']);
+eq('角标 | 标题 | 截断取的是前 23 个码点', capT25Head, CAP_TITLE25.slice(0, 23) + '…');
+eq('角标 | 标题 | 恰好 24 码点 → 原样保留（不截断、不加 …）', capSegs(drawCaption(capWide, capOpts({ captionName: CAP_TITLE24 })).text)[0], CAP_TITLE24);
+eq('角标 | 标题 | 去首尾空白后使用', capSegs(drawCaption(capWide, capOpts({ captionName: '  AB  ' })).text)[0], 'AB');
+
+/* e) 分段降级：先掉标题 → 再掉时长 → 再掉尺寸 */
+const lad1 = drawCaption(capWide, capOpts({ captionName: CAP_TITLE24 }));
+const lad2 = drawCaption(capRate, capPlain({ cellPx: 8, captionName: CAP_TITLE24, beadRate: 500 }));
+const lad3 = drawCaption(capSmall, capPlain({ cellPx: 9, captionName: CAP_TITLE24, beadRate: 500 }));
+const lad4 = drawCaption(capTiny, capPlain({ cellPx: 9, captionName: CAP_TITLE24, beadRate: 500 }));
+eq('角标 | 降级 | 档 1（116×116@24）四段全在', capSegs(lad1.text).length, 4);
+ok('角标 | 降级 | 档 1 的内容 = 标题 + 尺寸 + 颗数 + 时长',
+  capSegs(lad1.text)[0] === CAP_TITLE24 && capSegs(lad1.text)[1] === '实际 116×116 格'
+  && capSegs(lad1.text)[2] === '共 13456 颗' && /^预计 [\d.]+ (小时|分钟)$/.test(capSegs(lad1.text)[3]), lad1.text);
+eq('角标 | 降级 | 档 2（29×29@8 + 标题 + rate500）先掉标题、保时长', lad2.text, '实际 29×29 格 · 共 841 颗 · 预计 1.7 小时');
+eq('角标 | 降级 | 档 3（20×20@9 + 标题 + rate500）再掉时长，只剩尺寸 + 颗数', lad3.text, '实际 20×20 格 · 共 400 颗');
+eq('角标 | 降级 | 档 4（5×5@9）「共 N 颗」是最后幸存者', lad4.text, '共 25 颗');
+eq('角标 | 降级 | 段数逐档递减 4 → 3 → 2 → 1', [lad1, lad2, lad3, lad4].map((x) => capSegs(x.text).length), [4, 3, 2, 1]);
+ok('角标 | 降级 | 次序证据 1：存在「没有标题但有时长」的一档（掉标题早于掉时长）',
+  lad2.text.indexOf(CAP_TITLE24) < 0 && lad2.text.indexOf('预计 ') > 0, lad2.text);
+ok('角标 | 降级 | 次序证据 2：存在「有尺寸但没有时长」的一档（掉时长早于掉尺寸）',
+  /^实际 /.test(lad3.text) && lad3.text.indexOf('预计') < 0, lad3.text);
+const capTinyRes = drawCaption(capTiny, capPlain({ cellPx: 8, captionName: CAP_TITLE24, beadRate: 500 }));
+eq('角标 | 降级 | 极窄（5×5@8）→ captionDrawn === false', capTinyRes.r.captionDrawn, false);
+eq('角标 | 降级 | 极窄 → 角标带高度 0（画布高 = pad*2 + gridH）', capTinyRes.r.height, capPadN(8) * 2 + 5 * 8);
+eq('角标 | 降级 | 极窄 → 与「无标题无速率」的同尺寸算例画布高完全相同',
+  capTinyRes.r.height, drawCaption(capTiny, { cellPx: 8, cellLabel: 'none', showRuler: false, padMode: 'normal' }).r.height);
+
+/* f) 返回值键集：正常 9 键 / too-large 12 键；captionDrawn 的四个 false 分支 */
+const capKeys = (o) => Object.keys(o).sort().join(',');
+eq('角标 | 返回值 | 正常路径 9 键（含 captionDrawn）', capKeys(lad1.r),
+  'captionDrawn,cellsDrawn,codesDrawn,height,labelMinPx,labelsDrawn,labelsSuppressed,ok,width');
+const capBig = Render.drawPattern(capWide, makeMockCanvas(), { cellPx: 256, cellLabel: 'none', padMode: 'normal' });
+eq('角标 | 返回值 | too-large 路径 12 键（含 captionDrawn/needPixels/maxPixels）', capKeys(capBig),
+  'captionDrawn,cellsDrawn,codesDrawn,height,labelMinPx,labelsDrawn,labelsSuppressed,maxPixels,needPixels,ok,reason,width');
+eq('角标 | captionDrawn | 正常画出来 → true', lad1.r.captionDrawn, true);
+eq('角标 | captionDrawn | 降级到不画 → false', capTinyRes.r.captionDrawn, false);
+eq('角标 | captionDrawn | 非空格子为 0 → false', capEmpty.r.captionDrawn, false);
+eq('角标 | captionDrawn | too-large → false', capBig.captionDrawn, false);
+eq('角标 | captionDrawn | invalid-input → false', Render.drawPattern(capSmall, { width: 0, height: 0 }, { cellPx: 20 }).captionDrawn, false);
+
+/* g) 画布宽度不受角标影响（app.js 的 hitTestCell 靠「宽度 - w*cellPx」反推 pad） */
+for (const dims of [[29, 29, 24], [10, 8, 20], [116, 116, 24]]) {
+  const p = makePat(dims[0], dims[1], 2);
+  const wEmpty = drawCaption(p, capOpts({ cellPx: dims[2], captionName: '' })).r.width;
+  const wTitle = drawCaption(p, capOpts({ cellPx: dims[2], captionName: CAP_TITLE24 })).r.width;
+  ok('角标 | 宽度不变量 | ' + dims[0] + '×' + dims[1] + '@' + dims[2] + ' 空标题与 24 字标题 width 完全相同且 > 0',
+    wEmpty === wTitle && wEmpty > 0, wEmpty + ' vs ' + wTitle);
+}
+
+/* h) 角标永不超出画布（x + 估算宽度 <= 画布宽度） */
+const capOverflowCases = [
+  ['116×116@24 四段', capWide, capOpts({ captionName: CAP_TITLE24 })],
+  ['29×29@8 三段', capRate, capPlain({ cellPx: 8, captionName: CAP_TITLE24, beadRate: 500 })],
+  ['20×20@9 两段', capSmall, capPlain({ cellPx: 9, captionName: CAP_TITLE24, beadRate: 500 })],
+  ['5×5@9 一段', capTiny, capPlain({ cellPx: 9, captionName: CAP_TITLE24, beadRate: 500 })],
+  ['20×20@24 分钟档', capSmall, capOpts({ captionName: CAP_TITLE24 })],
+  ['10×8@20 裸算例', bboxPat, capPlain()]
+];
+const capOverflowBad = [];
+for (const c of capOverflowCases) {
+  const res = drawCaption(c[1], c[2]);
+  if (!res.item) { capOverflowBad.push(c[0] + '：没画角标'); continue; }
+  const est = estCaptionW(res.text, capFontPx(res.item));
+  if (!(res.item.x + est <= res.r.width)) capOverflowBad.push(c[0] + '：' + (res.item.x + est) + ' > ' + res.r.width);
+}
+eq('角标 | 永不超出画布：6 个算例里溢出的个数为 0', capOverflowBad.length, 0);
+eq('角标 | 永不超出画布：这 6 个算例都真的画了角标（否则上一条是空转）',
+  capOverflowCases.filter((c) => drawCaption(c[1], c[2]).item !== null).length, capOverflowCases.length);
+
+/* i) 独占色 #616B7A：只出现在角标上，不混进格内标签 / 刻度 / 用量块 */
+const capInkCv = makeMockCanvas();
+const capInkRes = Render.drawPattern(makePat(40, 30, 3), capInkCv,
+  { cellPx: 24, cellLabel: 'code', showRuler: true, annotate: true, padMode: 'normal', captionName: CAP_TITLE24, beadRate: 500 });
+const capOtherTexts = capInkCv._rec.fillText;
+eq('角标 | 独占色 | 角标恰好写一次', capInkCv._rec.caption.length, 1);
+eq('角标 | 独占色 | 角标那次 fillStyle 就是字面量 #616B7A', (capInkCv._rec.caption[0] || {}).fillStyle, '#616B7A');
+eq('角标 | 独占色 | 标签 / 刻度 / 用量块这三类 fillText 里 #616B7A 出现 0 次',
+  capOtherTexts.filter((t) => t.fillStyle === CAPTION_INK).length, 0);
+ok('角标 | 独占色 | 该算例的角标文字确实是新格式（不是把别的东西误当角标）',
+  /^012345678901234567890123 · 实际 40×30 格 · 共 1200 颗 · 预计 /.test(capInkCv._rec.caption[0].text), capInkCv._rec.caption[0].text);
+ok('角标 | 独占色 | 非角标文字确实有三类（颜色种数 ≥ 3，覆盖不是空的）',
+  new Set(capOtherTexts.map((t) => t.fillStyle)).size >= 3,
+  'fillText=' + capOtherTexts.length + ' styles=' + JSON.stringify(Array.from(new Set(capOtherTexts.map((t) => t.fillStyle)))));
+
+/* j) 本段整体扫描：覆盖上面画过的每一个角标文字（不只看某几个算例） */
+const capMinuteNums = capTextsSeen.map((t) => /预计 (\d+) 分钟$/.exec(t)).filter(Boolean).map((m) => Number(m[1]));
+ok('角标 | 整体扫描 | 本段共画过 ' + capTextsSeen.length + ' 个角标，其中分钟档 ' + capMinuteNums.length + ' 个，数值全部落在 1–59',
+  capTextsSeen.length >= 10 && capMinuteNums.length > 0 && capMinuteNums.every((n) => n >= 1 && n <= 59), JSON.stringify(capMinuteNums));
+ok('角标 | 整体扫描 | 任何角标文字都不含「预计 0 分钟」或「预计 60 分钟」',
+  capTextsSeen.every((t) => !/预计 (?:0|60) 分钟/.test(t)),
+  capTextsSeen.filter((t) => /预计 (?:0|60) 分钟/.test(t)).join(' | '));
+ok('角标 | 整体扫描 | 任何角标文字都不含旧格式残留（板 / 块板 / 成品约 / cm）',
+  capTextsSeen.every((t) => !/块板|成品约|cm$/.test(t)),
+  capTextsSeen.filter((t) => /块板|成品约|cm$/.test(t)).join(' | '));
+
 
 /* 面积守卫：先算后画，超限时连画布尺寸都不设置 */
 const cvGuard = makeMockCanvas();
@@ -1048,6 +1247,91 @@ if (!productExists) {
   ok('产物内确实含 src/srcedit.js 段（不只是 src/ 下有这个文件）', typeof srcText['srcedit.js'] === 'string' && bodies[4].includes(bannerText('src/srcedit.js')));
   const srceditInline = bodies[4].replace(/^\n\/\* ===== src\/srcedit\.js ===== \*\/\n/, '').replace(/\n$/, '');
   ok('产物内 srcedit 段与 src/srcedit.js 逐字符相同（原样内联，无改写）', srceditInline === srcText['srcedit.js'].replace(/\s+$/, ''), Buffer.byteLength(srceditInline, 'utf8') + ' vs ' + Buffer.byteLength(srcText['srcedit.js'].replace(/\s+$/, ''), 'utf8'));
+
+  /* ── 产物新鲜度：7 个内联段（ui.html + 6 个模块）逐字节比对 ─────────────
+     真实漏洞：旧套件只比对 srcedit 那一段，于是「src/ 改了但没跑 node build.mjs」
+     照样 50/50 全绿 —— 而产物里的 toolWand / tabBasic / maxColorsVal / effCurve 根本不存在。
+     只在文本上「含有这些代码」的检查等于没有检查，所以这里逐字节比对全部 7 段，
+     并由紧随其后的正向 / 负向对照证明它既会通过、也会红、而且能指出是哪一段。 */
+  const BARE_FILES = BANNERS.map((b) => b.replace(/^src\//, ''));
+  const trimTailText = (s) => String(s).replace(/\s+$/, '');
+  const segmentOpen = (file) => '\n<script>\n' + bannerText('src/' + file) + '\n';
+  /* 段边界：[start, end) —— ui.html 段从 <body>\n 到第 1 个 \n<script>\n；模块段从横幅行之后到 \n</script> */
+  function segmentSpan(text, file) {
+    if (file === 'ui.html') {
+      const bodyAt = text.indexOf('<body>\n');
+      const firstScript = text.indexOf('\n<script>\n');
+      if (bodyAt < 0 || firstScript <= bodyAt) return null;
+      return [bodyAt + '<body>\n'.length, firstScript];
+    }
+    const open = segmentOpen(file);
+    const at = text.indexOf(open);
+    if (at < 0) return null;
+    const start = at + open.length;
+    const end = text.indexOf('\n</script>', start);
+    return end < 0 ? null : [start, end];
+  }
+  function productSegmentReport(text) {
+    const rows = [];
+    for (const file of ['ui.html'].concat(BARE_FILES)) {
+      const src = (file === 'ui.html') ? readSrc('ui.html') : srcText[file];
+      const head = (file === 'ui.html') ? '产物第 0 段（ui.html）' : ('产物第 ' + (BARE_FILES.indexOf(file) + 1) + ' 段（src/' + file + '）');
+      const name = head + ' 与 src/' + file + ' 逐字节相同';
+      if (src === undefined || src === null) { rows.push({ file: file, name: name, ok: false, detail: 'src/' + file + ' 读取失败' }); continue; }
+      const span = segmentSpan(text, file);
+      if (!span) { rows.push({ file: file, name: name, ok: false, detail: '截取失败：产物里找不到该段的边界' }); continue; }
+      const expected = trimTailText(src);
+      const inline = text.slice(span[0], span[1]);
+      const same = inline === expected;
+      rows.push({ file: file, name: name, ok: same, detail: Buffer.byteLength(inline, 'utf8') + ' vs ' + Buffer.byteLength(expected, 'utf8') + ' 字节' + (same ? '' : '（不一致）') });
+    }
+    return { rows: rows, ok: rows.every((r) => r.ok), failed: rows.filter((r) => !r.ok).map((r) => r.file) };
+  }
+  const segRep = productSegmentReport(html);
+  for (const row of segRep.rows) ok(row.name, row.ok, row.detail);
+  ok('产物新鲜度 | 7 个内联段全部与 src/ 逐字节一致（任一段不符 → 上面已逐段报红）', segRep.ok,
+    segRep.ok ? '' : ('不一致的段：' + segRep.failed.join('、') + '（多半是 src/ 改了却没跑 node build.mjs）'));
+  ok('产物新鲜度 | 每个模块段的开口标记在产物里唯一（切削点无歧义）',
+    BARE_FILES.every((f) => html.split(segmentOpen(f)).length - 1 === 1),
+    BARE_FILES.map((f) => f + '×' + (html.split(segmentOpen(f)).length - 1)).join(' '));
+
+  /* 正向对照：把产物里的 render.js 段换成当前 src/ 的内容 → 必须 7 段全绿。
+     证明比对函数在内容一致时确实会通过（不是恒假的假检查）。 */
+  const patchSegment = (text, file, replacement) => {
+    const span = segmentSpan(text, file);
+    return (span && replacement !== null) ? text.slice(0, span[0]) + replacement + text.slice(span[1]) : null;
+  };
+  const freshRenderText = trimTailText(srcText['render.js']);
+  const freshRenderHtml = patchSegment(html, 'render.js', freshRenderText);
+  const segRepFresh = freshRenderHtml === null ? null : productSegmentReport(freshRenderHtml);
+  ok('正向对照 | 把 render.js 段替换成当前 src/render.js 后 7 段全绿（证明比对函数会通过）',
+    !!segRepFresh && segRepFresh.ok, segRepFresh ? ('不一致：' + segRepFresh.failed.join('、')) : '截取失败');
+
+  /* ── 负向对照：在内存里改坏 1 个字节，比对必须报红，并指出是哪一段 ──────
+     没有这几条，就无法区分「全绿是因为产物新鲜」还是「因为比对本身在空转」。 */
+  const flipAt = (text, pos) => text.slice(0, pos) + (text.charAt(pos) === 'X' ? 'Y' : 'X') + text.slice(pos + 1);
+  const dropAt = (text, pos) => text.slice(0, pos) + text.slice(pos + 1);
+  const midOf = (span) => (span ? Math.floor((span[0] + span[1]) / 2) : 0);
+  const ctlAppSpan = segmentSpan(html, 'app.js') || [0, 1];
+  const ctlUiSpan = segmentSpan(html, 'ui.html') || [0, 1];
+  const ctlPalSpan = segmentSpan(html, 'palette.js') || [0, 1];
+  ok('负向对照 | 三个对照组用的段边界都截取到了（否则下面的破坏点落在段外，对照无意义）',
+    !!segmentSpan(html, 'app.js') && !!segmentSpan(html, 'ui.html') && !!segmentSpan(html, 'palette.js'));
+  const repTamperApp = productSegmentReport(flipAt(html, midOf(ctlAppSpan)));
+  const repTamperUi = productSegmentReport(flipAt(html, midOf(ctlUiSpan)));
+  const repTamperPal = productSegmentReport(dropAt(html, midOf(ctlPalSpan)));
+  ok('负向对照 | 改坏 app.js 段 1 个字节 → 总判必须为 false（比对不是空转）', repTamperApp.ok === false, '总判 ' + repTamperApp.ok);
+  eq('负向对照 | 且只报 app.js 这一段（定位精确，其余 6 段仍绿）', repTamperApp.failed, ['app.js']);
+  ok('负向对照 | 改坏 ui.html 段 1 个字节 → 总判必须为 false（旧套件漏掉的正是这一段）', repTamperUi.ok === false, '总判 ' + repTamperUi.ok);
+  eq('负向对照 | 且只报 ui.html 这一段', repTamperUi.failed, ['ui.html']);
+  eq('负向对照 | 从 palette.js 段删掉 1 个字节（长度变化也要抓到）→ 只报 palette.js', repTamperPal.failed, ['palette.js']);
+  ok('负向对照 | 三种破坏各只影响自己那一段（7 段都仍在报，不串段）',
+    repTamperApp.rows.length === 7 && repTamperUi.rows.length === 7 && repTamperPal.rows.length === 7
+    && repTamperApp.failed.length === 1 && repTamperUi.failed.length === 1 && repTamperPal.failed.length === 1,
+    [repTamperApp.failed, repTamperUi.failed, repTamperPal.failed].join(' | '));
+  ok('负向对照 | 未改动的那 6 段在破坏后仍判为一致（说明红的是被改的那一段，不是整体崩）',
+    repTamperApp.rows.filter((r) => r.ok).length === 6 && repTamperUi.rows.filter((r) => r.ok).length === 6,
+    repTamperApp.rows.filter((r) => r.ok).length + ' / ' + repTamperUi.rows.filter((r) => r.ok).length);
 
   // 清掉所有模块全局（含 app.js 可能挂的键），便于后续判断"重新 eval 后新增了什么"
   for (const k of ['PINDOU_PALETTES', 'ColorKit', 'Pipeline', 'Render', 'SourceEdit', 'PindouUI']) delete globalThis[k];
@@ -1448,6 +1732,412 @@ let bareBootThrew = '';
 try { bareWin.PindouUI.boot(); } catch (e) { bareBootThrew = e.message; }
 eq('降级 | 无 DOM 时 boot() 是空操作且不抛', bareBootThrew, '');
 eq('降级 | 无 DOM 时 state().booted === false（确实没启动）', bareWin.PindouUI.state().booted, false);
+
+/* ══════════════════════════════════════════════════════════════════════
+   本轮新需求：双标签页 / 抠图工具 / 预处理非线性压缩 / 图纸标题
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 5.1 双标签页（基本 / 高级）───────────────────────────────────────── */
+const TAB_NEW_IDS = ['tabBasic', 'tabAdvanced', 'panelBasic', 'panelAdvanced', 'maxColorsVal', 'preprocessHint',
+  'chartTitle', 'toolNone', 'toolWand', 'toolEraser', 'eraserSize', 'toolHint'];
+ok('控件清单 | 本轮新增的 12 个 id 全部在 ui.html 里', TAB_NEW_IDS.every((id) => htmlIds.includes(id)), TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 12 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
+eq('控件清单 | ui.html 的 id 总数 = 91（原来 79 + 本轮 12）', htmlIds.length, 91);
+
+const maxColorsTag = (UI_HTML.match(/<input\b[^>]*\bid="maxColors"[^>]*>/) || [''])[0];
+ok('控件 | #maxColors 变成 range（min 2 / max 221 / step 1 / value 24，可拖到色卡上限）',
+  /type="range"/.test(maxColorsTag) && /min="2"/.test(maxColorsTag) && /max="221"/.test(maxColorsTag)
+  && /step="1"/.test(maxColorsTag) && /value="24"/.test(maxColorsTag), maxColorsTag);
+ok('控件 | #maxColors 不再是 type="number"（旧的数字输入已彻底消失）', !/type="number"/.test(maxColorsTag), maxColorsTag);
+eq('控件 | #maxColorsVal 读数存在且 boot 后显示 24（与 Pipeline 默认一致）', String(els.maxColorsVal.textContent), '24');
+ok('控件 | #chartTitle 是文本输入，且在「图纸显示」组之后（属于该组）',
+  /type="text"/.test((UI_HTML.match(/<input\b[^>]*\bid="chartTitle"[^>]*>/) || [''])[0]) && UI_HTML.indexOf('id="chartTitle"') > UI_HTML.indexOf('<h2>图纸显示</h2>'), UI_HTML.indexOf('id="chartTitle"') + ' vs ' + UI_HTML.indexOf('<h2>图纸显示</h2>'));
+ok('控件 | #preprocessHint 落在「预处理」组里', UI_HTML.indexOf('id="preprocessHint"') > UI_HTML.indexOf('<h2>预处理</h2>'));
+ok('控件 | #toolHint 与 #eraserSize 落在「抠图」组里（都在 panelBasic 内、panelAdvanced 之前）',
+  UI_HTML.indexOf('id="toolHint"') > UI_HTML.indexOf('<h2>抠图</h2>') && UI_HTML.indexOf('id="toolHint"') < UI_HTML.indexOf('<div id="panelAdvanced"'));
+
+/* 分组标题：11 个旧标题都去过号，另加「抠图」组 */
+function tabPanelTitles(fromMark, toMark) {
+  const a = UI_HTML.indexOf(fromMark), b = UI_HTML.indexOf(toMark);
+  if (a < 0 || b < 0 || b <= a) return null;
+  return (UI_HTML.slice(a, b).match(/<h2>[^<]*<\/h2>/g) || []).map((s) => s.replace(/<\/?h2>/g, ''));
+}
+const tabBasicTitles = tabPanelTitles('<div id="panelBasic"', '<div id="panelAdvanced"');
+const tabAdvTitles = tabPanelTitles('<div id="panelAdvanced"', '<main id="dropZone"');
+eq('标签页 | 基本页恰好 6 组，且就是这 6 个（新增「抠图」）', tabBasicTitles, ['图片输入', '取色方式', '图纸尺寸', '图纸显示', '抠图', '导出']);
+eq('标签页 | 高级页恰好 6 组，且就是这 6 个', tabAdvTitles, ['预处理', '减色', '色卡版本', '预览缩放', '改色模式', '操作']);
+const tabAllH2 = (UI_HTML.match(/<h2>[^<]*<\/h2>/g) || []).map((s) => s.replace(/<\/?h2>/g, ''));
+ok('标签页 | 全部 ' + tabAllH2.length + ' 个 <h2> 都不存在「数字 · 」序号前缀',
+  tabAllH2.length >= 16 && tabAllH2.every((t) => !/^\s*\d+\s*·/.test(t)), JSON.stringify(tabAllH2));
+ok('标签页 | 旧标题「1 · 图片输入」这类带号标题已彻底消失', !/\d+ · 图片输入/.test(UI_HTML));
+ok('标签页 | 两个面板的静态初始态：基本可见 / 高级带 hidden',
+  !/\shidden(\s|>|=)/.test((UI_HTML.match(/<div\b[^>]*\bid="panelBasic"[^>]*>/) || [''])[0] + ' ')
+  && /\shidden(\s|>|=)/.test((UI_HTML.match(/<div\b[^>]*\bid="panelAdvanced"[^>]*>/) || [''])[0] + ' '),
+  (UI_HTML.match(/<div\b[^>]*\bid="panelAdvanced"[^>]*>/) || [''])[0]);
+
+/* 运行时的默认态：先证明此前没有任何标签按钮被点过，否则下面看到的不是 boot 默认态 */
+eq('标签页 | 前置事实 | 到此刻为止没有点过任何标签按钮（下面看到的就是 boot 默认态）', [els.tabBasic._clicks, els.tabAdvanced._clicks], [0, 0]);
+eq('标签页 | 默认停在基本页：state.tab === "basic"', st.tab, 'basic');
+eq('标签页 | 默认面板显隐：#panelBasic 可见 / #panelAdvanced 隐藏', [els.panelBasic.hidden, els.panelAdvanced.hidden], [false, true]);
+eq('标签页 | 按钮高亮与 aria-selected 与 state.tab 一致',
+  [els.tabBasic.classList.contains('on'), els.tabAdvanced.classList.contains('on'), els.tabBasic.getAttribute('aria-selected'), els.tabAdvanced.getAttribute('aria-selected')],
+  [true, false, 'true', 'false']);
+
+/* 切换：控件值不丢 / 面板不被重建 */
+els.gridW.value = '33';
+els.brightness.value = '40';
+els.quantizeEnabled.checked = false;
+els.chartTitle.value = '标签页标题';
+els.showRuler.checked = false;
+const tabSentinelBasic = makeDomEl('#sentinel-basic');
+const tabSentinelAdv = makeDomEl('#sentinel-adv');
+els.panelBasic.appendChild(tabSentinelBasic);
+els.panelAdvanced.appendChild(tabSentinelAdv);
+const tabChildrenBefore = [els.panelBasic.children.length, els.panelAdvanced.children.length];
+const tabCreatedBefore = dom.created.others.length;
+let tabPanelHtmlWrites = 0;
+for (const p of [els.panelBasic, els.panelAdvanced]) {
+  let raw = p.innerHTML;
+  Object.defineProperty(p, 'innerHTML', {
+    configurable: true,
+    get() { return raw; },
+    set(v) { tabPanelHtmlWrites++; raw = v; }
+  });
+}
+fire(els.tabBasic, 'click');
+eq('标签页 | 点「基本」→ state.tab 与面板显隐同步', [st.tab, els.panelBasic.hidden, els.panelAdvanced.hidden], ['basic', false, true]);
+fire(els.tabAdvanced, 'click');
+eq('标签页 | 点「高级」→ 高级面板可见、基本面板隐藏', [st.tab, els.panelBasic.hidden, els.panelAdvanced.hidden], ['advanced', true, false]);
+eq('标签页 | 切到高级后按钮高亮互换', [els.tabBasic.classList.contains('on'), els.tabAdvanced.classList.contains('on')], [false, true]);
+fire(els.tabBasic, 'click');
+fire(els.tabAdvanced, 'click');
+fire(els.tabBasic, 'click');
+eq('标签页 | 来回切换 5 次后控件值一个都没被重置（滑杆 / 勾选框 / 标题文本）',
+  [els.gridW.value, els.brightness.value, els.quantizeEnabled.checked, els.chartTitle.value, els.showRuler.checked],
+  ['33', '40', false, '标签页标题', false]);
+eq('标签页 | 切换不改写面板 innerHTML（不是重建 DOM）', tabPanelHtmlWrites, 0);
+eq('标签页 | 切换期间没有新建任何元素', dom.created.others.length, tabCreatedBefore);
+eq('标签页 | 面板子节点数不变且是同一个节点（不是重建出来的新副本）',
+  [els.panelBasic.children.length, els.panelAdvanced.children.length, els.panelBasic.children[0] === tabSentinelBasic, els.panelAdvanced.children[0] === tabSentinelAdv],
+  [tabChildrenBefore[0], tabChildrenBefore[1], true, true]);
+fire(els.tabBasic, 'click');
+eq('标签页 | 收尾：回到基本页', st.tab, 'basic');
+els.quantizeEnabled.checked = true;
+els.showRuler.checked = true;
+
+/* ── 5.3 预处理滑杆的非线性压缩（effCurve / 生效值）────────────────────── */
+const EFF_TABLE = [[0, 0], [1, 0], [5, 1], [20, 8], [50, 33], [80, 70], [100, 100], [-50, -33], [-100, -100]];
+eq('预处理压缩 | effCurve 精确值表（含负半轴）', EFF_TABLE.map((p) => ui.effCurve(p[0])), EFF_TABLE.map((p) => p[1]));
+eq('预处理压缩 | effCurve(0) === 0（0 仍映射到 0，重置语义不变）', [ui.effCurve(0), ui.effCurve(-0)], [0, 0]);
+els.brightness.value = '50';
+fire(els.brightness, 'input');
+eq('预处理压缩 | 滑杆 50 → buildOpts 送进 pipeline 的是生效值 33（不是滑杆原值 50）', ui.options().preprocess.brightness, 33);
+eq('预处理压缩 | 读数控件显示生效值（+33，不是 +50）', String(els.brightnessVal.textContent), '+33');
+els.brightness.value = '-50';
+fire(els.brightness, 'input');
+eq('预处理压缩 | 负半轴：滑杆 -50 → 生效 -33', [ui.options().preprocess.brightness, String(els.brightnessVal.textContent)], [-33, '-33']);
+els.contrast.value = '50';
+fire(els.contrast, 'input');
+els.saturation.value = '80';
+fire(els.saturation, 'input');
+eq('预处理压缩 | 对比度 / 饱和度走同一条曲线（50→33、80→70）',
+  [ui.options().preprocess.contrast, ui.options().preprocess.saturation, String(els.contrastVal.textContent), String(els.saturationVal.textContent)],
+  [33, 70, '+33', '+70']);
+els.ditherStrength.value = '50';
+fire(els.ditherStrength, 'input');
+eq('预处理压缩 | ditherStrength 不受压缩影响（50 → opts 0.5，不是 0.33）', ui.options().ditherStrength, 0.5);
+eq('预处理压缩 | 抖动强度读数仍是滑杆原值 50%', String(els.ditherStrengthVal.textContent), '50%');
+dropTimers();
+fire(els.btnResetAdjust, 'click');
+dropTimers();
+eq('预处理压缩 | 重置微调后回到 DEFAULTS.brightness = 0（滑杆 0 与生效值 0 都是 0）',
+  [ui.options().preprocess.brightness, String(els.brightnessVal.textContent)], [0, '0']);
+const effDefMatch = /var DEFAULTS = \{([\s\S]*?)\n  \};/.exec(APP_SRC);
+ok('预处理压缩 | app.js 的 DEFAULTS 字面量能解析出来（下面两条不是空转）', !!effDefMatch, effDefMatch ? '' : '未匹配到 DEFAULTS');
+const effDefText = effDefMatch ? effDefMatch[1] : '';
+const effPipelineQ = globalThis.Pipeline.DEFAULT_OPTS.quantize;
+ok('预处理压缩 | DEFAULTS.quantizeEnabled 与 Pipeline.DEFAULT_OPTS.quantize.enabled 逐字段一致',
+  new RegExp('quantizeEnabled:\\s*' + String(effPipelineQ.enabled)).test(effDefText), effDefText.slice(0, 160));
+ok('预处理压缩 | DEFAULTS.maxColors 与 Pipeline.DEFAULT_OPTS.quantize.maxColors 逐字段一致',
+  new RegExp('maxColors:\\s*' + effPipelineQ.maxColors + '\\b').test(effDefText), effDefText.slice(0, 160));
+eq('预处理压缩 | 没动过减色控件时 options().quantize 就是 pipeline 默认（同一语义只有一份来源）',
+  ui.options().quantize, { enabled: effPipelineQ.enabled, maxColors: effPipelineQ.maxColors });
+
+/* ── 5.2 抠图（魔术棒 / 橡皮刷 / 撤销 / 保护 / 持久化）──────────────────── */
+const erColors = [
+  { code: 'A1', hex: '#FF0000', rgb: [255, 0, 0], group: 'A' },
+  { code: 'B2', hex: '#00FF00', rgb: [0, 255, 0], group: 'B' },
+  { code: 'C3', hex: '#0000FF', rgb: [0, 0, 255], group: 'C' }
+];
+/* 注意：不能用 dropTimers() 丢弃挂起的重渲染 —— scheduleRender 的 renderScheduled 标志只有
+   在回调里才会复位，丢掉定时器会让它永久卡在 true，后面的 scheduleRender 全部变成空操作。
+   需要清场时一律用 erFlushAll()（把排队的回调真的跑掉）。 */
+const erFlushAll = (n) => { for (let i = 0; i < (n || 4); i++) flushTimers(); };
+function erMkPat(w, h, fn) {
+  const cells = new Uint16Array(w * h).fill(EMPTY);
+  for (let i = 0; i < w * h; i++) {
+    const v = fn(i % w, Math.floor(i / w), i);
+    if (v !== null && v !== undefined) cells[i] = v;
+  }
+  return { w: w, h: h, colors: erColors.map((c) => Object.assign({}, c)), cells: cells, locked: new Uint8Array(w * h), counts: [], stats: {} };
+}
+/* 四连通（不斜连）洪泛的独立重述：与 app.js 的 wandErase 无共享代码 */
+function erFlood4(pat, start) {
+  const color = pat.cells[start];
+  const seen = new Set([start]);
+  const q = [start];
+  const out = [];
+  for (let head = 0; head < q.length; head++) {
+    const cur = q[head];
+    out.push(cur);
+    const x = cur % pat.w, y = Math.floor(cur / pat.w);
+    const nb = [];
+    if (x > 0) nb.push(cur - 1);
+    if (x < pat.w - 1) nb.push(cur + 1);
+    if (y > 0) nb.push(cur - pat.w);
+    if (y < pat.h - 1) nb.push(cur + pat.w);
+    for (const j of nb) { if (!seen.has(j) && pat.cells[j] === color) { seen.add(j); q.push(j); } }
+  }
+  return out.sort((a, b) => a - b);
+}
+const erWandPat = erMkPat(9, 5, (x, y) => {
+  if (y === 0 && x <= 2) return 0;        // 区域 A：3 格同色
+  if (y === 4 && x >= 6) return 0;        // 区域 B：同色但与 A 分离
+  if (y === 2) return null;               // 整行空：洪泛也不该跨过它
+  if (y === 1 && x <= 2) return 1;        // 用上色号 1：三个色号都被用到，pruneUnusedColors 才不会平移下标
+  return 2;
+});
+st.pattern = erWandPat;
+st.viewOpts = ui.viewOpts();
+st.history.length = 0;
+const erWandRegion = erFlood4(erWandPat, 1);
+eq('抠图 | 魔术棒 | 独立重算的四连通区域（起点第 1 格）', erWandRegion, [0, 1, 2]);
+const erWandSnap = Array.from(erWandPat.cells);
+const erWandLockSnap = Array.from(erWandPat.locked);
+const erWandReturn = ui.wandErase(1);
+eq('抠图 | 魔术棒 | 返回值 === 独立重算的区域大小', erWandReturn, erWandRegion.length);
+eq('抠图 | 魔术棒 | 区域 A 全部置空', erWandRegion.map((i) => st.pattern.cells[i]), erWandRegion.map(() => EMPTY));
+eq('抠图 | 魔术棒 | 分离的同色区域 B 一格未动（cells）', [42, 43, 44].map((i) => st.pattern.cells[i]), [0, 0, 0]);
+eq('抠图 | 魔术棒 | 分离的同色区域 B 一格未动（locked 也保持 0）', [42, 43, 44].map((i) => st.pattern.locked[i]), [0, 0, 0]);
+const erChangedOutside = [];
+for (let i = 0; i < st.pattern.cells.length; i++) {
+  if (erWandRegion.indexOf(i) >= 0) continue;
+  if (st.pattern.cells[i] !== erWandSnap[i] || st.pattern.locked[i] !== erWandLockSnap[i]) erChangedOutside.push(i);
+}
+eq('抠图 | 魔术棒 | 其余格逐格完全不变（cells 与 locked 都比对过）', erChangedOutside, []);
+eq('抠图 | 魔术棒 | 被擦格 locked === 1（重新生成时才会保持为空）', erWandRegion.map((i) => st.pattern.locked[i]), [1, 1, 1]);
+eq('抠图 | 魔术棒 | colors.length === counts.length', st.pattern.colors.length, st.pattern.counts.length);
+eq('抠图 | 魔术棒 | 色号 0 仍被区域 B 使用 → 没有被 pruneUnusedColors 误删', st.pattern.colors.length, 3);
+const erWandRecount = Array.from(st.pattern.cells).filter((c) => c !== EMPTY).length;
+eq('抠图 | 魔术棒 | stats.total === 自己重数的非空格子数', st.pattern.stats.total, erWandRecount);
+eq('抠图 | 魔术棒 | 整次点击只占 1 步历史', st.history.length, 1);
+ok('抠图 | 魔术棒 | 提示写明擦除数与「保持为空」',
+  /已擦除 3 格/.test(String(els.statusText.textContent)) && /保持为空/.test(String(els.statusText.textContent)), els.statusText.textContent);
+
+/* 撤销覆盖抠图 */
+eq('抠图 | 撤销 | undo() 返回 true', ui.undo(), true);
+eq('抠图 | 撤销 | 被擦格全部还原（cells 逐格与快照一致）', Array.from(st.pattern.cells), erWandSnap);
+eq('抠图 | 撤销 | locked 也逐格还原', Array.from(st.pattern.locked), erWandLockSnap);
+eq('抠图 | 撤销 | 快照已弹出，栈空', st.history.length, 0);
+
+/* 橡皮刷：pointerdown + 若干 pointermove + pointerup */
+function erBrushMirror(w, h, col, row, size) {
+  const half = (size - 1) / 2;
+  const out = [];
+  for (let dy = -half; dy <= half; dy++) {
+    for (let dx = -half; dx <= half; dx++) {
+      const x = col + dx, y = row + dy;
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      out.push(y * w + x);
+    }
+  }
+  return out;
+}
+els.eraserSize.value = '3';
+els.cellSize.value = '24';
+els.cellLabelMode.value = 'none';
+els.showRuler.checked = false;
+fire(els.eraserSize, 'change');
+st.pattern = erMkPat(9, 5, () => 0);
+st.viewOpts = ui.viewOpts();
+st.history.length = 0;
+ui.setTool('eraser');
+eq('橡皮刷 | 前置 | state.tool === "eraser"', ui.tool(), 'eraser');
+eq('橡皮刷 | 前置 | ui.elements().patternCanvas 就是桩里的那一块画布', els.patternCanvas === dom.map.patternCanvas, true);
+const erBrushCv = dom.map.patternCanvas;
+globalThis.Render.drawPattern(st.pattern, erBrushCv, st.viewOpts);   // 与 app.js 一样，先渲染一次让画布尺寸就位
+const erBrushCell = st.viewOpts.cellPx;
+const erBrushPad = Math.floor((erBrushCv.width - st.pattern.w * erBrushCell) / 2);
+const erBrushPt = (col, row) => ({ clientX: erBrushPad + col * erBrushCell + erBrushCell / 2, clientY: erBrushPad + row * erBrushCell + erBrushCell / 2 });
+const erBrushPath = [
+  erBrushMirror(9, 5, 4, 2, 3), erBrushMirror(9, 5, 5, 2, 3), erBrushMirror(9, 5, 6, 2, 3),
+  erBrushMirror(9, 5, 0, 0, 3)
+];
+const erBrushUnion = Array.from(new Set([].concat.apply([], erBrushPath))).sort((a, b) => a - b);
+eq('橡皮刷 | 前置 | 3×3 刷子在中部覆盖 9 格', erBrushPath[0].length, 9);
+eq('橡皮刷 | 前置 | 3×3 刷子在角上被裁剪成 4 格（不是 9 格，也不环绕）', erBrushPath[3].length, 4);
+eq('橡皮刷 | 前置 | 独立重算的并集 = 19 格', erBrushUnion.length, 19);
+const erBrushBefore = Array.from(st.pattern.cells);
+fire(erBrushCv, 'pointerdown', erBrushPt(4, 2));
+eq('橡皮刷 | pointerdown 就占 1 步历史', st.history.length, 1);
+fire(dom.doc, 'pointermove', erBrushPt(5, 2));
+fire(dom.doc, 'pointermove', erBrushPt(6, 2));
+fire(dom.doc, 'pointermove', erBrushPt(0, 0));
+eq('橡皮刷 | pointermove 期间只重绘、不追加历史（仍只有 1 步）', st.history.length, 1);
+eq('橡皮刷 | 拖动中已即时置空：已空格子数 === 独立重算的并集', Array.from(st.pattern.cells).filter((c) => c === EMPTY).length, erBrushUnion.length);
+fire(dom.doc, 'pointerup', {});
+eq('橡皮刷 | 划过的路径（含整个刷子范围）全部为空', erBrushUnion.filter((i) => st.pattern.cells[i] === EMPTY).length, erBrushUnion.length);
+eq('橡皮刷 | 越界被裁剪 | 实际置空的格子总数 === 独立重算的并集（不多不少）', Array.from(st.pattern.cells).filter((c) => c === EMPTY).length, erBrushUnion.length);
+eq('橡皮刷 | 越界被裁剪 | 并集之外的格子仍是原色（没有环绕/折行到对侧）', [2, 7, 8, 11, 17, 26, 35, 36, 44].filter((i) => st.pattern.cells[i] === EMPTY), []);
+eq('橡皮刷 | 整段拖动只 1 步历史', st.history.length, 1);
+eq('橡皮刷 | pointerup 后拖动状态复位', [st.eraseActive, st.eraseCount], [false, 0]);
+ok('橡皮刷 | 收尾提示写明一共擦掉 19 格', /已擦除 19 格/.test(String(els.statusText.textContent)), els.statusText.textContent);
+erFlushAll();     // 跑掉 pointerdown 期间排队的那次重渲染（不跑掉会卡住 renderScheduled）
+
+/* 撤销覆盖橡皮刷 */
+eq('橡皮刷 | 撤销 | undo() 返回 true', ui.undo(), true);
+eq('橡皮刷 | 撤销 | 划过的格子全部还原', Array.from(st.pattern.cells), erBrushBefore);
+eq('橡皮刷 | 撤销 | locked 也还原（全 0）', Array.from(st.pattern.locked).filter((v) => v !== 0), []);
+
+/* 擦空整张图：不崩、total/colors/counts 全归零 */
+st.pattern = erMkPat(3, 3, () => 1);
+st.viewOpts = ui.viewOpts();
+st.history.length = 0;
+dom.map.patternCanvas.width = 0;      // 哨兵：若渲染流程没走完，宽度会一直留在 0
+dom.map.patternCanvas.height = 0;
+let erSolidThrew = '';
+let erSolidReturn = 0;
+try { erSolidReturn = ui.wandErase(0); } catch (e) { erSolidThrew = e.message; }
+eq('抠图 | 擦空整张图 | 不抛异常', erSolidThrew, '');
+eq('抠图 | 擦空整张图 | 魔术棒擦掉全部 9 格', erSolidReturn, 9);
+eq('抠图 | 擦空整张图 | stats.total === 0', st.pattern.stats.total, 0);
+eq('抠图 | 擦空整张图 | colors.length === 0', st.pattern.colors.length, 0);
+eq('抠图 | 擦空整张图 | counts.length === 0', st.pattern.counts.length, 0);
+ok('抠图 | 擦空整张图 | 擦了 9 格且给出了可读提示', /已擦除 9 格/.test(String(els.statusText.textContent)), els.statusText.textContent);
+ok('抠图 | 擦空整张图 | 擦空后渲染流程仍走完（哨兵宽高 0 → 被重新设置，不是沿用旧值）', dom.map.patternCanvas.width > 0 && dom.map.patternCanvas.height > 0, dom.map.patternCanvas.width + '×' + dom.map.patternCanvas.height);
+
+/* 20000 格保护 */
+els.cellSize.value = '8';
+st.pattern = erMkPat(150, 150, () => 2);      // 22500 格连通同色
+st.viewOpts = ui.viewOpts();
+st.history.length = 0;
+const erHugeReturn = ui.wandErase(0);
+eq('抠图 | 20000 格保护 | 单次魔术棒最多擦 20000 格', erHugeReturn, 20000);
+eq('抠图 | 20000 格保护 | 剩余非空格子 = 22500 - 20000 = 2500', Array.from(st.pattern.cells).filter((c) => c !== EMPTY).length, 2500);
+ok('抠图 | 20000 格保护 | 提示说明「连通区域超过单次上限 20000 格」并可再次点击继续',
+  /超过单次上限 20000 格/.test(String(els.statusText.textContent)) && /可再次点击继续/.test(String(els.statusText.textContent)), els.statusText.textContent);
+eq('抠图 | 20000 格保护 | 仍只占 1 步历史', st.history.length, 1);
+
+/* 工具互斥：三选一与 #recolorMode 共用同一个 state.tool */
+els.recolorMode.checked = true;
+fire(els.recolorMode, 'change');
+eq('抠图 | 工具互斥 | 勾 #recolorMode → state.tool === "recolor"', ui.tool(), 'recolor');
+eq('抠图 | 工具互斥 | 且魔术棒 / 橡皮刷 / 关闭三个单选都被取消', [els.toolNone.checked, els.toolWand.checked, els.toolEraser.checked], [false, false, false]);
+eq('抠图 | 工具互斥 | 复选框自身保持勾上', els.recolorMode.checked, true);
+els.toolWand.checked = true;
+fire(els.toolWand, 'change');
+eq('抠图 | 工具互斥 | 反向：选魔术棒 → state.tool === "wand" 且 #recolorMode 被取消勾选', [ui.tool(), els.recolorMode.checked], ['wand', false]);
+els.toolEraser.checked = true;
+fire(els.toolEraser, 'change');
+eq('抠图 | 工具互斥 | 再选橡皮刷 → state.tool === "eraser" 且魔术棒单选被取消', [ui.tool(), els.toolWand.checked, els.toolEraser.checked], ['eraser', false, true]);
+els.toolNone.checked = true;
+fire(els.toolNone, 'change');
+eq('抠图 | 工具互斥 | 选「关闭」→ 全部工具失效', [ui.tool(), els.recolorMode.checked, els.toolWand.checked, els.toolEraser.checked], ['none', false, false, false]);
+eq('抠图 | 工具互斥 | 任意时刻只有一个工具生效（四个开关里 checked 的正好 1 个）',
+  [els.toolNone.checked, els.toolWand.checked, els.toolEraser.checked, els.recolorMode.checked].filter(Boolean).length, 1);
+
+/* 橡皮刷坐标：pad 只能从画布宽度反推（画布下方还有角标带，高度不可信） */
+els.cellSize.value = '8';
+els.eraserSize.value = '1';
+st.pattern = erMkPat(9, 5, () => 0);
+st.viewOpts = ui.viewOpts();
+const erPadCv = dom.map.patternCanvas;
+globalThis.Render.drawPattern(st.pattern, erPadCv, st.viewOpts);
+erPadCv.clientWidth = erPadCv.width;
+erPadCv.clientHeight = erPadCv.height * 4;     // 模拟「高 ≫ 宽」：画布被 CSS 拉高，下方还有角标带
+const erPadRect = erPadCv.getBoundingClientRect();
+const erPadCell = st.viewOpts.cellPx;
+const erPadTrue = Math.floor((erPadCv.width - st.pattern.w * erPadCell) / 2);
+const erPadWrong = Math.floor((erPadCv.height - st.pattern.h * erPadCell) / 2);
+const erToClient = (px, py) => ({ clientX: px * erPadRect.width / erPadCv.width, clientY: py * erPadRect.height / erPadCv.height });
+ok('橡皮刷坐标 | 前置 | 桩画布确实是「高 ≫ 宽」（否则这条覆盖不到角标带）', erPadRect.height > erPadCv.width * 2, erPadRect.height + ' vs ' + erPadCv.width);
+ok('橡皮刷坐标 | 前置 | 角标带真的存在（画布高 > pad*2 + gridH）', erPadCv.height > erPadTrue * 2 + st.pattern.h * erPadCell, erPadCv.height + ' vs ' + (erPadTrue * 2 + st.pattern.h * erPadCell));
+eq('橡皮刷坐标 | 点击格 (2,1) 的中心 → 命中下标 11', ui.hitTestCell(erToClient(erPadTrue + 2 * erPadCell + erPadCell / 2, erPadTrue + 1 * erPadCell + erPadCell / 2)), 11);
+eq('橡皮刷坐标 | 落在网格下方的角标带内 → 返回未命中 -1', ui.hitTestCell(erToClient(erPadTrue + 2 * erPadCell + erPadCell / 2, erPadTrue + st.pattern.h * erPadCell + 8)), -1);
+eq('橡皮刷坐标 | 落在网格左侧留白 → 返回未命中 -1', ui.hitTestCell(erToClient(erPadTrue - 2, erPadTrue + erPadCell / 2)), -1);
+ok('橡皮刷坐标 | 反证：若按「高度反推 pad」就会算出别的行（说明命中判定真的走宽度）',
+  erPadWrong !== erPadTrue && Math.floor((erPadTrue + 1 * erPadCell + erPadCell / 2 - erPadWrong) / erPadCell) !== 1,
+  'pad(宽度)=' + erPadTrue + ' pad(高度)=' + erPadWrong);
+
+/* 持久化（核心）：擦掉若干格 → 改参数重新生成 → 被擦格仍是 65535 */
+const genCallCount = { n: 0 };
+const erRealPipeline = globalThis.Pipeline;
+sandboxWin.Pipeline = Object.assign({}, erRealPipeline, {
+  generate(imageLike, opts) { genCallCount.n++; return erRealPipeline.generate(imageLike, opts); }
+});
+els.gridW.value = '10';
+els.gridH.value = '10';
+els.lockAspect.checked = false;
+els.cellSize.value = '24';
+els.showRuler.checked = false;
+st.source = { data: synth(12, 12, (x, y) => [(x * 21) % 256, (y * 17) % 256, ((x + y) * 13) % 256]), width: 12, height: 12 };
+st.srcW = 12;
+st.srcH = 12;
+st.history.length = 0;
+erFlushAll();
+const erGenBefore = genCallCount.n;
+ui.regenerate();
+erFlushAll();
+ok('持久化 | 前置 | 确实跑了一次真 Pipeline 重算（走 generateFromRGBA + prevPattern）', genCallCount.n > erGenBefore, genCallCount.n + ' vs ' + erGenBefore);
+const erPatA = st.pattern;
+eq('持久化 | 前置 | 新图纸是 10×10 且一颗不缺', [erPatA.w, erPatA.h, erPatA.stats.total], [10, 10, 100]);
+st.viewOpts = ui.viewOpts();
+const erErased = ui.wandErase(0);
+ok('持久化 | 前置 | 魔术棒至少擦掉 1 格', erErased >= 1, String(erErased));
+const erErasedIdx = [];
+for (let i = 0; i < erPatA.cells.length; i++) if (erPatA.cells[i] === EMPTY) erErasedIdx.push(i);
+eq('持久化 | 前置 | 被擦格数 === 魔术棒返回值', erErasedIdx.length, erErased);
+eq('持久化 | 前置 | 被擦格全部 locked === 1', erErasedIdx.filter((i) => erPatA.locked[i] === 1).length, erErasedIdx.length);
+eq('持久化 | 前置 | 擦除后 stats.total = 100 - 擦掉数', erPatA.stats.total, 100 - erErased);
+els.brightness.value = '60';
+fire(els.brightness, 'input');
+erFlushAll(6);
+ok('持久化 | 改参数确实触发了第二次真重算', genCallCount.n > erGenBefore + 1, genCallCount.n + ' vs ' + (erGenBefore + 1));
+const erPatB = st.pattern;
+ok('持久化 | 重新生成产出的是新对象（真的重算了，不是原地复用）', erPatB !== erPatA);
+eq('持久化 | 核心 | 被擦的每一格重新生成后仍然是 65535（locked-empty 被 Pipeline 继承）',
+  erErasedIdx.filter((i) => erPatB.cells[i] === EMPTY).length, erErasedIdx.length);
+eq('持久化 | 核心 | 这些格子的 locked 重新生成后仍是 1', erErasedIdx.filter((i) => erPatB.locked[i] === 1).length, erErasedIdx.length);
+eq('持久化 | 核心 | stats.total 相应减少（= 100 - 擦掉数）', erPatB.stats.total, 100 - erErased);
+eq('持久化 | 尺寸未变（否则 Pipeline 会忽略锁定并给警告）', [erPatB.w, erPatB.h], [10, 10]);
+eq('持久化 | 没有出现「尺寸不一致 → 忽略锁定」类的告警',
+  (erPatB.warnings || []).filter((w) => /忽略|尺寸不一致/.test(String(w))), []);
+eq('持久化 | 擦掉的那部分没有被别的色号重新填回来（非空格数 === total）', erPatB.stats.total, erPatB.counts.reduce((s, c) => s + c.count, 0));
+
+/* ── 5.4 图纸标题（只重渲染，不重算）──────────────────────────────────── */
+els.chartTitle.value = '测试标题';
+fire(els.chartTitle, 'input');
+eq('图纸标题 | viewOpts().captionName 传出标题', ui.viewOpts().captionName, '测试标题');
+eq('图纸标题 | exportViewOpts(2).captionName 也传出标题', ui.exportViewOpts(2).captionName, '测试标题');
+eq('图纸标题 | 去首尾空白后传出', (els.chartTitle.value = '  A B  ', fire(els.chartTitle, 'input'), ui.viewOpts().captionName), 'A B');
+eq('图纸标题 | 标题不进入导出几何（cellPx 仍是 24 × 倍数）', ui.exportViewOpts(2).cellPx, 48);
+const erRendersBefore = drawCalls.filter((c) => c.cv === dom.map.patternCanvas).length;
+const erGenBeforeTitle = genCallCount.n;
+els.chartTitle.value = '标题改变';
+fire(els.chartTitle, 'input');
+erFlushAll();
+eq('图纸标题 | 输入标题不触发重算（Pipeline.generate 调用次数完全不变）', genCallCount.n, erGenBeforeTitle);
+ok('图纸标题 | 但确实触发了重渲染（#patternCanvas 上的 drawPattern 次数增加）',
+  drawCalls.filter((c) => c.cv === dom.map.patternCanvas).length > erRendersBefore,
+  erRendersBefore + ' → ' + drawCalls.filter((c) => c.cv === dom.map.patternCanvas).length);
+const erTitleCalls = drawCalls.filter((c) => c.cv === dom.map.patternCanvas);
+ok('图纸标题 | 重渲染实际传给 render 的 captionName 就是新标题（不是只有 viewOpts() 会说）',
+  erTitleCalls.length > 0 && erTitleCalls[erTitleCalls.length - 1].opts.captionName === '标题改变',
+  JSON.stringify(erTitleCalls.length ? erTitleCalls[erTitleCalls.length - 1].opts.captionName : null));
+els.chartTitle.value = '';
+fire(els.chartTitle, 'input');
+erFlushAll();
+eq('图纸标题 | 清空标题后 captionName 为空串（render.js 负责整段省略）', ui.viewOpts().captionName, '');
 
 /* ══════════════════════════════════════════ 第 7 组 · 原图编辑（srcedit.js） */
 startGroup('第 7 组 · 原图编辑（SourceEdit）');

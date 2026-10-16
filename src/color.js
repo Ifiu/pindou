@@ -25,6 +25,12 @@
  *    同一输入两次调用逐字节一致。
  * 健壮性：迭代上限 KMEANS_MAX_ITER = 12；空簇会被重新播种到“离自己所属簇心最远”的
  * 颜色上，无点可搬时保持原簇心不动；maxColors 会被夹到 [1, min(实际色数, 色表大小)]。
+ * 吸附阶段（簇心 → 色号）不是简单的“各取各的最近色号”：那样多个簇心会撞到同一个色号，
+ * 经 used 去重后实际用色数会明显少于请求值（实测 221 请求只剩 107~118 色，缺口全部来自碰撞，
+ * 空簇贡献 0）。现在改为贪心“最近的、尚未被占用的色号”，认领顺序＝像素数多的簇优先
+ * （同权重按簇下标升序，完全确定）；撞车的后到者退到自己的次近可用色号。为了不把这件事做成
+ * 数字游戏，认领额度再用“可达色号数”（＝色卡里至少是某个输入颜色最近色号的那些色号）夹住：
+ * 超过它再扩张，就是逼着簇去用没人要的色号，只会白白增加误差。
  *
  * ── 其它实现约定 ───────────────────────────────────────────────────────────
  * - 输入 rgb 为扁平数组（Uint8ClampedArray / Float32Array / 普通数组均可），长度 w*h*3，
@@ -337,8 +343,9 @@
   }
 
   /**
-   * Lab 空间 k-means 减色 + 簇心吸附色卡。返回 { indices: Uint16Array, used: number[] }。
-   * used 为升序去重的色表下标列表，长度必然 ≤ 实际簇数 ≤ maxColors。
+   * Lab 空间 k-means 减色 + 簇心贪心吸附色卡。返回 { indices: Uint16Array, used: number[] }。
+   * used 为升序去重的色表下标列表：每个非空簇认领一个互不相同的色号，所以
+   * used.length = min(非空簇数, 可达色号数) ≤ min(maxColors, 输入不同颜色数, 色表大小)。
    */
   function quantize(rgb, w, h, maxColors, matcher) {
     w = w | 0;
@@ -347,6 +354,9 @@
     var indices = new Uint16Array(n);
     var used = [];
     if (n === 0) return { indices: indices, used: used };
+    if (!matcher || !matcher.labs) {
+      throw new Error('ColorKit.quantize: matcher 必须由 makeMatcher() 创建（吸附去重需要 labs 缓存）');
+    }
     var nearestL = resolveNearest(matcher);
     var palSize = matcher.size;
 
@@ -449,7 +459,8 @@
       }
     }
 
-    // 5) 用最终簇心重算归属，再吸附到色卡
+    // 5) 用最终簇心重算归属，并累计每个簇的像素数（决定后面的认领顺序）
+    var clW = new Float64Array(kk);
     for (q1 = 0; q1 < uniq; q1++) {
       var lf = eL[q1], af = eA[q1], bf = eB[q1];
       var b2 = 0, bd2 = Infinity;
@@ -459,9 +470,55 @@
         if (df < bd2) { bd2 = df; b2 = c4; }
       }
       assign[q1] = b2;
+      clW[b2] += eW[q1];
     }
+
+    // 5b) 可达色号数：色卡里“至少是某个输入颜色的最近色号”的个数。
+    //     它就是去重额度：超过这个数再扩张，等于把簇赶到没有任何输入颜色会选的色号上，纯凑数。
+    //     只需数到 kk 个即可提前收工（数满 kk 就等于额度不设限）。
+    var reachFlags = new Uint8Array(palSize);
+    var reachCap = 0;
+    for (q1 = 0; q1 < uniq && reachCap < kk; q1++) {
+      var ridx = nearestL(eL[q1], eA[q1], eB[q1]);
+      if (!reachFlags[ridx]) { reachFlags[ridx] = 1; reachCap++; }
+    }
+    var maxDistinct = reachCap < kk ? reachCap : kk;
+
+    // 6) 簇心吸附色卡：贪心“最近的、尚未被占用的色号”
+    //    认领顺序＝像素数多的簇优先（同权重按簇下标升序）——让影响像素更多的簇先拿到自己的最优
+    //    色号，且结果与输入顺序无关、完全确定；没有碰撞的簇一定拿到自己的最近色号。
+    //    额度（min(非空簇数, 可达色号数)）用尽后，剩余簇并入最近的已认领色号。
+    var pl = matcher.labs;
     var palOf = new Int32Array(kk);
-    for (var c5 = 0; c5 < kk; c5++) palOf[c5] = nearestL(cx[c5], cy[c5], cz[c5]);
+    var taken = new Uint8Array(palSize);
+    var claimed = [];
+    var order = [];
+    for (var c5 = 0; c5 < kk; c5++) if (clW[c5] > 0) order.push(c5);
+    order.sort(function (a, b) { return (clW[b] - clW[a]) || (a - b); });
+    for (var oi = 0; oi < order.length; oi++) {
+      var c6 = order[oi];
+      var best = -1, bestD = Infinity;
+      if (claimed.length < maxDistinct) {
+        for (var p2 = 0; p2 < palSize; p2++) {
+          if (taken[p2]) continue;
+          var dpl = cx[c6] - pl[p2 * 3], dpa = cy[c6] - pl[p2 * 3 + 1], dpb = cz[c6] - pl[p2 * 3 + 2];
+          var dp2 = dpl * dpl + dpa * dpa + dpb * dpb;
+          if (dp2 < bestD) { bestD = dp2; best = p2; }
+        }
+      } else {
+        best = claimed[0];                      // 额度用尽：并入最近的已认领色号
+        bestD = Infinity;
+        for (var ui = 0; ui < claimed.length; ui++) {
+          var e3 = claimed[ui];
+          var dcl = cx[c6] - pl[e3 * 3], dca = cy[c6] - pl[e3 * 3 + 1], dcb = cz[c6] - pl[e3 * 3 + 2];
+          var dc2 = dcl * dcl + dca * dca + dcb * dcb;
+          if (dc2 < bestD) { bestD = dc2; best = e3; }
+        }
+      }
+      if (best < 0) best = claimed[0];        // 理论不可达（额度 ≤ 色表大小）；防止 -1 变成 65535
+      if (!taken[best]) { taken[best] = 1; claimed.push(best); }
+      palOf[c6] = best;
+    }
 
     var seen = new Uint8Array(palSize);
     for (var i2 = 0; i2 < n; i2++) {

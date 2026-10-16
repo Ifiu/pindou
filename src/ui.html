@@ -2,7 +2,7 @@
   :root{
     color-scheme: dark;
     --bg:#101216; --bg2:#15181e; --panel:#181b22; --panel2:#1f232b; --line:#2a2f39;
-    --text:#e8eaf0; --muted:#98a1b0; --accent:#5b9bf3; --accent-soft:rgba(91,155,243,.14);
+    --text:#e8eaf0; --muted:#98a1b0; --muted2:#8a92a0; --accent:#5b9bf3; --accent-soft:rgba(91,155,243,.14);
     --ok:#4ec38a; --warn:#d9a441; --err:#e8695f; --radius:10px;
   }
   [hidden]{display:none!important}
@@ -30,26 +30,43 @@
   .layout{display:grid;grid-template-columns:310px minmax(0,1fr) 320px;gap:12px;align-items:start}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
   .panel h2{margin:0;font-size:13px;font-weight:600;color:var(--text)}
-  .group{border-bottom:1px solid var(--line);padding:10px 0}
-  .group:first-child{padding-top:0}
-  .group:last-child{border-bottom:0;padding-bottom:0}
-  .group h2{margin-bottom:8px;color:var(--accent)}
-  .controls{display:flex;flex-direction:column;gap:2px;max-height:calc(100vh - 150px);overflow:auto}
-  .row{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.8px;color:var(--muted);margin:6px 0 2px}
+  .controls{display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 150px);overflow:auto}
+
+  /* ── 基本 / 高级 标签页：只切显隐，绝不重建 DOM（切换不丢控件状态） ── */
+  .tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;position:sticky;top:0;z-index:3;background:var(--panel);padding:1px 0 6px}
+  .tab{
+    appearance:none;-webkit-appearance:none;background:transparent;color:var(--muted);
+    border:1px solid var(--line);border-radius:9px;padding:7px 10px;font-size:13px;font-weight:600;
+    cursor:pointer;font-family:inherit;transition:color .15s,border-color .15s,background .15s
+  }
+  .tab:hover{color:var(--text);border-color:var(--accent)}
+  .tab.on{background:var(--accent-soft);color:var(--text);border-color:var(--accent)}
+  .tabpanel{display:flex;flex-direction:column;gap:10px}
+
+  /* ── 每个分组一张圆角卡片：靠底色 + 边框 + 间距切出分组边界 ── */
+  .group{
+    background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+    padding:11px 12px 12px;margin:0
+  }
+  .group h2{margin:0 0 8px;color:var(--accent);font-size:12.6px;font-weight:600;letter-spacing:.3px}
+
+  .row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:12.6px;color:var(--muted);margin:8px 0 3px}
   .row output{color:var(--accent);font-variant-numeric:tabular-nums}
-  .check{display:flex;align-items:flex-start;gap:7px;font-size:12.8px;margin:6px 0;cursor:pointer;color:var(--text)}
+  .row output.is-off{opacity:.45}
+  .check{display:flex;align-items:flex-start;gap:7px;font-size:12.6px;margin:6px 0;cursor:pointer;color:var(--text)}
   .check input{margin:2px 0 0;accent-color:var(--accent);flex:none}
   .radios{display:flex;flex-direction:column;gap:2px;margin:2px 0}
   .field{display:flex;flex-direction:column;gap:3px;font-size:12.4px;color:var(--muted)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0}
-  .hint{margin:6px 0 0;font-size:11.8px;line-height:1.5;color:var(--muted)}
+  .hint{margin:7px 0 0;font-size:11.4px;line-height:1.55;color:var(--muted2)}
   .muted{color:var(--muted)}
-  input[type="range"]{width:100%;accent-color:var(--accent);margin:2px 0 4px}
+  input[type="range"]{width:100%;accent-color:var(--accent);margin:2px 0 2px}
   input[type="number"],input[type="text"],select{
     width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);
     border-radius:6px;padding:5px 7px;font-size:12.8px;font-family:inherit
   }
-  input[type="number"]:disabled,select:disabled{opacity:.45;cursor:not-allowed}
+  input[type="number"]:disabled,input[type="text"]:disabled,select:disabled{opacity:.45;cursor:not-allowed}
+  input[type="range"]:disabled{opacity:.45;cursor:not-allowed}
   button{font-family:inherit}
   .btn{
     display:inline-flex;align-items:center;justify-content:center;gap:6px;
@@ -131,6 +148,7 @@
   @media (max-width:1180px){
     .layout{grid-template-columns:1fr}
     .controls{max-height:none;overflow:visible}
+    .tabs{position:static}
     .canvas-scroll{max-height:60vh}
   }
   @media (max-width:640px){
@@ -157,150 +175,179 @@
 
   <div class="layout">
     <aside class="panel controls" aria-label="参数面板">
-      <section class="group">
-        <h2>1 · 图片输入</h2>
-        <p class="hint">三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。图片只在本地处理，不会上传到任何服务器。</p>
-      </section>
+      <div class="tabs" role="tablist" aria-label="参数分页">
+        <button id="tabBasic" class="tab on" type="button" role="tab" aria-selected="true" aria-controls="panelBasic">基本</button>
+        <button id="tabAdvanced" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panelAdvanced">高级</button>
+      </div>
 
-      <section class="group">
-        <h2>2 · 预处理</h2>
-        <label class="row" for="brightness"><span>亮度</span><output id="brightnessVal">0</output></label>
-        <input id="brightness" type="range" min="-100" max="100" step="1" value="0" />
-        <label class="row" for="contrast"><span>对比度</span><output id="contrastVal">0</output></label>
-        <input id="contrast" type="range" min="-100" max="100" step="1" value="0" />
-        <label class="row" for="saturation"><span>饱和度</span><output id="saturationVal">0</output></label>
-        <input id="saturation" type="range" min="-100" max="100" step="1" value="0" />
-        <label class="check"><input id="autoWB" type="checkbox" /> 自动白平衡</label>
-        <label class="check"><input id="autoLevels" type="checkbox" /> 自动色阶</label>
-      </section>
+      <div id="panelBasic" class="tabpanel" role="tabpanel" aria-labelledby="tabBasic">
+        <section class="group">
+          <h2>图片输入</h2>
+          <p class="hint">三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。图片只在本地处理，不会上传到任何服务器。</p>
+        </section>
 
-      <section class="group">
-        <h2>3 · 取色方式</h2>
-        <div class="radios" role="radiogroup" aria-label="取色方式">
-          <label class="check"><input id="methodNearest" type="radio" name="method" value="nearest" checked /> 最近邻（色块最干净）</label>
-          <label class="check"><input id="methodFS" type="radio" name="method" value="fs" /> 误差扩散（Floyd–Steinberg）</label>
-          <label class="check"><input id="methodBayer" type="radio" name="method" value="bayer" /> 有序抖动（Bayer）</label>
-        </div>
-        <label class="row" for="bayerN"><span>Bayer 尺寸</span></label>
-        <select id="bayerN">
-          <option value="4">4 × 4</option>
-          <option value="8">8 × 8</option>
-        </select>
-        <label class="row" for="ditherStrength"><span>抖动强度</span><output id="ditherStrengthVal">30%</output></label>
-        <input id="ditherStrength" type="range" min="0" max="100" step="1" value="30" />
-      </section>
+        <section class="group">
+          <h2>取色方式</h2>
+          <div class="radios" role="radiogroup" aria-label="取色方式">
+            <label class="check"><input id="methodNearest" type="radio" name="method" value="nearest" checked /> 最近邻（色块最干净）</label>
+            <label class="check"><input id="methodFS" type="radio" name="method" value="fs" /> 误差扩散（Floyd–Steinberg）</label>
+            <label class="check"><input id="methodBayer" type="radio" name="method" value="bayer" /> 有序抖动（Bayer）</label>
+          </div>
+          <label class="row" for="bayerN"><span>Bayer 尺寸</span></label>
+          <select id="bayerN">
+            <option value="4">4 × 4</option>
+            <option value="8">8 × 8</option>
+          </select>
+          <label class="row" for="ditherStrength"><span>抖动强度</span><output id="ditherStrengthVal">30%</output></label>
+          <input id="ditherStrength" type="range" min="0" max="100" step="1" value="30" />
+        </section>
 
-      <section class="group">
-        <h2>4 · 减色</h2>
-        <label class="check"><input id="quantizeEnabled" type="checkbox" checked /> 启用减色（限制最大色数）</label>
-        <label class="row" for="maxColors"><span>最大色数</span></label>
-        <input id="maxColors" type="number" min="2" max="221" step="1" value="24" />
-      </section>
+        <section class="group">
+          <h2>图纸尺寸</h2>
+          <label class="row" for="boardsSelect"><span>拼板规格</span></label>
+          <select id="boardsSelect">
+            <option value="1" selected>1 × 1 板（上限 29 格）</option>
+            <option value="2">2 × 2 板（上限 58 格）</option>
+            <option value="3">3 × 3 板（上限 87 格）</option>
+            <option value="4">4 × 4 板（上限 116 格）</option>
+            <option value="custom">自定义格数</option>
+          </select>
+          <label class="row" for="sizePreset"><span>尺寸预设</span></label>
+          <select id="sizePreset">
+            <option value="custom" selected>自定义</option>
+            <option value="29">29 × 29</option>
+            <option value="58">58 × 58</option>
+            <option value="87">87 × 87</option>
+            <option value="100">100 × 100</option>
+            <option value="116">116 × 116</option>
+          </select>
+          <div class="grid2">
+            <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="116" step="1" value="29" /></label>
+            <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="116" step="1" value="29" /></label>
+          </div>
+          <label class="check"><input id="lockAspect" type="checkbox" checked /> 保持原图宽高比</label>
+          <p class="hint">单边上限硬限制 116 格（4 × 4 板），超出会被自动压回。尺寸预设固定为正方形（如 100 × 100）。</p>
+        </section>
 
-      <section class="group">
-        <h2>5 · 图纸尺寸</h2>
-        <label class="row" for="boardsSelect"><span>拼板规格</span></label>
-        <select id="boardsSelect">
-          <option value="1" selected>1 × 1 板（上限 29 格）</option>
-          <option value="2">2 × 2 板（上限 58 格）</option>
-          <option value="3">3 × 3 板（上限 87 格）</option>
-          <option value="4">4 × 4 板（上限 116 格）</option>
-          <option value="custom">自定义格数</option>
-        </select>
-        <label class="row" for="sizePreset"><span>尺寸预设</span></label>
-        <select id="sizePreset">
-          <option value="custom" selected>自定义</option>
-          <option value="29">29 × 29</option>
-          <option value="58">58 × 58</option>
-          <option value="87">87 × 87</option>
-          <option value="100">100 × 100</option>
-          <option value="116">116 × 116</option>
-        </select>
-        <div class="grid2">
-          <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="116" step="1" value="29" /></label>
-          <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="116" step="1" value="29" /></label>
-        </div>
-        <label class="check"><input id="lockAspect" type="checkbox" checked /> 保持原图宽高比</label>
-        <p class="hint">单边上限硬限制 116 格（4 × 4 板），超出会被自动压回。尺寸预设固定为正方形（如 100 × 100）。</p>
-      </section>
+        <section class="group">
+          <h2>图纸显示</h2>
+          <label class="row" for="chartTitle"><span>图纸标题</span></label>
+          <input id="chartTitle" type="text" value="" placeholder="图纸标题（会写进图纸左下角）" autocomplete="off" spellcheck="false" />
+          <label class="row" for="cellLabelMode"><span>格内显示</span></label>
+          <select id="cellLabelMode">
+            <option value="code" selected>色号（A1）</option>
+            <option value="index">编号（1,2,3…）</option>
+            <option value="none">不显示</option>
+          </select>
+          <label class="check"><input id="showRuler" type="checkbox" checked /> 显示坐标刻度</label>
+          <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">24px</output></label>
+          <input id="cellSize" type="range" min="8" max="48" step="1" value="24" />
+          <p id="cellLabelHint" class="hint">当前 24px，格内显示色号（如 A1）。</p>
+        </section>
 
-      <section class="group">
-        <h2>6 · 色卡版本</h2>
-        <select id="paletteSelect"></select>
-        <p id="paletteMeta" class="hint">色卡数据未加载</p>
-      </section>
+        <section class="group">
+          <h2>抠图</h2>
+          <div class="radios" role="radiogroup" aria-label="抠图工具">
+            <label class="check"><input id="toolNone" type="radio" name="pindouTool" value="none" checked /> 关闭（点击图纸不改动格子）</label>
+            <label class="check"><input id="toolWand" type="radio" name="pindouTool" value="wand" /> 魔术棒（点一格，清掉同色连通的一片）</label>
+            <label class="check"><input id="toolEraser" type="radio" name="pindouTool" value="eraser" /> 橡皮刷（按住拖动，擦掉划过的格子）</label>
+          </div>
+          <label class="row" for="eraserSize"><span>橡皮刷大小</span></label>
+          <select id="eraserSize">
+            <option value="1" selected>1 × 1（单格）</option>
+            <option value="3">3 × 3</option>
+            <option value="5">5 × 5</option>
+          </select>
+          <p id="toolHint" class="hint">未开启任何图纸工具：点击格子不会有任何改动。</p>
+        </section>
 
-      <section class="group">
-        <h2>7 · 图纸显示</h2>
-        <label class="row" for="cellLabelMode"><span>格内显示</span></label>
-        <select id="cellLabelMode">
-          <option value="code" selected>色号（A1）</option>
-          <option value="index">编号（1,2,3…）</option>
-          <option value="none">不显示</option>
-        </select>
-        <label class="check"><input id="showRuler" type="checkbox" checked /> 显示坐标刻度</label>
-        <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">24px</output></label>
-        <input id="cellSize" type="range" min="8" max="48" step="1" value="24" />
-        <p id="cellLabelHint" class="hint">当前 24px，格内显示色号（如 A1）。</p>
-      </section>
+        <section class="group group-actions">
+          <h2>导出</h2>
+          <label class="row" for="exportScale"><span>分辨率倍数</span></label>
+          <select id="exportScale">
+            <option value="1">1×（格子 24px）</option>
+            <option value="2" selected>2×（格子 48px）</option>
+            <option value="4">4×（格子 96px）</option>
+            <option value="8">8×（格子 192px）</option>
+          </select>
+          <label class="check"><input id="exportAnnotate" type="checkbox" checked /> 附色号用量清单（画进图里）</label>
+          <p id="exportHint" class="hint">导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随「图纸显示」组的「显示坐标刻度」。</p>
+          <button id="btnExportPng" class="btn" type="button">导出图纸 PNG</button>
+          <button id="btnExportCompare" class="btn" type="button">导出对照图 PNG</button>
+          <button id="btnExportCsv" class="btn" type="button">导出用量清单 CSV</button>
+        </section>
+      </div>
 
-      <section class="group">
-        <h2>8 · 预览缩放</h2>
-        <label class="row" for="viewZoom"><span>预览缩放（不影响导出）</span><output id="viewZoomVal">100%</output></label>
-        <input id="viewZoom" type="range" min="0.25" max="4" step="0.05" value="1" />
-        <div class="zoom-btns">
-          <button id="viewZoomOut" class="btn" type="button">− 缩小</button>
-          <button id="viewZoomIn" class="btn" type="button">+ 放大</button>
-          <button id="viewZoomFit" class="btn" type="button">适应窗口</button>
-        </div>
-        <p class="hint">缩放只改变屏幕显示大小，不影响画布真实像素与导出分辨率。在图纸上滚动鼠标滚轮可以以光标为锚点缩放。</p>
-      </section>
+      <div id="panelAdvanced" class="tabpanel" role="tabpanel" aria-labelledby="tabAdvanced" hidden>
+        <section class="group">
+          <h2>预处理</h2>
+          <label class="row" for="brightness"><span>亮度</span><output id="brightnessVal">0</output></label>
+          <input id="brightness" type="range" min="-100" max="100" step="1" value="0" title="滑杆经过非线性压缩，小幅拖动更精细" />
+          <label class="row" for="contrast"><span>对比度</span><output id="contrastVal">0</output></label>
+          <input id="contrast" type="range" min="-100" max="100" step="1" value="0" title="滑杆经过非线性压缩，小幅拖动更精细" />
+          <label class="row" for="saturation"><span>饱和度</span><output id="saturationVal">0</output></label>
+          <input id="saturation" type="range" min="-100" max="100" step="1" value="0" title="滑杆经过非线性压缩，小幅拖动更精细" />
+          <label class="check"><input id="autoWB" type="checkbox" /> 自动白平衡</label>
+          <label class="check"><input id="autoLevels" type="checkbox" /> 自动色阶</label>
+          <p id="preprocessHint" class="hint">三个滑杆经过非线性压缩：靠近 0 的一小段更精细，滑到底仍是满强度。读数就是实际生效值。</p>
+        </section>
 
-      <section class="group">
-        <h2>9 · 改色模式</h2>
-        <label class="check"><input id="recolorMode" type="checkbox" /> 开启改色模式（点击图纸格子改色）</label>
-        <label class="row" for="recolorScope"><span>色板范围</span></label>
-        <select id="recolorScope">
-          <option value="used" selected>只显示本图用到的色号（按颗数排序）</option>
-          <option value="all">全部 221 色（按 A–H/M 分组）</option>
-        </select>
-        <label class="row" for="recolorSearch"><span>搜索色号 / HEX</span></label>
-        <input id="recolorSearch" type="text" placeholder="例如 A1 或 #FAF5CD" autocomplete="off" spellcheck="false" />
-        <div id="recolorGrid" class="sw-grid-wrap"></div>
-        <p id="recolorEmpty" class="hint" hidden>无匹配</p>
-        <label class="row"><span>最近用过</span></label>
-        <div id="recolorRecentRow" class="sw-recent"></div>
-        <p id="recolorCurrent" class="hint">当前目标色号：未选择</p>
-        <label class="check"><input id="lockToggle" type="checkbox" checked /> 改色时锁定该格（重算时不被覆盖）</label>
-        <div class="btn-grid">
-          <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
-          <button id="btnUndo" class="btn btn-ghost" type="button" disabled>撤销</button>
-        </div>
-        <p id="lockInfo" class="hint">已锁定 0 格</p>
-        <p class="hint">提示：按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格。撤销快捷键 Ctrl+Z（Mac 为 ⌘+Z）。</p>
-      </section>
+        <section class="group">
+          <h2>减色</h2>
+          <label class="check"><input id="quantizeEnabled" type="checkbox" checked /> 启用减色（限制色数上限）</label>
+          <label class="row" for="maxColors"><span>色数上限</span><output id="maxColorsVal">24</output></label>
+          <input id="maxColors" type="range" min="2" max="221" step="1" value="24" />
+          <p id="maxColorsHint" class="hint">色数上限 24 色，是「最多用几色」而不是精确色数；实际用色受色卡与原图色彩分布限制，可能少于上限（生成后见右侧「用量汇总」）。</p>
+        </section>
 
-      <section class="group group-actions">
-        <h2>10 · 操作</h2>
-        <button id="btnRegenerate" class="btn btn-primary" type="button">重新生成</button>
-        <button id="btnResetAdjust" class="btn" type="button">重置微调</button>
-      </section>
+        <section class="group">
+          <h2>色卡版本</h2>
+          <select id="paletteSelect"></select>
+          <p id="paletteMeta" class="hint">色卡数据未加载</p>
+        </section>
 
-      <section class="group group-actions">
-        <h2>11 · 导出</h2>
-        <label class="row" for="exportScale"><span>分辨率倍数</span></label>
-        <select id="exportScale">
-          <option value="1">1×（格子 24px）</option>
-          <option value="2" selected>2×（格子 48px）</option>
-          <option value="4">4×（格子 96px）</option>
-          <option value="8">8×（格子 192px）</option>
-        </select>
-        <label class="check"><input id="exportAnnotate" type="checkbox" checked /> 附色号用量清单（画进图里）</label>
-        <p id="exportHint" class="hint">导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随第 7 组的「显示坐标刻度」。</p>
-        <button id="btnExportPng" class="btn" type="button">导出图纸 PNG</button>
-        <button id="btnExportCompare" class="btn" type="button">导出对照图 PNG</button>
-        <button id="btnExportCsv" class="btn" type="button">导出用量清单 CSV</button>
-      </section>
+        <section class="group">
+          <h2>预览缩放</h2>
+          <label class="row" for="viewZoom"><span>预览缩放（不影响导出）</span><output id="viewZoomVal">100%</output></label>
+          <input id="viewZoom" type="range" min="0.25" max="4" step="0.05" value="1" />
+          <div class="zoom-btns">
+            <button id="viewZoomOut" class="btn" type="button">− 缩小</button>
+            <button id="viewZoomIn" class="btn" type="button">+ 放大</button>
+            <button id="viewZoomFit" class="btn" type="button">适应窗口</button>
+          </div>
+          <p class="hint">缩放只改变屏幕显示大小，不影响画布真实像素与导出分辨率。在图纸上滚动鼠标滚轮可以以光标为锚点缩放。</p>
+        </section>
+
+        <section class="group">
+          <h2>改色模式</h2>
+          <label class="check"><input id="recolorMode" type="checkbox" /> 开启改色模式（点击图纸格子改色）</label>
+          <label class="row" for="recolorScope"><span>色板范围</span></label>
+          <select id="recolorScope">
+            <option value="used" selected>只显示本图用到的色号（按颗数排序）</option>
+            <option value="all">全部 221 色（按 A–H/M 分组）</option>
+          </select>
+          <label class="row" for="recolorSearch"><span>搜索色号 / HEX</span></label>
+          <input id="recolorSearch" type="text" placeholder="例如 A1 或 #FAF5CD" autocomplete="off" spellcheck="false" />
+          <div id="recolorGrid" class="sw-grid-wrap"></div>
+          <p id="recolorEmpty" class="hint" hidden>无匹配</p>
+          <label class="row"><span>最近用过</span></label>
+          <div id="recolorRecentRow" class="sw-recent"></div>
+          <p id="recolorCurrent" class="hint">当前目标色号：未选择</p>
+          <label class="check"><input id="lockToggle" type="checkbox" checked /> 改色时锁定该格（重算时不被覆盖）</label>
+          <div class="btn-grid">
+            <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
+            <button id="btnUndo" class="btn btn-ghost" type="button" disabled>撤销</button>
+          </div>
+          <p id="lockInfo" class="hint">已锁定 0 格</p>
+          <p class="hint">提示：按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格。撤销快捷键 Ctrl+Z（Mac 为 ⌘+Z）。改色与抠图共用同一撤销栈。</p>
+        </section>
+
+        <section class="group group-actions">
+          <h2>操作</h2>
+          <button id="btnRegenerate" class="btn btn-primary" type="button">重新生成</button>
+          <button id="btnResetAdjust" class="btn" type="button">重置微调</button>
+        </section>
+      </div>
     </aside>
 
     <main id="dropZone" class="panel canvas-panel">
@@ -319,7 +366,7 @@
           <button id="emptyState" class="btn btn-primary empty-cta" type="button">选择本地图片…</button>
         </div>
       </div>
-      <p class="hint">参数调整会自动重算（防抖 200ms）。开启第 9 组「改色模式」后，点击图纸格子即可把它改成目标色号。</p>
+      <p class="hint">参数调整会自动重算（防抖 200ms）。「改色模式」开启后点击格子可改色；「抠图」组里可选魔术棒或橡皮刷，擦掉的格子会置空并在重新生成时保持为空。</p>
     </main>
 
     <aside class="panel side">

@@ -2803,12 +2803,177 @@ fire(pinchMoveT, pinchMoveType, pinchEv(-4000, 4000));
 eq('捏合 | 比例极大 → 夹取到上限 4×', st.viewZoom, 4);
 fire(pinchMoveT, pinchMoveType, pinchEv(100, 200));
 fire(pinchMoveT, pinchMoveType, pinchEv2(100, 101));
-eq('捏合 | 比例极小 → 夹取到下限 0.25×', st.viewZoom, 0.25);
+/* 原断言钉死「下限 = 0.25」这个常数。新行为的下限是 zoomFloor() = max(0.01, min(0.25, fitScale()))，
+   所以改成「捏合落点恰好等于 setViewZoom 的下限」，再单独断言下限本身落在 [0.01, 0.25] 内。 */
+const pinchLow = st.viewZoom;
+ui.setViewZoom(0.0001);
+const pinchFloor = st.viewZoom;
+eq('捏合 | 比例极小 → 精确落在缩放下限上（与 setViewZoom 的下限是同一个值）', pinchLow, pinchFloor);
+ok('捏合 | 缩放下限始终在 [0.01, 0.25] 内（本环境容器量不到 → 回落 0.25，不会缩到 0 也不会缩不出去）',
+  pinchFloor >= 0.01 && pinchFloor <= 0.25, String(pinchFloor));
 fire(pinchUpT, pinchUpType, pinchEv(100, 200));
 ui.setViewZoom(1);
 erFlushAll();
 ok('捏合 | 触摸端常态下图纸画布没有 touch-action:none（有人图省事写死的话就没法滚动了）',
   !els.patternCanvas.classList.contains(eraserStateClass), eraserStateClass);
+
+/* ══════════════ 缩放下限 zoomFloor（用户报：手机上缩到最小也看不到完整图片）══════════════
+   冻结行为：zoomFloor() = max(0.01, min(0.25, fitScale()))，其中
+   fitScale() = min(容器内宽 / 画布真实像素宽, 容器内高 / 画布真实像素高)；
+   算不出（无图纸 / 画布 0×0 / 容器量不到）→ 回落 0.25。上限仍是 4，捏合与 ± 共用同一条路径。
+   本轮核心要证明的一件事：**适应窗口之后画布 CSS 尺寸 ≤ 容器内尺寸**（= 能看全）。 */
+const zoomCv = els.patternCanvas;
+const zoomScroll = els.canvasScroll;
+const cvCssPx = (v) => Number(String(v == null ? '' : v).replace(/px$/, ''));
+ok('缩放下限前置 | 能拿到 #patternCanvas / #canvasScroll / #viewZoom（下面不是空转）',
+  !!zoomCv && !!zoomScroll && !!els.viewZoom && !!els.viewZoomVal);
+const zoomKeep = {
+  cvW: Number(zoomCv.width) || 0, cvH: Number(zoomCv.height) || 0,
+  cw: Number(zoomScroll.clientWidth) || 0, ch: Number(zoomScroll.clientHeight) || 0
+};
+st.pattern = pat6;
+
+/* ① 窄容器 + 大图纸：下限必须能低于 0.25，且「适应窗口」真的能看全 */
+zoomScroll.clientWidth = 360;
+zoomScroll.clientHeight = 520;
+zoomCv.width = 2784;                    /* 116 格 × 24px = 2784px 宽 */
+zoomCv.height = 2784;
+const narrowRawFit = Math.min(360 / 2784, 520 / 2784);
+ui.setViewZoom(1);
+ui.setViewZoom(0.0001);                 /* 一路往下，落到下限 */
+const narrowFloor = st.viewZoom;
+ok('缩放下限 ① | 窄容器 + 大图纸 → 下限 < 0.25（手机上能够到真正的适应比例，这就是用户报的 bug）',
+  narrowFloor < 0.25, 'floor=' + narrowFloor + ' rawFit=' + narrowRawFit.toFixed(4));
+ok('缩放下限 ① | 下限 = max(0.01, min(0.25, fitScale))（容差 0.011 覆盖百分位量化）',
+  Math.abs(narrowFloor - Math.max(0.01, Math.min(0.25, narrowRawFit))) <= 0.011,
+  'floor=' + narrowFloor + ' 期望≈' + Math.max(0.01, Math.min(0.25, narrowRawFit)).toFixed(4));
+ok('缩放下限 ① | 下限不低于 0.01（不会一路缩到看不见）', narrowFloor >= 0.01, String(narrowFloor));
+ui.fitViewZoom();
+const narrowFitW = cvCssPx(zoomCv.style.width);
+const narrowFitH = cvCssPx(zoomCv.style.height);
+ok('缩放下限 ① | ★核心：适应窗口后 画布 CSS 宽 ≤ 容器内宽（360）', narrowFitW > 0 && narrowFitW <= 360, 'w=' + narrowFitW);
+ok('缩放下限 ① | ★核心：适应窗口后 画布 CSS 高 ≤ 容器内高（520）', narrowFitH > 0 && narrowFitH <= 520, 'h=' + narrowFitH);
+ok('缩放下限 ① | 适应窗口的比例不超过真实可容纳比例（量化向下取整，不越界）',
+  st.viewZoom <= Math.min(360 / 2784, 520 / 2784) + 1e-9, 'zoom=' + st.viewZoom + ' rawFit=' + narrowRawFit.toFixed(5));
+eq('缩放下限 ① | 适应窗口后 viewZoom 与 viewZoomApplied 同步', st.viewZoomApplied, st.viewZoom);
+ui.setViewZoom(0.0001);
+ok('缩放下限 ① | 缩到下限后同样在容器内（整张图仍能看全）',
+  cvCssPx(zoomCv.style.width) <= 360 && cvCssPx(zoomCv.style.height) <= 520,
+  JSON.stringify([zoomCv.style.width, zoomCv.style.height]));
+
+/* ② 滚动归位：先位移再适应窗口，整张图仍要全在可视区内 */
+zoomScroll.scrollLeft = 900;
+zoomScroll.scrollTop = 1400;
+ui.fitViewZoom();
+const resetW = cvCssPx(zoomCv.style.width);
+const resetH = cvCssPx(zoomCv.style.height);
+const resetSl = Number(zoomScroll.scrollLeft || 0);
+const resetSt = Number(zoomScroll.scrollTop || 0);
+ok('滚动归位 | 适应窗口后整张图都在可视区内（偏移不把图推出视野，且图小于容器）',
+  resetSl <= 0 && resetSt <= 0 && resetW <= 360 && resetH <= 520,
+  JSON.stringify({ resetSl: resetSl, resetSt: resetSt, w: resetW, h: resetH }));
+ok('滚动归位 | 滚动偏移不再是位移后的 (900,1400)（归位到内容起点）',
+  resetSl <= 0 && resetSt <= 0, JSON.stringify([resetSl, resetSt]));
+
+/* ③ 宽容器 + 小图纸：fitScale 远大于 1，但下限**必须仍是 0.25**（不能反过来缩不出去） */
+zoomScroll.clientWidth = 1600;
+zoomScroll.clientHeight = 1200;
+zoomCv.width = 29;
+zoomCv.height = 29;
+ui.setViewZoom(0.0001);
+const wideFloor = st.viewZoom;
+eq('缩放下限 ③ | ★宽容器 + 小图（fitScale ≈ 40）→ 下限仍是 0.25，没有被 fitScale 抬高', st.viewZoom, 0.25);
+ui.setViewZoom(0.25);
+eq('缩放下限 ③ | 宽容器 + 小图 → 仍然能缩到 0.25（用户缩得出去）', st.viewZoom, 0.25);
+ui.fitViewZoom();
+ok('缩放下限 ③ | 宽容器 + 小图 → 适应窗口可以放大到 > 1 且不超出容器',
+  st.viewZoom > 1 && cvCssPx(zoomCv.style.width) <= 1600 && cvCssPx(zoomCv.style.height) <= 1200,
+  JSON.stringify([st.viewZoom, zoomCv.style.width, zoomCv.style.height]));
+const wideFitW = zoomCv.style.width;
+const wideFitH = zoomCv.style.height;
+const wideFitZoom = st.viewZoom;
+info('缩放下限实测 | 窄容器 360×520 + 画布 2784×2784（116 格 × 24px）：下限 = ' + narrowFloor
+  + '，适应窗口后画布 CSS = ' + narrowFitW + ' × ' + narrowFitH + '（容器 360×520，rawFit≈' + narrowRawFit.toFixed(4) + '）');
+info('缩放下限实测 | 宽容器 1600×1200 + 画布 29×29（小图）：下限 = ' + wideFloor + '（未被 fitScale≈'
+  + (1580 / 29).toFixed(1) + ' 抬高），适应窗口后画布 CSS = ' + wideFitW + ' × ' + wideFitH + '，viewZoom = ' + wideFitZoom);
+
+/* ④ 滑杆：#viewZoom 的 min 必须能表达下限；value 始终落在 [下限, 4] 内。
+     注意桩不解析 HTML 属性，所以 min/max 要从 ui.html 文本读（另加一条运行时 min 的备选口径）。 */
+const sliderTag = (UI_HTML.match(/<input\b[^>]*\bid="viewZoom"[^>]*>/) || [''])[0];
+const htmlSliderMin = Number((sliderTag.match(/\bmin="([^"]*)"/) || [null, ''])[1]);
+const htmlSliderMax = Number((sliderTag.match(/\bmax="([^"]*)"/) || [null, ''])[1]);
+ok('滑杆 | #viewZoom 的 max 仍是 4', htmlSliderMax === 4, String(htmlSliderMax));
+const runtimeSliderMin = Number(els.viewZoom.min);
+zoomScroll.clientWidth = 360;
+zoomScroll.clientHeight = 520;
+zoomCv.width = 2784;
+zoomCv.height = 2784;
+ui.setViewZoom(0.0001);
+const sliderFloorNow = st.viewZoom;
+ok('滑杆 | 大图 + 窄容器：#viewZoom 的 min 能表达下限（静态降到 0.01，或运行时跟着下限走）',
+  (isFinite(htmlSliderMin) && htmlSliderMin > 0 && htmlSliderMin <= 0.01 + 1e-9)
+  || (isFinite(runtimeSliderMin) && runtimeSliderMin > 0 && runtimeSliderMin <= sliderFloorNow + 1e-9),
+  JSON.stringify({ htmlMin: htmlSliderMin, runtimeMin: runtimeSliderMin, floor: sliderFloorNow }));
+ok('滑杆 | 大图 + 窄容器：value 落在 [下限, 4] 内',
+  Number(els.viewZoom.value) >= Math.max(0.01, sliderFloorNow) - 1e-9 && Number(els.viewZoom.value) <= 4 + 1e-9,
+  String(els.viewZoom.value));
+eq('滑杆 | value 与 state.viewZoom 一致（大图 + 窄容器）', Number(els.viewZoom.value), st.viewZoom);
+zoomCv.width = 29;
+zoomCv.height = 29;
+zoomScroll.clientWidth = 1600;
+ui.fitViewZoom();
+const smallVal = Number(els.viewZoom.value);
+ok('滑杆 | 小图 + 宽容器：value 仍落在 [0.01, 4] 内（图纸从小变大/从大变小都不会越界）',
+  smallVal >= 0.01 && smallVal <= 4, String(smallVal));
+eq('滑杆 | value 与 state.viewZoom 一致（小图 + 宽容器放大后）', smallVal, st.viewZoom);
+ok('滑杆 | min 不会小到荒唐（≥ 0.01）', !isFinite(htmlSliderMin) || htmlSliderMin >= 0.01, String(htmlSliderMin));
+
+/* ⑤ 退化输入：无图纸 / 画布 0×0 / 容器量不到 / NaN·0·-1 —— 一条都不许抛 */
+const zoomThrew = [];
+const zoomTry = (name, fn) => { try { fn(); } catch (e) { zoomThrew.push(name + ':' + e.message); } };
+const patKeepForZoom = st.pattern;
+let zMark = zoomThrew.length;
+zoomTry('无图纸-fit', function () { st.pattern = null; ui.fitViewZoom(); });
+zoomTry('无图纸-set', function () { ui.setViewZoom(0.3); });
+eq('缩放下限 ⑤ | 无图纸时 fitViewZoom / setViewZoom 都不抛', zoomThrew.slice(zMark), []);
+st.pattern = patKeepForZoom;
+zMark = zoomThrew.length;
+zoomCv.width = 0;
+zoomCv.height = 0;
+zoomTry('0×0-fit', function () { ui.fitViewZoom(); });
+zoomTry('0×0-set', function () { ui.setViewZoom(0.15); });
+eq('缩放下限 ⑤ | 画布 0×0 时不抛（fitViewZoom 给 warn 即可）', zoomThrew.slice(zMark), []);
+zoomCv.width = 2784;
+zoomCv.height = 2784;
+const keepCwForZoom = zoomScroll.clientWidth;
+const keepChForZoom = zoomScroll.clientHeight;
+zoomScroll.clientWidth = 0;
+zoomScroll.clientHeight = 0;
+zMark = zoomThrew.length;
+ui.setViewZoom(0.0001);
+const noContainerFloor = st.viewZoom;
+zoomTry('容器量不到-fit', function () { ui.fitViewZoom(); });
+eq('缩放下限 ⑤ | 容器量不到（clientWidth = 0）时不抛', zoomThrew.slice(zMark), []);
+eq('缩放下限 ⑤ | 容器量不到时下限回落 0.25（不是 0、也不是 NaN）', noContainerFloor, 0.25);
+zoomScroll.clientWidth = keepCwForZoom || 360;
+zoomScroll.clientHeight = keepChForZoom || 520;
+zMark = zoomThrew.length;
+zoomTry('NaN', function () { ui.setViewZoom(NaN); });
+zoomTry('0', function () { ui.setViewZoom(0); });
+zoomTry('-1', function () { ui.setViewZoom(-1); });
+eq('缩放下限 ⑤ | setViewZoom(NaN / 0 / -1) 都不抛', zoomThrew.slice(zMark), []);
+ok('缩放下限 ⑤ | 非法入参之后 viewZoom 仍是有限值且落在 [0.01, 4] 内',
+  isFinite(st.viewZoom) && st.viewZoom >= 0.01 && st.viewZoom <= 4, String(st.viewZoom));
+
+/* 还原现场，后面的断言不受本块影响 */
+zoomCv.width = zoomKeep.cvW;
+zoomCv.height = zoomKeep.cvH;
+zoomScroll.clientWidth = zoomKeep.cw;
+zoomScroll.clientHeight = zoomKeep.ch;
+zoomScroll.scrollLeft = 0;
+zoomScroll.scrollTop = 0;
+ui.setViewZoom(1);
+erFlushAll();
 
 /* ── 能力检测 + 触摸端导出兜底（第二/第三个 app 实例）────────────────── */
 ok('兜底 | 触摸判定走能力检测（matchMedia 的 (pointer: coarse) / 窄屏），不是 UA 嗅探',

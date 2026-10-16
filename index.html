@@ -392,7 +392,7 @@
         <section class="group">
           <h2>预览缩放</h2>
           <label class="row" for="viewZoom"><span>预览缩放（不影响导出）</span><output id="viewZoomVal">100%</output></label>
-          <input id="viewZoom" type="range" min="0.25" max="4" step="0.05" value="1" />
+          <input id="viewZoom" type="range" min="0.01" max="4" step="0.001" value="1" />
           <div class="zoom-btns">
             <button id="viewZoomOut" class="btn" type="button">− 缩小</button>
             <button id="viewZoomIn" class="btn" type="button">+ 放大</button>
@@ -4374,13 +4374,15 @@ window.PINDOU_PALETTES = {
      只剩 code 一档：用户点名要删掉的第三档标签模式已从界面与代码里彻底移除。 */
   var LABEL_MIN_FALLBACK = { code: 20 };
 
-  var ZOOM_MIN = 0.25;
+  var ZOOM_MIN = 0.25;              /* 缩放下限的「默认」值：能看全的比例比它还小时，下限会被放宽到那个比例 */
   var ZOOM_MAX = 4;
   var ZOOM_DEFAULT = 1;
   var ZOOM_STEP_FACTOR = 1.25;
+  /* 缩放下限的绝对地板：纯粹防退化（比例算出来是 0 或负数时也不至于除零/卡死），正常永远碰不到。 */
+  var ABS_FLOOR = 0.01;
 
-  /* 触摸端参数。捏合复用同一套缩放状态（state.viewZoom）与同一个 applyViewZoom，
-     所以缩放范围仍然是 ZOOM_MIN / ZOOM_MAX，这里不另设一套上下限。 */
+  /* 触摸端参数。捏合复用同一套缩放状态（state.viewZoom）与同一个 setViewZoom / applyViewZoom，
+     所以捏合与 +/−/滑杆/「适应窗口」拿到的是**同一个**动态下限（zoomFloor），这里不另设一套。 */
   var PINCH_CLICK_BLOCK_MS = 400;       /* 捏合结束后这段时间内忽略 click：两指抬起别被当成「点了一格」 */
   var TOUCH_DRAG_CLASS = 'touch-drag';  /* 加在 #patternCanvas 上：只在橡皮刷激活时关闭画布滚动 */
 
@@ -4982,7 +4984,7 @@ window.PINDOU_PALETTES = {
     /* 色数上限的「读数」就是那个数字框本身（没有第三个数字）：这里顺手把它对齐到滑杆值 */
     if (ui.maxColorsNum) setVal(ui.maxColorsNum, String(maxColorsSliderValue()));
     setText(ui.cellSizeVal, cellSizeValue() + 'px');
-    setText(ui.viewZoomVal, Math.round(state.viewZoom * 100) + '%');
+    setText(ui.viewZoomVal, zoomPercentText());
     syncCellLabelHint();
     syncMaxColorsHint();
     syncPreprocessHint();
@@ -6843,6 +6845,74 @@ window.PINDOU_PALETTES = {
 
   /* ----------------------------------------------------------- 预览缩放 */
 
+  /* 预览区能容纳的比例 = min(容器内容宽 / 画布真实像素宽, 容器内容高 / 画布真实像素高)。
+     用 **cv.width / cv.height（画布真实像素）**，不是它当前的 CSS 尺寸 —— 后者已经被缩放改过，
+     拿它算会自相矛盾（缩得越小、算出来的可容纳比例越"够用"，下限永远不降）。
+     算不出来（没有图纸 / 画布 0×0 / 容器 clientWidth 或 clientHeight 为 0 / 结果为负）时返回 null，
+     调用方回落到默认下限 ZOOM_MIN。 */
+  function fitScale() {
+    var cv = ui.patternCanvas;
+    if (!state.pattern) return null;
+    if (!cv || !(Number(cv.width) > 0) || !(Number(cv.height) > 0)) return null;
+    var scroll = ui.canvasScroll;
+    var cw = Number(scroll && scroll.clientWidth) || 0;
+    var ch = Number(scroll && scroll.clientHeight) || 0;
+    if (!(cw > 0) || !(ch > 0)) return null;
+    var availW = cw - 20, availH = ch - 20;      /* 与 fitViewZoom 同一口径：留 20px 余量 */
+    if (!(availW > 0) || !(availH > 0)) return null;
+    var s = Math.min(availW / Number(cv.width), availH / Number(cv.height));
+    if (!isFinite(s) || !(s > 0)) return null;
+    return s;
+  }
+
+  /* 缩放下限：永远不高于「能看全」的比例 —— 否则手机上一张 116×116 的图纸
+     （2784px 宽）在 360px 的容器里再怎么缩也看不全。
+     下限只会被 fitScale **调低**，不会被它抬高：小图在宽容器上 fitScale 可能 > 1，
+     这时下限仍是 ZOOM_MIN，用户照样能缩出去（不能反过来把用户锁死在放大侧）。
+     3 位小数**向下截断**（不是四舍五入）：四舍五入会把 0.0584 抬成 0.0585→更大，
+     于是"缩到下限"仍然差几个像素看不全。截断保证 zoomFloor() ≤ 真实可容纳比例。 */
+  function zoomFloor() {
+    var f = fitScale();
+    var lo = (f === null) ? ZOOM_MIN : Math.min(ZOOM_MIN, f);
+    if (!isFinite(lo) || !(lo > ABS_FLOOR)) lo = ABS_FLOOR;
+    if (lo > ZOOM_MAX) lo = ZOOM_MAX;            /* 下限绝不高于上限（这一条恒成立，这里只是兜底） */
+    return Math.floor(lo * 1000) / 1000;
+  }
+
+  /* 缩放读数：<10% 时给一位小数（0.058 → 5.8%），否则整数百分比 ——
+     免得 0.058 被四舍五入成 6%，看起来像是"还能再小一点却缩不动"。 */
+  function zoomPercentText() {
+    var z = Number(state.viewZoom);
+    if (!(z > 0)) return '0%';
+    if (z < 0.1) return (Math.round(z * 1000) / 10) + '%';
+    return Math.round(z * 100) + '%';
+  }
+
+  /* 把滚动位置归位到左上角。「适应窗口」之后画布的 CSS 尺寸已经 ≤ 容器内容区，
+     所以 (0,0) 一定包含整张图 —— 不用居中也能看全，而且结果与容器尺寸无关，可精确断言。
+     否则会出现「图变小了、滚动位置却还停在右下角」→ 用户仍然看不到完整图片。 */
+  function resetScrollOrigin() {
+    var scroll = ui.canvasScroll;
+    if (!scroll) return;
+    try { scroll.scrollLeft = 0; scroll.scrollTop = 0; } catch (e) { /* 忽略 */ }
+  }
+
+  /* 预览缩放滑杆：min 跟着**动态下限**走（写死 0.25 的滑杆永远够不到 0.12 那种比例）。
+     顺序必须是「先把状态拉回允许区间 → 写 min → 再写 value」：反了浏览器会拿旧 min 夹掉 value。
+     值域上界仍是 ZOOM_MAX（ui.html 的 max 不动）。 */
+  function syncViewZoomSlider() {
+    var el = ui.viewZoom;
+    if (!el) return;
+    var lo = zoomFloor();
+    if (!(state.viewZoom >= lo)) state.viewZoom = lo;
+    if (state.viewZoom > ZOOM_MAX) state.viewZoom = ZOOM_MAX;
+    try {
+      el.min = String(lo);                       /* 真实 range 控件：min 是反射属性 */
+      if (String(el.min) !== String(lo) && typeof el.setAttribute === 'function') el.setAttribute('min', String(lo));
+    } catch (e) { /* 忽略 */ }
+    setVal(el, state.viewZoom);
+  }
+
   /* 预览缩放只改 CSS 尺寸：canvas.width/height（真实像素）保持不变，
      因此导出分辨率与点击命中判定都不受缩放影响。
      必须显式覆盖 .pattern-canvas 的 max-width:100%（否则显式宽度会被样式表压回去），
@@ -6850,8 +6920,8 @@ window.PINDOU_PALETTES = {
   function applyViewZoom(anchor) {
     var cv = ui.patternCanvas;
     var scroll = ui.canvasScroll;
-    if (ui.viewZoom) setVal(ui.viewZoom, state.viewZoom);
-    setText(ui.viewZoomVal, Math.round(state.viewZoom * 100) + '%');
+    syncViewZoomSlider();
+    setText(ui.viewZoomVal, zoomPercentText());
     if (!cv || !cv.width || !cv.height) return;
     var w = Math.max(1, Math.round(cv.width * state.viewZoom));
     var h = Math.max(1, Math.round(cv.height * state.viewZoom));
@@ -6876,11 +6946,20 @@ window.PINDOU_PALETTES = {
     state.viewZoomApplied = state.viewZoom;
   }
 
-  function setViewZoom(z, anchor) {
+  /* opt.truncate：把比例**向下截断**到 3 位小数。
+     「适应窗口」必须用它 —— 四舍五入会把 0.0584 变成 0.06（大于真实可容纳比例），
+     于是仍然差几个像素看不全。手动缩放（滑杆/按钮/滚轮/捏合）保持 2 位小数的四舍五入不变。
+     opt.resetScroll：缩放完把滚动位置归位到左上角（见 resetScrollOrigin）。 */
+  function setViewZoom(z, anchor, opt) {
     var next = Number(z);
     if (!isFinite(next) || next <= 0) next = ZOOM_DEFAULT;
-    state.viewZoom = Math.round(clamp(next, ZOOM_MIN, ZOOM_MAX) * 100) / 100;
+    var lo = zoomFloor();
+    if (!(lo >= ABS_FLOOR)) lo = ABS_FLOOR;
+    if (lo > ZOOM_MAX) lo = ZOOM_MAX;
+    var v = (opt && opt.truncate) ? (Math.floor(next * 1000) / 1000) : (Math.round(next * 100) / 100);
+    state.viewZoom = Math.round(clamp(v, lo, ZOOM_MAX) * 1000) / 1000;
     applyViewZoom(anchor);
+    if (opt && opt.resetScroll) resetScrollOrigin();
   }
 
   /* anchor 必须一路透传：滚轮缩放要停在光标下的那个内容点上（按钮缩放不需要锚点） */
@@ -6894,8 +6973,10 @@ window.PINDOU_PALETTES = {
     var ch = Number(scroll && scroll.clientHeight) || 0;
     if (!cw || !ch) { setStatus('当前环境无法测量预览区尺寸', 'warn'); return; }
     var availW = Math.max(1, cw - 20), availH = Math.max(1, ch - 20);
-    setViewZoom(Math.min(availW / cv.width, availH / cv.height));
-    setStatus('已适应窗口：' + Math.round(state.viewZoom * 100) + '%', 'info');
+    var s = Math.min(availW / cv.width, availH / cv.height);
+    /* 向下截断 + 归位滚动：这条路径的目标就是「整张图都在可视区里」 */
+    setViewZoom(s, null, { truncate: true, resetScroll: true });
+    setStatus('已适应窗口：' + zoomPercentText() + '（整张图纸都在可视区内）', 'info');
   }
 
   /* 滚轮缩放：以光标为锚点（applyViewZoom 里按缩放比例修正 scrollLeft/scrollTop）。
@@ -8077,6 +8158,9 @@ window.PINDOU_PALETTES = {
     setViewZoom: setViewZoom,
     applyViewZoom: applyViewZoom,
     fitViewZoom: fitViewZoom,
+    /* 预览缩放的动态下限与可容纳比例（自测 / 脚本入口） */
+    zoomFloor: zoomFloor,
+    fitScale: fitScale,
     renderRecolorGrid: renderRecolorGrid,
     pickerGroups: pickerGroups,
     selectRecolorCode: selectRecolorCode,

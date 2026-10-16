@@ -17,7 +17,9 @@
     font-family:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB",sans-serif;
     -webkit-text-size-adjust:100%;
   }
-  #app{max-width:1800px;margin:0 auto;padding:14px 16px 22px;min-height:100vh;display:flex;flex-direction:column;gap:12px}
+  /* 100vh 在移动浏览器里包含被工具栏遮住的那一段，底部内容会被切掉；
+     100dvh（动态视口）才算得对。两行同写：不认 dvh 的老 WebView 用上一行的 vh 兜底。 */
+  #app{max-width:1800px;margin:0 auto;padding:14px 16px 22px;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;gap:12px}
 
   .app-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:10px}
   .app-head h1{margin:0 0 2px;font-size:18px;letter-spacing:.4px}
@@ -34,7 +36,7 @@
   .layout{display:grid;grid-template-columns:310px minmax(0,1fr) 320px;gap:12px;align-items:start}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
   .panel h2{margin:0;font-size:13px;font-weight:600;color:var(--text)}
-  .controls{display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 150px);overflow:auto}
+  .controls{display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 150px);max-height:calc(100dvh - 150px);overflow:auto}
 
   /* ── 基本 / 高级 标签页：只切显隐，绝不重建 DOM（切换不丢控件状态） ── */
   .tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;position:sticky;top:0;z-index:3;background:var(--panel);padding:1px 0 6px}
@@ -43,7 +45,10 @@
     border:1px solid var(--line);border-radius:9px;padding:7px 10px;font-size:13px;font-weight:600;
     cursor:pointer;font-family:inherit;transition:color .15s,border-color .15s,background .15s
   }
-  .tab:hover{color:var(--text);border-color:var(--accent)}
+  /* 全部 :hover 规则都包在 @media (hover:hover) 里：触摸端没有真正的悬停，
+     不包的话点一下按钮 hover 态就「粘」在上面，看起来一直是高亮的。
+     逐条原位包（不集中到一处）是为了不改变这些规则与相邻规则的层叠顺序。 */
+  @media (hover:hover){.tab:hover{color:var(--text);border-color:var(--accent)}}
   .tab.on{background:var(--accent-soft);color:var(--text);border-color:var(--accent)}
   .tabpanel{display:flex;flex-direction:column;gap:10px}
 
@@ -87,11 +92,11 @@
     background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;
     padding:7px 12px;font-size:12.8px;cursor:pointer;transition:border-color .15s,background .15s
   }
-  .btn:hover{border-color:var(--accent);background:#232936}
+  @media (hover:hover){.btn:hover{border-color:var(--accent);background:#232936}}
   .btn:disabled{opacity:.4;cursor:not-allowed}
-  .btn:disabled:hover{border-color:var(--line);background:var(--panel2)}
+  @media (hover:hover){.btn:disabled:hover{border-color:var(--line);background:var(--panel2)}}
   .btn-primary{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
-  .btn-primary:hover{background:#79b0f7;border-color:#79b0f7}
+  @media (hover:hover){.btn-primary:hover{background:#79b0f7;border-color:#79b0f7}}
   .btn-ghost{background:transparent}
   .group-actions .btn{width:100%;margin-top:8px}
   .group-actions .btn:first-of-type{margin-top:2px}
@@ -111,7 +116,7 @@
     flex:1 1 auto;width:auto;min-width:0;padding:4px 7px;font-size:13.4px;font-weight:600;
     color:var(--text);background:transparent;border:1px solid transparent;border-radius:6px
   }
-  .preview-title .preview-title-input:hover{border-color:var(--line)}
+  @media (hover:hover){.preview-title .preview-title-input:hover{border-color:var(--line)}}
   .preview-title .preview-title-input:focus{background:var(--panel);border-color:var(--accent);outline:none}
   .panel-head{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
   .status-line{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-size:12.4px}
@@ -123,18 +128,24 @@
   .progress{height:3px;border-radius:2px;background:var(--panel2);overflow:hidden}
   .progress-bar{height:100%;width:35%;background:var(--accent);animation:pindou-slide 1s ease-in-out infinite}
   @keyframes pindou-slide{0%{margin-left:-35%}100%{margin-left:100%}}
-  .canvas-scroll{position:relative;overflow:auto;max-height:72vh;padding:8px;background:var(--bg2);border:1px solid var(--line);border-radius:8px}
+  /* 图纸画布：常态「默认可滚动」——不设 touch-action，用户才能单指双向滑动看大图。
+     只有橡皮刷（唯一需要按住拖动的工具）激活时，app.js 才加上 .touch-drag 关掉滚动，
+     否则手指在画布上一拖，页面和画布会同时滚，刷子根本落不下去。 */
+  .canvas-scroll{position:relative;overflow:auto;max-height:72vh;max-height:72dvh;padding:8px;background:var(--bg2);border:1px solid var(--line);border-radius:8px}
   .pattern-canvas{display:block;max-width:100%;height:auto;background:#0c0e12;border-radius:6px;image-rendering:pixelated;cursor:default}
   .pattern-canvas.editing{cursor:crosshair}
+  .pattern-canvas.touch-drag{touch-action:none}
+  /* pre-line：触摸端文案由 app.js 用 \n 换行（仍然只写 textContent，不注入 HTML） */
   .canvas-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;pointer-events:none;padding:16px}
-  .canvas-hint{margin:0;text-align:center;color:var(--muted);font-size:12.8px;line-height:1.6;background:rgba(16,18,22,.82);border:1px dashed var(--line);border-radius:10px;padding:12px 16px;max-width:80%}
+  .canvas-hint{margin:0;white-space:pre-line;text-align:center;color:var(--muted);font-size:12.8px;line-height:1.6;background:rgba(16,18,22,.82);border:1px dashed var(--line);border-radius:10px;padding:12px 16px;max-width:80%}
   .canvas-hint.small{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:11.5px;padding:7px 10px;max-width:88%}
   .empty-cta{pointer-events:auto}
 
   .side{display:flex;flex-direction:column;gap:12px}
   .block h2{margin-bottom:8px;color:var(--accent)}
   .source-wrap{position:relative}
-  .source-canvas{display:block;width:100%;max-width:100%;height:auto;background:#0c0e12;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated}
+  /* 原图预览画布是纯拖拽表面（裁剪框 / 移动框都用它），手指在上面必须只拖动、不滚动页面 */
+  .source-canvas{display:block;width:100%;max-width:100%;height:auto;background:#0c0e12;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated;touch-action:none}
   .source-canvas.crop-mode{cursor:crosshair}
   .src-tools{margin-top:10px}
   .src-reset{width:100%;margin-top:8px}
@@ -160,7 +171,7 @@
     height:26px;padding:0;cursor:pointer;font-size:9.5px;font-weight:700;line-height:1;
     display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:inherit
   }
-  .sw:hover{border-color:var(--text)}
+  @media (hover:hover){.sw:hover{border-color:var(--text)}}
   .sw-on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft),inset 0 0 0 1px rgba(0,0,0,.35)}
   .sw-sm{height:22px;font-size:9px}
   .sw-recent{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:4px;min-height:22px}
@@ -169,11 +180,47 @@
   .disclaimer{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:var(--radius);padding:9px 12px;font-size:12.6px;color:#e4d9c1}
   .disclaimer-tag{display:inline-block;color:var(--warn);font-weight:600;margin-right:6px}
 
+  /* ── 触摸端导出兜底覆盖层 ──
+     微信内置浏览器与 iOS Safari 的 <a download> 可能只是打开图片而不是下载，
+     所以判定为触摸端时额外给一层：图片放进 <img>（只有 img 能唤起系统的存图菜单），
+     CSV 放进可被选中的 <textarea>。桌面端 app.js 恒不显示这一层（hidden 不动）。
+     定位用 top/right/bottom/left 四行而不是 inset：老内核（旧版 X5）不认 inset。 */
+  .save-overlay{position:fixed;top:0;right:0;bottom:0;left:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:14px;background:rgba(8,9,12,.88)}
+  .save-panel{display:flex;flex-direction:column;gap:10px;width:100%;max-width:560px;max-height:100%;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+  .save-title{margin:0;font-size:13px;font-weight:600;color:var(--accent)}
+  .save-tip{margin:0;font-size:13.5px;line-height:1.6;color:var(--text)}
+  .save-img{display:block;margin:0 auto;max-width:100%;max-height:52vh;height:auto;background:var(--bg2);border:1px solid var(--line);border-radius:8px;image-rendering:pixelated;-webkit-touch-callout:default}
+  .save-text{width:100%;height:34vh;min-height:120px;resize:none;background:var(--bg2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;-webkit-user-select:text;user-select:text}
+  .save-actions{display:flex;flex-wrap:wrap;gap:8px}
+  .save-actions .btn{flex:1 1 auto}
+
   @media (max-width:1180px){
     .layout{grid-template-columns:1fr}
     .controls{max-height:none;overflow:visible}
     .tabs{position:static}
-    .canvas-scroll{max-height:60vh}
+    .canvas-scroll{max-height:60vh;max-height:60dvh}
+    /* 单列时把预览区提到最前：手机上打开页面先看到图纸，而不是先滚过 12 张参数卡片。
+       只用 CSS order 重排视觉顺序，DOM 顺序原样不动
+       —— #dropZone 仍是 .layout 的第 2 个子节点，#chartTitle 仍在 #canvasScroll 之前。 */
+    .canvas-panel{order:-1}
+
+    /* ── 触控目标 ≥ 44px（手指不是鼠标）── */
+    .btn,.tab{min-height:44px}
+    .btn-grid,.zoom-btns{gap:8px}
+    /* 勾选框的真实点击面是整个 <label class="check">（input 在 label 里），所以撑高 label */
+    .check{min-height:44px;align-items:center}
+    .check input{width:20px;height:20px;margin:0}
+    .sw{height:44px;font-size:11px}
+    .sw-sm{height:40px}
+    .sw-recent .sw{width:44px}
+    /* 滑杆：元素盒撑到 44px，整条都能抓（轨道视觉高度不变） */
+    input[type="range"]{height:44px}
+    select,input[type="number"],input[type="text"]{min-height:44px}
+
+    /* 输入框字号 ≥ 16px —— iOS Safari 聚焦 < 16px 的输入框会自动放大整页。
+       只在窄屏/触摸断点里抬，桌面的 12.8px / 13.4px 原样不动。 */
+    input[type="number"],input[type="text"],select{font-size:16px}
+    .preview-title .preview-title-input{font-size:16px}
   }
   @media (max-width:640px){
     #app{padding:10px 10px 18px}
@@ -186,7 +233,7 @@
   <header class="app-head">
     <div class="head-title">
       <h1>拼豆图纸生成器</h1>
-      <p class="app-sub">纯本地运行 · 上传图片 → MARD 色卡网格图纸 + 色号用量清单</p>
+      <p class="app-sub">图片在你的浏览器里处理，不会上传到服务器 · 选一张图 → MARD 色卡网格图纸 + 色号用量清单</p>
     </div>
     <div class="head-actions">
       <button id="btnPickFile" class="btn btn-primary" type="button">选择图片…</button>
@@ -207,7 +254,7 @@
       <div id="panelBasic" class="tabpanel" role="tabpanel" aria-labelledby="tabBasic">
         <section class="group">
           <h2>图片输入</h2>
-          <p class="hint">三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。图片只在本地处理，不会上传到任何服务器。</p>
+          <p id="inputHint" class="hint">三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。图片在你的浏览器里处理，不会上传到任何服务器。</p>
         </section>
 
         <section class="group">
@@ -428,4 +475,17 @@
   <footer class="disclaimer">
     <span class="disclaimer-tag">声明</span>RGB 为屏幕参考值，非品牌官方色值；严谨对色请以实物色卡为准。
   </footer>
+
+  <div id="saveOverlay" class="save-overlay" hidden>
+    <div class="save-panel">
+      <p class="save-title">下载可能不生效 · 这里还有一条路</p>
+      <p id="saveTip" class="save-tip" hidden>长按下面那张图片即可保存到相册；用量清单也可以在这里长按，全选后复制。</p>
+      <img id="saveImage" class="save-img" alt="生成的拼豆图纸" hidden />
+      <textarea id="saveText" class="save-text" readonly spellcheck="false" hidden></textarea>
+      <div class="save-actions">
+        <button id="saveCopy" class="btn btn-primary" type="button" hidden>复制到剪贴板</button>
+        <button id="saveClose" class="btn" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
 </div>

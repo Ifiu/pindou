@@ -34,6 +34,18 @@
   var ZOOM_DEFAULT = 1;
   var ZOOM_STEP_FACTOR = 1.25;
 
+  /* 触摸端参数。捏合复用同一套缩放状态（state.viewZoom）与同一个 applyViewZoom，
+     所以缩放范围仍然是 ZOOM_MIN / ZOOM_MAX，这里不另设一套上下限。 */
+  var PINCH_CLICK_BLOCK_MS = 400;       /* 捏合结束后这段时间内忽略 click：两指抬起别被当成「点了一格」 */
+  var TOUCH_DRAG_CLASS = 'touch-drag';  /* 加在 #patternCanvas 上：只在橡皮刷激活时关闭画布滚动 */
+
+  /* 触摸端导出兜底文案。集中成常量，方便逐条核对「有没有说不成立的话」。 */
+  var SAVE_TIP_IMG = '请长按下面这张图片，选「存储到相册 / 保存图片」。';
+  var SAVE_TIP_IMG_NONE = '这个浏览器无法把图纸放进这里预览，长按保存用不了；请用系统截图保存，或改用电脑浏览器打开。';
+  var SAVE_TIP_CSV_CLIP = '点「复制到剪贴板」，或在下面的文本框里长按，全选后复制。粘贴到备忘录或表格里即可。';
+  var SAVE_TIP_CSV_PLAIN = '当前浏览器不支持一键复制（剪贴板接口不可用）。请在下面的文本框里长按，全选后复制。';
+  var SAVE_TIP_CSV_DONE = '已复制到剪贴板。粘贴到备忘录或表格里即可。';
+
   var EXPORT_BASE_CELL = 24;            /* 导出基准格子像素：实际 = 24 × 倍数 */
   var EXPORT_SCALES = [1, 2, 4, 8];
 
@@ -114,6 +126,7 @@
   };
 
   var ui = {};
+  var saveUrl = null;      /* 导出兜底层里 <img> 用的 objectURL：关闭时释放，避免一直占着内存 */
 
   /* ---------------------------------------------------------- 小工具函数 */
 
@@ -218,6 +231,195 @@
     if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
     if (t.isContentEditable === true) return true;
     return false;
+  }
+
+  /* ------------------------------------------- 环境能力探测（触摸 / 窄屏） */
+
+  /* 判据是能力查询而不是 UA 嗅探：`(pointer: coarse)` 为真 ⇔ 主输入设备是手指。
+     刻意不把 navigator.maxTouchPoints / 'ontouchstart' 一起拿来做「或」——
+     触摸屏笔记本上这两者都为真、主指针却仍是鼠标，那样会把导出兜底层错推到桌面上。
+     matchMedia 不存在（老内核 / 测试桩）时返回 false，退化成现有桌面行为：照常下载、不弹兜底层。 */
+  function coarsePointer() {
+    try {
+      if (typeof win.matchMedia !== 'function') return false;
+      var mq = win.matchMedia('(pointer: coarse)');
+      return !!(mq && mq.matches === true);
+    } catch (e) { return false; }
+  }
+
+  function narrowScreen() {
+    try {
+      if (typeof win.matchMedia !== 'function') return false;
+      var mq = win.matchMedia('(max-width: 1180px)');
+      return !!(mq && mq.matches === true);
+    } catch (e) { return false; }
+  }
+
+  /* 文案该按触摸端写还是按桌面写：任一成立就算「手指/窄屏」。
+     两件事都要换说法——「拖进窗口」和「Ctrl+V」在手机上物理上做不到。 */
+  function touchOrNarrow() { return coarsePointer() || narrowScreen(); }
+
+  /* 文案只说实话：
+     · 桌面端三条入口（点击 / 拖进来 / Ctrl+V）都真的能用，照旧写。
+     · 触摸端只剩「点选择图片…从相册选」这一条真的走得通，就只写这一条。
+     · 顶部副标题在任何端都不许再写「纯本地运行」——发到服务器后打开页面本来就需要联网；
+       还能兑现的那句承诺是「图片不会上传」，所以只说这一句。 */
+  function applyEnvironmentText() {
+    var touch = touchOrNarrow();
+    if (ui.dropHint) {
+      setText(ui.dropHint, touch
+        ? '点「选择图片…」从相册里选一张'
+        : '也可拖拽图片到窗口，或按 Ctrl+V 粘贴');
+    }
+    if (ui.patternHint) {
+      setText(ui.patternHint, touch
+        ? '尚未载入图片\n点上面的「选择图片…」从相册里选一张'
+        : '尚未载入图片\n点击上方「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴');
+    }
+    if (ui.inputHint) {
+      setText(ui.inputHint, (touch
+        ? '入口只有一个：点上面的「选择图片…」从相册里选一张。'
+        : '三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。')
+        + '图片在你的浏览器里处理，不会上传到任何服务器。');
+    }
+    /* 导出兜底层只对触摸端存在：桌面端连这条提示都不该出现。
+       （覆盖层本身也由 coarsePointer() 把关，这里是第二道同源的门。） */
+    if (ui.saveTip) ui.saveTip.hidden = !coarsePointer();
+  }
+
+  /* --------------------------------------- 触摸端导出兜底（覆盖层） */
+
+  /* 剪贴板能力检测：navigator.clipboard.writeText 存在才算可用。
+     非安全上下文（http 页面）与老 WebView 上它是 undefined，此时不显示「复制」按钮，
+     只留可长按选中的文本框——绝不画一个点了没反应的按钮。 */
+  function clipboardApi() {
+    try {
+      var nav = win.navigator;
+      if (!nav || !nav.clipboard || typeof nav.clipboard.writeText !== 'function') return null;
+      return nav.clipboard;
+    } catch (e) { return null; }
+  }
+
+  function closeSaveOverlay() {
+    if (ui.saveOverlay) ui.saveOverlay.hidden = true;
+    if (ui.saveImage) { ui.saveImage.hidden = true; try { ui.saveImage.removeAttribute('src'); } catch (e) { /* 忽略 */ } }
+    if (ui.saveText) { ui.saveText.hidden = true; setVal(ui.saveText, ''); }
+    if (ui.saveCopy) ui.saveCopy.hidden = true;
+    if (saveUrl) { revoke(saveUrl); saveUrl = null; }
+  }
+
+  /* 覆盖层只对触摸端开：桌面端这些入口一律不出现（coarsePointer 为假时整个函数直接返回）。 */
+  function openSaveOverlay() {
+    if (!coarsePointer()) return false;
+    if (!ui.saveOverlay || !ui.saveTip) return false;
+    closeSaveOverlay();                 /* 清掉上一次的内容与 objectURL */
+    ui.saveOverlay.hidden = false;
+    return true;
+  }
+
+  /* PNG 兜底：把离屏画布变成能「长按保存」的 <img>。三条路依次退化，绝不给假地址：
+       1) canvas.toBlob → URL.createObjectURL(blob) → img.src = 'blob:…'   ← 首选，不产生 base64 膨胀
+       2) 老内核没有 toBlob（微信里有一部分较老的 X5 就属于这种）→ canvas.toDataURL('image/png')
+          → img.src = 'data:image/png;…'（覆盖面最广，但 data: 串会让内存翻几倍，所以只在没 toBlob 时走）
+       3) 两条都不行 → 不给 img 假地址，img 隐藏 + 明说「这里存不了图」，
+          而不是留一个空框让用户长按（那是骗人）。
+     objectURL 记在 saveUrl 上，关闭覆盖层时 revoke 掉；不然连导几次会一直占着内存。 */
+  function offerPngSave(canvas) {
+    if (!canvas || !openSaveOverlay()) return;
+    var img = ui.saveImage;
+    var put = function (url) {
+      if (!img || !url) return false;
+      try { img.src = url; } catch (e) { return false; }
+      img.hidden = false;
+      setText(ui.saveTip, SAVE_TIP_IMG);
+      return true;
+    };
+    var dataUrlPath = function () {
+      if (typeof canvas.toDataURL === 'function') {
+        try { if (put(canvas.toDataURL('image/png'))) return; } catch (e) { /* 落到第 3 条 */ }
+      }
+      if (img) img.hidden = true;
+      setText(ui.saveTip, SAVE_TIP_IMG_NONE);
+    };
+    if (typeof canvas.toBlob === 'function') {
+      try {
+        canvas.toBlob(function (blob) {
+          var url = null;
+          if (blob) {
+            try { url = (win.URL && typeof win.URL.createObjectURL === 'function') ? win.URL.createObjectURL(blob) : null; } catch (e) { url = null; }
+          }
+          if (url) { saveUrl = url; if (put(url)) return; }
+          dataUrlPath();
+        }, 'image/png');
+        return;
+      } catch (e) { /* toBlob 自身抛错：照第 2 条试 */ }
+    }
+    dataUrlPath();
+  }
+
+  /* 剪贴板 API 可用时的写入口（成功/失败各给一个回调，界面据此改提示） */
+  function writeClipboard(api, text, done, failed) {
+    try {
+      var ret = api.writeText(text);
+      if (ret && typeof ret.then === 'function') ret.then(done, failed);
+      else done();
+    } catch (e) { failed(e); }
+  }
+
+  /* 剪贴板 API 不可用（http 页面 / 老 WebView）时的第二级：
+     临时建一个 textarea 选中全文，再用 document.execCommand('copy')
+     —— 这些内核上唯一还能用的复制路径。无论成败都把 CSV 留在可长按选中的 #saveText 里，
+     用户手动也能拿走（那才是这一级真正兜住的东西）。 */
+  function legacyCopy(text) {
+    if (!doc || typeof doc.createElement !== 'function') return false;
+    var ta = null, ok = false;
+    try {
+      ta = doc.createElement('textarea');
+      setVal(ta, text);
+      if (typeof ta.setAttribute === 'function') ta.setAttribute('readonly', 'readonly');
+      if (ta.style) { ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.top = '0'; }
+      if (doc.body && typeof doc.body.appendChild === 'function') doc.body.appendChild(ta);
+      if (typeof ta.select === 'function') ta.select();
+      if (typeof ta.setSelectionRange === 'function') { try { ta.setSelectionRange(0, text.length); } catch (e) { /* 忽略 */ } }
+      if (typeof doc.execCommand === 'function') ok = (doc.execCommand('copy') === true);
+    } catch (e) { ok = false; }
+    if (ta && ta.parentNode && typeof ta.parentNode.removeChild === 'function') {
+      try { ta.parentNode.removeChild(ta); } catch (e) { /* 忽略 */ }
+    }
+    return ok;
+  }
+
+  /* CSV 兜底。两级降级：
+     ① navigator.clipboard.writeText 可用 → 打开覆盖层 + 显示可用的「复制到剪贴板」按钮，
+        并先自动试复制一次（微信里点一下就走的路径，不该还要用户多点一次）。
+     ② 不可用 → 隐藏按钮（绝不画一个点了没反应的按钮），改走 legacyCopy，
+        并把 CSV 放进可长按选中的文本框当最后一级。 */
+  function offerCsvCopy(text) {
+    if (!openSaveOverlay()) return;
+    setVal(ui.saveText, text);
+    if (ui.saveText) ui.saveText.hidden = false;
+    if (ui.saveImage) ui.saveImage.hidden = true;
+    var api = clipboardApi();
+    if (ui.saveCopy) { ui.saveCopy.hidden = !api; setDisabled(ui.saveCopy, !api); }
+    if (api) {
+      setText(ui.saveTip, SAVE_TIP_CSV_CLIP);
+      writeClipboard(api, text, function () { setText(ui.saveTip, SAVE_TIP_CSV_DONE); }, copyFailed);
+      return;
+    }
+    setText(ui.saveTip, legacyCopy(text) ? SAVE_TIP_CSV_DONE : SAVE_TIP_CSV_PLAIN);
+  }
+
+  function copyFailed(e) {
+    /* 失败不装死：把「按钮点了没反应」变成明确的下一步动作 */
+    setText(ui.saveTip, '复制失败（' + errText(e) + '）：请在下面的文本框里长按，全选后手动复制。');
+  }
+
+  function onSaveCopy() {
+    var text = ui.saveText ? String(ui.saveText.value === null || ui.saveText.value === undefined ? '' : ui.saveText.value) : '';
+    var api = clipboardApi();
+    if (api) { writeClipboard(api, text, function () { setText(ui.saveTip, SAVE_TIP_CSV_DONE); }, copyFailed); return; }
+    if (ui.saveCopy) setDisabled(ui.saveCopy, true);
+    setText(ui.saveTip, legacyCopy(text) ? SAVE_TIP_CSV_DONE : SAVE_TIP_CSV_PLAIN);
   }
 
   /* ------------------------------------------------------- 模块可用性探测 */
@@ -1186,6 +1388,10 @@
     setChecked(ui.toolEraser, v === TOOL_ERASER);
     if (ui.eraserSize) ui.eraserSize.disabled = (v !== TOOL_ERASER);
     if (ui.patternCanvas && hasClassList(ui.patternCanvas)) toggleCls(ui.patternCanvas, 'editing', v !== TOOL_NONE);
+    /* 图纸画布只有「橡皮刷」是按住拖动类工具，才需要 touch-action:none 把滚动让出来；
+       魔术棒 / 改色都是一次点击，保留默认滚动（用户还得单指滑动看大图）。
+       用加/去 class 切换，绝不把 touch-action:none 写死在 CSS 里。 */
+    if (ui.patternCanvas && hasClassList(ui.patternCanvas)) toggleCls(ui.patternCanvas, TOUCH_DRAG_CLASS, v === TOOL_ERASER);
     syncToolHint();
     updateLockInfo();
     if (changed && !silent) setStatus('图纸工具：' + toolName(v), 'info');
@@ -1321,6 +1527,11 @@
      整段拖动只在 pointerdown 快照一次；move 期间只重绘（不写历史、不 recount），让用户即时看到效果。 */
   function onEraseDown(evt) {
     if (toolOf() !== TOOL_ERASER) return;
+    /* 双指在画布上 == 用户在捏合缩放：这一下不是擦除 */
+    if (pinch.active) return;
+    /* 一次拖动还没收尾又来一个 pointerdown == 第二根手指落下。
+       直接返回（不重复 pushHistory），这样捏合起手时的 undo() 能一步回滚干净。 */
+    if (state.eraseActive) return;
     var p = state.pattern;
     if (!p || !p.cells) { setStatus('尚未生成图纸', 'warn'); return; }
     var idx = hitTestCell(evt);
@@ -1343,6 +1554,7 @@
   }
 
   function onEraseMove(evt) {
+    if (pinch.active) return;
     if (!state.eraseActive) return;
     var p = state.pattern;
     if (!p || !p.cells) return;
@@ -1362,6 +1574,9 @@
   }
 
   function onPatternClick(evt) {
+    /* 捏合过程中、以及捏合刚结束的那一小段时间：不认这一下
+       （两指抬起后浏览器仍可能补一个 click，魔术棒 / 改色都不该被它触发） */
+    if (pinch.active || intNow() < pinch.blockedUntil) return;
     var p = state.pattern;
     if (!p) { setStatus('尚未生成图纸', 'warn'); return; }
     var tool = toolOf();
@@ -1649,13 +1864,23 @@
 
   /* --------------------------------------------------------------- 渲染区 */
 
+  /* ok:false 的原因文案。三类原因处置完全不同，消息不能互相冒充：
+     · too-large        我们的面积预算在分配画布前就拒绝了（needPixels > maxPixels）；
+     · canvas-rejected  面积没超，是**浏览器**拒绝了我们合法申请的那块画布（回读尺寸不符）——
+                        移动端（iOS Safari / WKWebView、部分 Android WebView）的主体情形，
+                        这里的措辞必须落到「这台设备 / 这个浏览器」上，否则用户会去怀疑自己的图；
+     · invalid-input    调用方输入有问题（没有 canvas / 宿主没 getContext 方法 / 上下文为空）。
+     两种尺寸类原因都带上 needPixels / maxPixels 量级：render.js 在拒绝路径上如实返回了它们。
+     这里只描述原因、不给建议 —— 「调小格子像素」是预览的出路，「降低导出倍数」是导出的出路，
+     两条出路由各自的调用点补，混在这里会说错对象。 */
   function renderFailReason(res) {
     var reason = (res && res.reason) ? String(res.reason) : '';
-    if (reason === 'too-large') {
-      var need = res && res.needPixels, max = res && res.maxPixels;
-      var extra = (need && max) ? ('（需要约 ' + fmtPx(need) + ' 像素，浏览器上限约 ' + fmtPx(max) + '）') : '';
-      return '格子像素太大，画布超出浏览器上限' + extra;
-    }
+    var need = res && Number(res.needPixels) > 0 ? Number(res.needPixels) : 0;
+    var max = res && Number(res.maxPixels) > 0 ? Number(res.maxPixels) : 0;
+    var extra = (need && max) ? ('（需要约 ' + fmtPx(need) + ' 像素，浏览器上限约 ' + fmtPx(max) + '）') : '';
+    if (reason === 'too-large') return '格子像素太大，画布超出浏览器上限' + extra;
+    if (reason === 'canvas-rejected') return '这台设备 / 这个浏览器画不出这么大的画布' + extra;
+    if (reason === 'invalid-input') return '渲染模块拒绝了这个画布或图纸数据';
     return reason || '渲染模块拒绝了本次绘制';
   }
 
@@ -1683,8 +1908,7 @@
         res = R.drawPattern(p, cv, v);
       } catch (e) {
         fell = true;
-        fallbackDrawPattern(cv, p, v);
-        setStatus('渲染失败，已改用内置简化渲染：' + errText(e), 'warn');
+        useFallbackRender(cv, p, v, '渲染失败，已改用内置简化渲染：' + errText(e));
       }
       /* 新契约：ok === false 时画布可能没被画出来。此时不要用内置渲染器硬画
          （内置渲染器同样会撑爆画布），保留旧内容并给出明确提示。 */
@@ -1698,9 +1922,9 @@
       recordLabelMinPx(res);
     } else {
       fell = true;
-      fallbackDrawPattern(cv, p, v);
+      useFallbackRender(cv, p, v, null);
     }
-    if (!fell && (!cv.width || cv.width < 2)) { fell = true; fallbackDrawPattern(cv, p, v); }
+    if (!fell && (!cv.width || cv.width < 2)) { fell = true; useFallbackRender(cv, p, v, null); }
     state.renderFallback = fell;
     if (hasClassList(cv)) {
       toggleCls(cv, 'editing', toolOf() !== TOOL_NONE);
@@ -1727,12 +1951,11 @@
     return Math.max(2, Math.round(Math.max(p.w, p.h) * cell * 0.04));   /* 白边收到约 4% */
   }
 
-  function fallbackDrawPattern(cv, p, v) {
-    if (!cv || typeof cv.getContext !== 'function' || !p || !p.cells) return;
+  /* 内置渲染器会开多大的画布 —— 唯一一处算法。
+     面积守卫与绘制都调它，绝不两处各算一遍（那正是「守卫看着没问题、画出来却撑爆」的来源）。 */
+  function fallbackCanvasSize(p, v) {
     var cell = v.cellSize || v.cellPx || DEFAULT_CELL_PX;
     var pad = fallbackPad(v, cell, p);
-    var label = v.cellLabel || (v.showNumbers === false ? 'none' : 'code');
-    if (label !== 'none') state.labelMinPx[label] = LABEL_MIN_PX;   /* 内置渲染器自己的阈值，提示文案才准 */
     var list = v.annotate ? listEntries(p) : null;
     var rowH = Math.max(14, Math.min(22, Math.round(cell * 1.1)));
     var listFont = Math.max(11, Math.min(18, Math.round(cell * 0.9)));
@@ -1740,9 +1963,46 @@
     var perCol = list ? Math.max(1, Math.floor((pad * 2 + p.h * cell - 26) / rowH)) : 0;
     var cols = list ? Math.min(3, Math.max(1, Math.ceil((list.length + 1) / perCol))) : 0;
     if (list) listW = Math.max(listW, cols * (listFont * 12));
+    return { w: pad * 2 + p.w * cell + listW, h: pad * 2 + p.h * cell };
+  }
 
-    cv.width = pad * 2 + p.w * cell + listW;
-    cv.height = pad * 2 + p.h * cell;
+  /* 内置降级渲染器是个**没有面积守卫、也没有回读校验**的入口：
+     它自己写 cv.width/cv.height，浏览器对超限面积会静默拒绝 —— 照旧画下去就是白图。
+     app.js 没有 render 侧的回读能力，所以这里只能做「动手之前先按同一个口径算一次面积」，
+     超了就明确失败、不硬画。够用：把第二个白图入口堵上。
+     上限口径与 render.js 的 MAX_CANVAS_PIXELS 一致（1.2 亿像素）；
+     刻意不按「移动端更低」拍一个数 —— 没有真机数据就不猜（render.js 的 opts.maxPixels 同理不传）。 */
+  var FALLBACK_MAX_PIXELS = 120000000;
+
+  function fallbackTooLarge(p, v) {
+    var size = fallbackCanvasSize(p, v);
+    var need = size.w * size.h;
+    if (need <= FALLBACK_MAX_PIXELS) return null;
+    return { needPixels: need, maxPixels: FALLBACK_MAX_PIXELS, width: size.w, height: size.h };
+  }
+
+  /* 所有走内置渲染器的地方都必须从这里过：超限就只报错，一笔都不画。 */
+  function useFallbackRender(cv, p, v, why) {
+    var guard = fallbackTooLarge(p, v);
+    if (guard) {
+      state.renderTooLarge = true;
+      setStatus('这张图超出画布面积上限（需要约 ' + fmtPx(guard.needPixels) + ' 像素，上限约 ' + fmtPx(guard.maxPixels)
+        + '），内置渲染器也没有画它。请调小「图纸显示」组的「格子像素大小」后重试。', 'err');
+      return false;
+    }
+    fallbackDrawPattern(cv, p, v);
+    if (why) setStatus(why, 'warn');
+    return true;
+  }
+
+  function fallbackDrawPattern(cv, p, v) {
+    if (!cv || typeof cv.getContext !== 'function' || !p || !p.cells) return;
+    var cell = v.cellSize || v.cellPx || DEFAULT_CELL_PX;
+    var label = v.cellLabel || (v.showNumbers === false ? 'none' : 'code');
+    if (label !== 'none') state.labelMinPx[label] = LABEL_MIN_PX;   /* 内置渲染器自己的阈值，提示文案才准 */
+    var size = fallbackCanvasSize(p, v);
+    cv.width = size.w;
+    cv.height = size.h;
     var ctx = cv.getContext('2d');
     if (!ctx) return;
     ctx.fillStyle = '#FFFFFF';                 /* 纸底，与 render.js 的 C.paper 一致（图纸要能打印） */
@@ -1995,6 +2255,98 @@
     }
   }
 
+  /* --------------------------------------------------------- 双指捏合缩放 */
+
+  /* 滚轮只在桌面存在，触摸端原本只能靠 +/− 两个按钮。这里补上双指捏合：
+     · 单指一律不拦截 —— 常态必须能单指双向滑动看大图（.canvas-scroll 不设 touch-action）。
+     · 两指按下才算捏合：以「起手两指距离 : 当前两指距离」的比值乘到起手时的 state.viewZoom 上，
+       再走同一个 applyViewZoom(两指中点) —— 缩放状态只有 state.viewZoom 这一份，
+       绝不另起一套，也不重复实现锚点修正。
+     · 用 touch 事件而不是 pointer 事件：容器保持默认可滚动，没有 touch-action 可依赖，
+       必须自己 preventDefault 掉滚动；而「阻止滚动」这件事只看 touch 事件，
+       pointer 事件给不了这个能力，走 touch 的兼容面也最广（微信内置浏览器同理）。 */
+  var pinch = { active: false, baseDist: 0, baseZoom: 1, blockedUntil: 0 };
+
+  /* 取 evt.touches 里的前两根手指的屏幕坐标 */
+  function firstTwoTouches(evt) {
+    var out = [];
+    var t = evt ? evt.touches : null;
+    if (!t || !t.length) return out;
+    for (var i = 0; i < t.length && out.length < 2; i++) {
+      var p = t[i];
+      if (p) out.push({ x: Number(p.clientX) || 0, y: Number(p.clientY) || 0 });
+    }
+    return out;
+  }
+
+  function pinchDist(a, b) {
+    var dx = a.x - b.x, dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  /* 以当前两指重新起算基准：起手、以及三指里抬走一根时都用它，避免缩放跳一下 */
+  function pinchBase(list) {
+    pinch.active = true;
+    pinch.baseDist = Math.max(1, pinchDist(list[0], list[1]));
+    pinch.baseZoom = state.viewZoom;
+  }
+
+  /* 第二根手指落下时，如果橡皮刷已经擦了一下，立刻撤销掉 —— 捏合绝不能改动图纸。
+     起手时 pushHistory() 压入的快照正好是擦除前的状态，撤销它即可原样回滚
+     （两次手指落下只会压入一步：onEraseDown 在 state.eraseActive 为真时直接返回）。 */
+  function cancelEraseForPinch() {
+    if (!state.eraseActive) return;
+    state.eraseActive = false;
+    state.eraseCount = 0;
+    undo();
+    setStatus('双指捏合缩放中：本次拖动已取消，图纸未改动', 'info');
+  }
+
+  function onPinchStart(evt) {
+    var list = firstTwoTouches(evt);
+    if (list.length < 2) return;          /* 单指：什么都不做，交给浏览器滚动 */
+    cancelEraseForPinch();
+    pinchBase(list);
+  }
+
+  function onPinchMove(evt) {
+    if (!pinch.active) return;
+    var list = firstTwoTouches(evt);
+    if (list.length < 2) return;
+    /* 容器没设 touch-action:none（单指必须能滚），所以双指期间得自己拦掉滚动 */
+    if (typeof evt.preventDefault === 'function') evt.preventDefault();
+    var ratio = pinchDist(list[0], list[1]) / pinch.baseDist;
+    if (!isFinite(ratio) || ratio <= 0) return;
+    setViewZoom(pinch.baseZoom * ratio, { clientX: (list[0].x + list[1].x) / 2, clientY: (list[0].y + list[1].y) / 2 });
+  }
+
+  function onPinchEnd(evt) {
+    var list = firstTwoTouches(evt);
+    if (list.length >= 2) { pinchBase(list); return; }
+    if (!pinch.active) return;
+    pinch.active = false;
+    /* 两指抬起后浏览器常常还会补一个 click；这段时间里把它丢掉，
+       否则一次捏合会被当成「在图纸上点了一下」。 */
+    pinch.blockedUntil = intNow() + PINCH_CLICK_BLOCK_MS;
+  }
+
+  /* touchstart 绑在画布上（捏合起手必须落在画布上）；touchmove/touchend 绑在 document 上，
+     手指滑出画布也不会跟丢。touchmove 必须显式 {passive:false}，
+     否则浏览器把 document 上的触摸监听默认当被动的，preventDefault 不生效。 */
+  function bindPinch() {
+    on(ui.patternCanvas, 'touchstart', onPinchStart);
+    if (!doc || typeof doc.addEventListener !== 'function') return;
+    try {
+      doc.addEventListener('touchmove', onPinchMove, { passive: false });
+      doc.addEventListener('touchend', onPinchEnd);
+      doc.addEventListener('touchcancel', onPinchEnd);
+    } catch (e) {
+      doc.addEventListener('touchmove', onPinchMove);
+      doc.addEventListener('touchend', onPinchEnd);
+      doc.addEventListener('touchcancel', onPinchEnd);
+    }
+  }
+
   /* ------------------------------------------------------------- 文件输出 */
 
   function downloadBlob(blob, filename) {
@@ -2032,12 +2384,19 @@
     var R = win.Render;
     if (!p) { setStatus('请先生成图纸', 'warn'); return; }
     if (!R || typeof R.exportCSV !== 'function') { setStatus('核心模块未加载：无法导出用量清单 CSV', 'err'); return; }
+    var csv = '';
     try {
-      var csv = R.exportCSV(p);
-      if (downloadText(csv || '', '拼豆用量清单.csv', 'text/csv')) setStatus('已导出用量清单 CSV', 'ok');
+      csv = String(R.exportCSV(p) || '');
     } catch (e) {
       setStatus('导出 CSV 失败：' + errText(e), 'err');
+      return;
     }
+    var ok = downloadText(csv, '拼豆用量清单.csv', 'text/csv');
+    /* 微信 / iOS 里 CSV 基本没法下载成一文件，所以触摸端再给一条真正走得通的路：
+       复制到剪贴板；剪贴板 API 不可用则退化成可长按选中的文本框。
+       桌面端 coarsePointer() 为假，这一整段不执行 —— 桌面体验与之前逐字一致。 */
+    offerCsvCopy(csv);
+    if (ok) setStatus('已导出用量清单 CSV', 'ok');
   }
 
   function exportPngOf(canvas, filename, okMsg) {
@@ -2075,13 +2434,11 @@
     if (failure) { setStatus('导出图纸失败：' + failure, 'err'); return; }
 
     if (ret && ret.ok === false) {
-      /* 契约：ok:false 时先看 reason。too-large 必须给提示且不产生下载。 */
-      var why = renderFailReason(ret);
-      if (ret.reason === 'too-large') {
-        setStatus('这个倍数太大，浏览器画不出来，请降低倍数：' + why, 'err');
-      } else {
-        setStatus('导出图纸失败：' + why, 'err');
-      }
+      /* 契约：ok:false 时先看 reason，且不产生任何下载。
+         浏览器会静默拒绝过大的画布（设了 width/height 却回读不出这个值，或直接撑爆），
+         渲染模块对不上就会返回 ok:false —— 用户唯一能做的就是降低导出倍数，
+         所以无论 reason 是什么，提示里都必须写清这一步，不能只说一句「失败了」。 */
+      setStatus('导出图纸失败：' + renderFailReason(ret) + '。请降低导出倍数（把「分辨率倍数」改成 1× 或 2×）后重试。', 'err');
       return;
     }
 
@@ -2089,11 +2446,28 @@
     if (ret && ret.labelsSuppressed === true) {
       msg += '；格子太小，色号没画出来，把倍数调高或格子调大';
     }
-    var expected = p.w * opts.cellPx;
-    if (Number(off.width) > 0 && Number(off.width) < expected) {
-      msg += '；注意：渲染模块把格子像素夹到了 ' + Math.floor(off.width / Math.max(1, p.w)) + 'px，实际分辨率低于所选倍数';
+
+    /* 事后校验：画布的真实尺寸必须与渲染模块报告的落地尺寸逐值相等。
+       canvas.width/height 只是赋了个值，浏览器会静默拒绝过大的画布 —— 那样导出的是白图，
+       而「赋值没报错」看起来一切正常。render.js 自己已经回读过一次，这里是独立复核第二道：
+       拿它报告的 width/height 与画布回读值直接比，宽高都要查，对不上就不导出、按失败处理。
+       刻意不去反推「p.w × cellPx + 白边」：tight 模式的白边不是 0，反推迟早会算错
+       （旧实现就是这么漏掉 pad*2 的），而 render 报告的尺寸是权威值，不需要任何假设。 */
+    var aw = Number(off.width) > 0 ? Number(off.width) : 0;
+    var ah = Number(off.height) > 0 ? Number(off.height) : 0;
+    var rw = (ret && Number(ret.width) > 0) ? Number(ret.width) : 0;
+    var rh = (ret && Number(ret.height) > 0) ? Number(ret.height) : 0;
+    var sizeBad = !(aw > 0 && ah > 0) || (rw > 0 && rh > 0 && (aw !== rw || ah !== rh));
+    if (sizeBad) {
+      setStatus('导出图纸失败：画布尺寸没生效（渲染报告 ' + (rw || '?') + ' × ' + (rh || '?') + '，实际 '
+        + aw + ' × ' + ah + '）。请降低导出倍数（把「分辨率倍数」改成 1× 或 2×）后重试。', 'err');
+      return;
     }
     exportPngOf(off, '拼豆图纸.png', msg);
+    /* 触摸端额外给一层「长按保存」兜底：微信内置浏览器与 iOS Safari 的 <a download>
+       可能只是打开图片而不是下载，长按存图是那边唯一稳妥的路。
+       桌面端 coarsePointer() 为假，offerPngSave 直接返回，桌面体验与之前逐字一致。 */
+    offerPngSave(off);
   }
 
   /* ----------------------------------------------------------- 原图调整（SourceEdit 对接） */
@@ -2604,6 +2978,9 @@
     bindToolRadio('toolWand', TOOL_WAND);
     bindToolRadio('toolEraser', TOOL_ERASER);
     on(ui.eraserSize, 'change', function () { syncToolHint(); });
+    /* 捏合先于橡皮刷的 pointerdown 绑定：触摸端第二根手指落下时，
+       捏合要先把「用户其实是在缩放」这件事记下来，橡皮刷才来得及拒绝起手。 */
+    bindPinch();
     on(ui.patternCanvas, 'pointerdown', onEraseDown);
     /* move/up 绑在 document 上：拖到画布外面松手也能正确收尾（画布只负责起手） */
     if (doc && typeof doc.addEventListener === 'function') {
@@ -2633,6 +3010,12 @@
     on(ui.viewZoomIn, 'click', function () { zoomBy(ZOOM_STEP_FACTOR); });
     on(ui.viewZoomOut, 'click', function () { zoomBy(1 / ZOOM_STEP_FACTOR); });
     on(ui.viewZoomFit, 'click', fitViewZoom);
+
+    /* 导出兜底层（只有触摸端会真的被打开，见 openSaveOverlay） */
+    on(ui.saveCopy, 'click', onSaveCopy);
+    on(ui.saveClose, 'click', closeSaveOverlay);
+    /* 点面板外的灰底也关掉；面板内的点击不算 */
+    on(ui.saveOverlay, 'click', function (e) { if (e && e.target === ui.saveOverlay) closeSaveOverlay(); });
 
     on(ui.srcRotateL, 'click', function () { srcEditCall('rotate', -90, '已左转 90°', '原图左转未生效'); });
     on(ui.srcRotateR, 'click', function () { srcEditCall('rotate', 90, '已右转 90°', '原图右转未生效'); });
@@ -2676,6 +3059,7 @@
       fileInput: byId('fileInput'),
       btnPickFile: byId('btnPickFile'),
       dropHint: byId('dropHint'),
+      inputHint: byId('inputHint'),
       moduleNotice: byId('moduleNotice'),
       tabBasic: byId('tabBasic'),
       tabAdvanced: byId('tabAdvanced'),
@@ -2761,7 +3145,13 @@
       srcReset: byId('srcReset'),
       srceditHint: byId('srceditHint'),
       summaryBox: byId('summaryBox'),
-      legendBox: byId('legendBox')
+      legendBox: byId('legendBox'),
+      saveOverlay: byId('saveOverlay'),
+      saveTip: byId('saveTip'),
+      saveImage: byId('saveImage'),
+      saveText: byId('saveText'),
+      saveCopy: byId('saveCopy'),
+      saveClose: byId('saveClose')
     };
     var missing = [];
     for (var k in ui) {
@@ -2790,6 +3180,7 @@
     updateLockInfo();
     syncUndoButton();
     syncExportHint();
+    applyEnvironmentText();      /* 触摸/窄屏下把「拖拽 / Ctrl+V」换成真能走的入口，并按能力开门 */
     setCanvasPlaceholders();
   }
 

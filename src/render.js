@@ -11,6 +11,10 @@
  *   cellPx          每格像素（4..256，默认 12）—— 导出放大由调用方给
  *   cellLabel       'code' 画真色号 A1/A10/M15 | 其余值（'none' 与历史值 'index'）一律不画
  *   showCodes       旧键：只在未给 cellLabel 时生效，true → 'code'，否则 → 'none'
+ *   maxPixels       面积上限（正整数，可选）。移动端的画布上限远低于桌面，调用方用它按设备能力
+ *                   收紧；给了更大的合法值即表示调用方明确要放宽（有回读校验兜底）。
+ *                   非法值（0 / 负数 / 小数 / NaN / Infinity / 字符串 / null / undefined）
+ *                   一律回落内置常量 MAX_CANVAS_PIXELS
  *   padMode         'tight'(默认) 白边约 4%，受刻度文字下限约束 | 'normal' 旧的 max(40, cellPx*3+20)
  *   annotate        true 时在网格下方追加用量块：每个色号一个「圆角色块 + 色号 + 颗数」的
  *                   行内块，按色号自然序（A1,A2..B1,B2..）排列，横向排布、自动换行、每行居中
@@ -22,8 +26,11 @@
  *   - 图纸画布永远是白底（可打印文档），深色主题只属于 UI
  *   - cells[i] === 65535 的格子零填色；越界下标一律跳过
  *   - 不逐格建渐变/阴影；颜色与文字色按色号预计算
- *   - 大画布先算面积再落笔：超过 MAX_CANVAS_PIXELS 直接返回 ok:false
- *     （浏览器画布超限会静默空白，明确失败比空白好）
+ *   - 大画布先算面积再落笔：超过上限（opts.maxPixels 或内置 MAX_CANVAS_PIXELS）直接返回
+ *     ok:false / 'too-large'（浏览器画布超限会静默空白，明确失败比空白好）
+ *   - 「调用成功」不等于「效果生效」：设置完 canvas.width/height 立即回读实测，尺寸没生效或
+ *     2d 上下文为空一律判失败（ok:false / 'canvas-rejected' 或 'invalid-input'），绝不落笔 ——
+ *     否则用户得到一张看着成功、其实是纯白的 PNG
  *   - 无 import / export / require，全部通过 window.Render 挂载
  */
 (function () {
@@ -37,7 +44,7 @@
   var MAX_CELL_PX = 256;     // 导出倍率会放大格子；真正的护栏是 MAX_CANVAS_PIXELS
   var DEFAULT_CELL_PX = 12;
   var MIN_PAD = 40;          // padMode:'normal' 的刻度区最小边距（向后兼容）
-  var MAX_CANVAS_PIXELS = 120000000;  // 约 1.2 亿像素，超出即拒绝绘制
+  var MAX_CANVAS_PIXELS = 120000000;  // 约 1.2 亿像素（桌面上限）；移动端低得多，可用 opts.maxPixels 收紧
   var GRID_HALF = 0.5;       // 1px 线落在像素中心，避免糊边
 
   // 左下角角标：标题上限 24 字符（超出截到 23 + '…'）；时长按 viewOpts.beadRate 折算（UI 默认 500 颗/小时）
@@ -125,6 +132,16 @@
     return v;
   }
 
+  // 面积上限：调用方可按设备能力收紧（移动端画布上限远低于桌面，写死一个常量对本用例不利）。
+  // 只有「有限正数且是整数」才算合法值；0 / 负数 / 小数 / NaN / Infinity / 字符串 / null / undefined
+  // 一律回落内置常量 —— 未给该键与给了非法值的行为和返回值逐值一致。
+  // 不向上夹到 MAX_CANVAS_PIXELS：给了更大的合法值就是调用方明确要放宽，而放宽是安全的，
+  // 因为后面有回读校验兜底（尺寸真没生效就明确失败，不会退化成一张白图）。
+  function normMaxPixels(v) {
+    if (!isNum(v) || v <= 0 || Math.floor(v) !== v) return MAX_CANVAS_PIXELS;
+    return v;
+  }
+
   function normalizeOpts(viewOpts) {
     var o = viewOpts || {};
     return {
@@ -136,7 +153,8 @@
       cellPx: clampCellPx(o.cellPx),                // 默认 12，夹到 4..256
       highlightLocked: o.highlightLocked === true,  // 默认 false
       captionName: normCaptionName(o.captionName),  // 角标标题，默认没有
-      beadRate: normBeadRate(o.beadRate)            // 角标折算速率（颗/小时）
+      beadRate: normBeadRate(o.beadRate),           // 角标折算速率（颗/小时）
+      maxPixels: normMaxPixels(o.maxPixels)         // 面积上限：非法/缺省回落内置常量
     };
   }
 
@@ -902,24 +920,48 @@
 
     var lay = layoutOf(pattern, opts);
     var need = lay.width * lay.height;
+    var maxPixels = opts.maxPixels;
     base.width = lay.width;
     base.height = lay.height;
 
     // 面积守卫：先算后画；超限时连画布尺寸都不设置，避免浏览器静默空白
-    if (!(need <= MAX_CANVAS_PIXELS)) {
+    if (!(need <= maxPixels)) {
       base.ok = false;
       base.reason = 'too-large';
       base.width = lay.width;
       base.height = lay.height;
       base.needPixels = need;
-      base.maxPixels = MAX_CANVAS_PIXELS;
+      base.maxPixels = maxPixels;
       return makeResult(base);
     }
 
     canvas.width = lay.width;
     canvas.height = lay.height;
+
+    /* 回读校验：「调用成功」不等于「效果生效」。
+     * canvas.width/height 只是**赋了个值**。移动端（iOS Safari / WKWebView、部分 Android WebView）
+     * 对超限面积会**静默拒绝**：赋值不抛错、回读却仍是旧值（或 0）。照旧一路画下去的话，
+     * 所有绘制都落进一块尺寸并非我们所求的画布，返回值却是 ok:true —— 用户拿到一张纯白 PNG，
+     * 而所有「调用没报错」的验收都是绿的。所以落笔前必须回读实测值：逐值相等才算尺寸生效。
+     * reason 用 'canvas-rejected'，与 'too-large' 严格区分：too-large 是**我们的面积预算**在分配前
+     * 拒绝（needPixels > maxPixels），canvas-rejected 是**浏览器拒绝**了我们合法申请的那块画布
+     * （needPixels <= maxPixels）。调用方的处置完全不同，消息也不能互相冒充。
+     * 这条路一笔都不落（fillRect/fillText/stroke 全 0），但如实报告计划尺寸与像素量供 UI 提示。 */
+    if (canvas.width !== lay.width || canvas.height !== lay.height) {
+      base.ok = false;
+      base.reason = 'canvas-rejected';
+      base.width = lay.width;
+      base.height = lay.height;
+      base.needPixels = need;
+      base.maxPixels = maxPixels;
+      return makeResult(base);
+    }
+
     var ctx = canvas.getContext('2d');
     if (!ctx) {
+      /* 尺寸生效但 2d 上下文为空：这块 canvas 不是可用的绘图面。
+       * 沿用既有语义（'invalid-input' + width/height 0）：与「宿主没给 getContext 方法」同一类
+       * 调用方输入问题，保持既有分支逐值不变；它同样在落笔前返回，绝不会产出白图。 */
       base.ok = false; base.reason = 'invalid-input';
       base.width = 0; base.height = 0;
       return makeResult(base);

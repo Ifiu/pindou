@@ -548,6 +548,20 @@ startGroup('第 4 组 · 渲染（Render）');
 /* 角标独占色：写死字面量，**不从 render.js 读**（读了就是自证）。
    与 src/render.js 的 C.caption 必须一致；不一致时本组末尾的独占色断言会红。 */
 const CAPTION_INK = '#616B7A';
+/* 桩画布补全浏览器**本来就有的**能力：toBlob / toDataURL。
+   没有它，「触摸端长按保存」这条路径（toBlob → createObjectURL → img.src）在桩里永远走不通，
+   会逼实现者写一句「只在测试里成立」的假代码 —— 桩该如实提供真浏览器的能力。
+   注意：Render.exportPNG 的「没有 toBlob 必须明确 reject」那条断言用的是**专门构造的空对象**
+   （`Render.exportPNG({}, 'x.png')`），不依赖这里的默认能力，所以两者可以共存。 */
+function canvasCaps(cv) {
+  if (typeof cv.toBlob !== 'function') cv.toBlob = function (cb, type) { cb({ type: type || 'image/png', size: 1 }); };
+  if (typeof cv.toDataURL !== 'function') cv.toDataURL = function (type) { return 'data:' + (type || 'image/png') + ';base64,AAAA'; };
+  return cv;
+}
+function makeUrlStub() {
+  let n = 0;
+  return { createObjectURL() { return 'blob:stub/' + (++n); }, revokeObjectURL() {} };
+}
 function makeMockCanvas() {
   // 图纸上有三类文字：格内标签/编号、坐标刻度、左下角角标。角标单独归到 rec.caption，
   // 这样断言里的 rec.fillText 仍然精确表示「标签 + 刻度」这两类，不会被角标污染计数。
@@ -582,7 +596,7 @@ function makeMockCanvas() {
     stroke() { rec.strokes.push({ path: this._path.slice(), strokeStyle: String(this.strokeStyle), lineWidth: this.lineWidth, lineCap: this.lineCap }); this._path = []; },
     fill() { rec.fills.push({ path: this._path.slice(), fillStyle: String(this.fillStyle) }); this._path = []; },
   };
-  const canvas = { width: 0, height: 0, _rec: rec, getContext(kind) { return kind === '2d' ? ctx : null; } };
+  const canvas = canvasCaps({ width: 0, height: 0, _rec: rec, getContext(kind) { return kind === '2d' ? ctx : null; } });
   return canvas;
 }
 const EMPTY = 65535;
@@ -1254,6 +1268,130 @@ try {
 ok('exportPNG | 不支持 toBlob 的 canvas 明确 reject(Error)', pngRejected, 'message=' + pngMsg);
 ok('exportPNG | reject 信息非空且可读', pngMsg.length > 8, pngMsg);
 
+/* ═══════════════════════════════════════════════════════════════════════
+   B 侧新契约：设尺寸后的【回读校验】+ 可选 opts.maxPixels
+   ═══════════════════════════════════════════════════════════════════════ */
+/* 三种宿主桩：
+   'normal'        尺寸写入生效、getContext 正常
+   'silent-reject' width/height 赋值被静默吞掉（读回来恒为 0）—— 就是「ok:true 但画布没生效」那个 bug 的宿主
+   'null-ctx'      尺寸写入生效，但 getContext('2d') 返回 null */
+const CANVAS_DRAW_CALLS = (cv) => {
+  const r = cv._rec || {};
+  const n = (v) => Array.isArray(v) ? v.length : (typeof v === 'number' ? v : 0);   // mock 记录数组 / 计数桩两种形态
+  return n(r.fillRect) + n(r.fillText) + n(r.strokes) + n(r.save) + n(r.restore);
+};
+function makeHostStub(mode) {
+  const rec = { fillRect: 0, fillText: 0, strokes: 0, save: 0, restore: 0, ctxCalls: 0 };
+  const ctx = {
+    fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, lineCap: 'butt',
+    font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic',
+    save() { rec.save++; }, restore() { rec.restore++; },
+    fillRect() { rec.fillRect++; }, strokeRect() {}, drawImage() {},
+    fillText() { rec.fillText++; },
+    beginPath() {}, moveTo() {}, lineTo() {}, rect() {}, roundRect() {}, closePath() {},
+    stroke() { rec.strokes++; }, fill() {}
+  };
+  const cv = {
+    _w: 0, _h: 0, _rec: rec, _mode: mode,
+    get width() { return this._w; },
+    set width(v) { if (mode !== 'silent-reject') this._w = v; },
+    get height() { return this._h; },
+    set height(v) { if (mode !== 'silent-reject') this._h = v; },
+    getContext(kind) {
+      if (kind !== '2d') return null;
+      if (mode === 'null-ctx') return null;
+      rec.ctxCalls++;
+      return ctx;
+    }
+  };
+  return cv;
+}
+const MP_PAT = makePat(116, 116, 2);          // 116×116：@24 约 845 万像素，@256 约 8.9 亿像素
+const MP_OPTS = { cellPx: 24, cellLabel: 'none', padMode: 'tight' };
+const mpNeed = (function () { const cv = makeMockCanvas(); const r = Render.drawPattern(MP_PAT, cv, MP_OPTS); return r.width * r.height; })();
+ok('回读校验前置 | 116×116@24 的像素需求在 1e6–1.2e8 之间（下面几条算例才有区分度）',
+  mpNeed > 1000000 && mpNeed < 120000000, 'need=' + mpNeed);
+
+/* 三态一：正常宿主 → ok:true 且尺寸逐值相符 */
+const hostOk = makeHostStub('normal');
+const rHostOk = Render.drawPattern(MP_PAT, hostOk, MP_OPTS);
+eq('回读校验 | 正常宿主 → ok:true', rHostOk.ok, true);
+eq('回读校验 | 正常宿主 → 画布尺寸逐值等于返回值', [hostOk.width, hostOk.height], [rHostOk.width, rHostOk.height]);
+ok('回读校验 | 正常宿主 → 确实画了东西（零绘制的 ok:true 不算通过）', CANVAS_DRAW_CALLS(hostOk) > 0, String(CANVAS_DRAW_CALLS(hostOk)));
+
+/* 三态二：尺寸被静默拒绝 → ok:false + 零绘制 */
+const hostReject = makeHostStub('silent-reject');
+const rHostReject = Render.drawPattern(MP_PAT, hostReject, MP_OPTS);
+eq('回读校验 | 尺寸被静默拒绝 → ok:false', rHostReject.ok, false);
+ok('回读校验 | 尺寸被静默拒绝 → reason ∈ {"canvas-rejected","too-large"}（以作者实现为准）',
+  ['canvas-rejected', 'too-large'].indexOf(rHostReject.reason) >= 0, String(rHostReject.reason));
+eq('回读校验 | 尺寸被静默拒绝 → 零绘制调用（fillRect/fillText/stroke/save/restore 全 0）', CANVAS_DRAW_CALLS(hostReject), 0);
+eq('回读校验 | 尺寸被静默拒绝 → 宿主画布仍是未设尺寸（0×0）', [hostReject.width, hostReject.height], [0, 0]);
+ok('回读校验 | 尺寸被静默拒绝 → 不谎报成功（ok 与「画布真的被设上尺寸」不可能同时成立）',
+  !(rHostReject.ok === true && (hostReject.width !== rHostReject.width || hostReject.height !== rHostReject.height)));
+
+/* 三态三：getContext('2d') 为 null → ok:false + 零绘制 */
+const hostNullCtx = makeHostStub('null-ctx');
+const rHostNullCtx = Render.drawPattern(MP_PAT, hostNullCtx, MP_OPTS);
+eq('回读校验 | getContext 返回 null → ok:false', rHostNullCtx.ok, false);
+ok('回读校验 | getContext 返回 null → reason 非空字符串', typeof rHostNullCtx.reason === 'string' && rHostNullCtx.reason.length > 0, String(rHostNullCtx.reason));
+eq('回读校验 | getContext 返回 null → 零绘制调用', CANVAS_DRAW_CALLS(hostNullCtx), 0);
+
+/* 核心回归：不存在「ok === true 但画布尺寸与期望不一致」的组合（跨一批算例横扫） */
+const SIZE_INVARIANT_CASES = [
+  ['小图 @24', makePat(5, 4, 3), { cellPx: 24, cellLabel: 'none', padMode: 'normal' }],
+  ['116×116 @24 tight', MP_PAT, { cellPx: 24, cellLabel: 'none', padMode: 'tight' }],
+  ['116×116 @24 annotate', MP_PAT, { cellPx: 24, cellLabel: 'none', padMode: 'tight', annotate: true }],
+  ['116×116 @8 满刻度', MP_PAT, { cellPx: 8, cellLabel: 'code', padMode: 'normal', showRuler: true }],
+  ['小图 @256 面积超限', makePat(5, 4, 3), { cellPx: 256, cellLabel: 'none', padMode: 'normal' }],
+  ['116×116 @256 面积超限', MP_PAT, { cellPx: 256, cellLabel: 'none', padMode: 'normal' }]
+];
+const SIZE_INVARIANT_VIOLATIONS = [];
+for (const c of SIZE_INVARIANT_CASES) {
+  for (const mode of ['normal', 'silent-reject', 'null-ctx']) {
+    const cv = makeHostStub(mode);
+    let res = null;
+    try { res = Render.drawPattern(c[1], cv, c[2]); } catch (e) { SIZE_INVARIANT_VIOLATIONS.push(c[0] + '/' + mode + ' 抛错 ' + e.message); continue; }
+    if (res.ok === true && (cv.width !== res.width || cv.height !== res.height)) {
+      SIZE_INVARIANT_VIOLATIONS.push(c[0] + '/' + mode + ' ok:true 但 ' + cv.width + '×' + cv.height + ' ≠ ' + res.width + '×' + res.height);
+    }
+    if (res.ok === true && CANVAS_DRAW_CALLS(cv) === 0 && res.cellsDrawn > 0) {
+      SIZE_INVARIANT_VIOLATIONS.push(c[0] + '/' + mode + ' ok:true 且 cellsDrawn>0 却零绘制');
+    }
+  }
+}
+eq('回读校验 | 18 个「算例 × 宿主」组合里，不存在 ok:true 但尺寸不符/零绘制的组合', SIZE_INVARIANT_VIOLATIONS, []);
+
+/* opts.maxPixels：合法值生效 + 回显生效值 */
+const cvCustom = makeMockCanvas();
+const rCustom = Render.drawPattern(MP_PAT, cvCustom, Object.assign({}, MP_OPTS, { maxPixels: 5000000 }));
+eq('maxPixels | 调用方给 5000000（小于本图需求）→ 按面积守卫拒绝', rCustom.ok, false);
+eq('maxPixels | 拒绝时 reason === "too-large"', rCustom.reason, 'too-large');
+eq('maxPixels | 返回值 maxPixels 回显【本次真正生效】的 5000000', rCustom.maxPixels, 5000000);
+eq('maxPixels | 拒绝时零绘制调用', CANVAS_DRAW_CALLS(cvCustom), 0);
+eq('maxPixels | 拒绝时画布仍未设尺寸（守卫先于分配）', [cvCustom.width, cvCustom.height], [0, 0]);
+const cvCustom2 = makeMockCanvas();
+const rCustom2 = Render.drawPattern(MP_PAT, cvCustom2, Object.assign({}, MP_OPTS, { maxPixels: 50000000 }));
+eq('maxPixels | 同一张图给 50000000（大于需求）→ 正常绘制', rCustom2.ok, true);
+eq('maxPixels | 正常绘制时尺寸逐值相符', [cvCustom2.width, cvCustom2.height], [rCustom2.width, rCustom2.height]);
+const cvDefaultBig = makeMockCanvas();
+const rDefaultBig = Render.drawPattern(MP_PAT, cvDefaultBig, { cellPx: 256, cellLabel: 'none', padMode: 'normal' });
+eq('maxPixels | 没给 maxPixels 时过大算例仍按内置常量拒绝', [rDefaultBig.ok, rDefaultBig.reason, rDefaultBig.maxPixels], [false, 'too-large', 120000000]);
+
+/* opts.maxPixels：非法值一律回落内置常量，且行为与「不传」逐值一致 */
+const mpBaselineSmall = (function () { const cv = makeHostStub('normal'); const r = Render.drawPattern(MP_PAT, cv, MP_OPTS); return [r.ok, r.maxPixels === undefined ? null : r.maxPixels, r.width, r.height]; })();
+const mpBaselineBig = (function () { const cv = makeHostStub('normal'); const r = Render.drawPattern(MP_PAT, cv, { cellPx: 256, cellLabel: 'none', padMode: 'normal' }); return [r.ok, r.maxPixels === undefined ? null : r.maxPixels]; })();
+for (const bad of [[0, '0'], [-1, '-1'], [NaN, 'NaN'], ['x', '"x"'], [Infinity, 'Infinity'], [null, 'null'], [undefined, 'undefined']]) {
+  const cvS = makeHostStub('normal');
+  const rS = Render.drawPattern(MP_PAT, cvS, Object.assign({}, MP_OPTS, { maxPixels: bad[0] }));
+  eq('maxPixels | 非法值 ' + bad[1] + ' → 小算例行为与不传时逐值一致（ok/尺寸/maxPixels 键）',
+    [rS.ok, rS.maxPixels === undefined ? null : rS.maxPixels, rS.width, rS.height], mpBaselineSmall);
+  const cvB = makeHostStub('normal');
+  const rB = Render.drawPattern(MP_PAT, cvB, { cellPx: 256, cellLabel: 'none', padMode: 'normal', maxPixels: bad[0] });
+  eq('maxPixels | 非法值 ' + bad[1] + ' → 超大算例回落 120000000 并仍拒绝',
+    [rB.ok, rB.maxPixels === undefined ? null : rB.maxPixels], mpBaselineBig);
+}
+
 /* ═════════════════════════════════════════════════════════ 第 5 组 · 产物 */
 startGroup('第 5 组 · 产物（拼豆图纸生成器.html）');
 const productExists = existsSync(PRODUCT);
@@ -1391,13 +1529,21 @@ if (!productExists) {
   const flipAt = (text, pos) => text.slice(0, pos) + (text.charAt(pos) === 'X' ? 'Y' : 'X') + text.slice(pos + 1);
   const dropAt = (text, pos) => text.slice(0, pos) + text.slice(pos + 1);
   const midOf = (span) => (span ? Math.floor((span[0] + span[1]) / 2) : 0);
+  /* 想让「翻转 1 个字符后两侧字节数完全相同」，落点必须是**单字节**位置：
+     中文/全角是多字节，换成 'X' 会让字节数少 2，那就不再是「字节数相同」的对照了。 */
+  const asciiByteOf = (text, span) => {
+    if (!span) return 0;
+    for (let p = Math.floor((span[0] + span[1]) / 2); p < span[1]; p++) if (text.charCodeAt(p) < 128) return p;
+    for (let p = span[0]; p < span[1]; p++) if (text.charCodeAt(p) < 128) return p;
+    return Math.floor((span[0] + span[1]) / 2);
+  };
   const ctlAppSpan = segmentSpan(inSyncHtml || '', 'app.js') || [0, 1];
   const ctlUiSpan = segmentSpan(inSyncHtml || '', 'ui.html') || [0, 1];
   const ctlPalSpan = segmentSpan(inSyncHtml || '', 'palette.js') || [0, 1];
   ok('负向对照 | 三个对照组用的段边界都截取到了（否则下面的破坏点落在段外，对照无意义）',
     !!segmentSpan(inSyncHtml || '', 'app.js') && !!segmentSpan(inSyncHtml || '', 'ui.html') && !!segmentSpan(inSyncHtml || '', 'palette.js'));
-  const repTamperApp = productSegmentReport(flipAt(inSyncHtml, midOf(ctlAppSpan)));
-  const repTamperUi = productSegmentReport(flipAt(inSyncHtml, midOf(ctlUiSpan)));
+  const repTamperApp = productSegmentReport(flipAt(inSyncHtml, asciiByteOf(inSyncHtml, ctlAppSpan)));
+  const repTamperUi = productSegmentReport(flipAt(inSyncHtml, asciiByteOf(inSyncHtml, ctlUiSpan)));
   const repTamperPal = productSegmentReport(dropAt(inSyncHtml, midOf(ctlPalSpan)));
   ok('负向对照 | 改坏 app.js 段 1 个字节（字节数不变）→ 总判必须为 false（比对不是空转）', repTamperApp.ok === false, '总判 ' + repTamperApp.ok);
   eq('负向对照 | 且恰好只报 app.js 这一段（其余 6 段仍绿）', repTamperApp.failed, ['app.js']);
@@ -1514,6 +1660,10 @@ function makeRecCtx() {
     beginPath() { ctx._path = []; rec.paths++; },
     moveTo(x, y) { ctx._path.push(['M', x, y]); },
     lineTo(x, y) { ctx._path.push(['L', x, y]); },
+    /* 真实 2D 上下文有的路径方法，桩里也必须齐全：render.js 画用量块走 rect + roundRect，
+       缺一个就会让「导出带用量清单」这条路在桩里抛异常（曾因此掩盖了导出断言的真实结果）。 */
+    rect(x, y, w, h) { ctx._path.push(['R', x, y, w, h]); },
+    roundRect(x, y, w, h, r) { ctx._path.push(['RR', x, y, w, h, r]); },
     closePath() { ctx._path.push(['Z']); },
     stroke() { rec.strokes.push(ctx._path.slice()); ctx._path = []; },
     fill() { rec.strokes.push([]); }
@@ -1560,6 +1710,7 @@ function makeDoc(ids) {
     if (!map[id]) continue;
     map[id]._ctx = makeRecCtx();
     map[id].getContext = function () { return this._ctx; };
+    canvasCaps(map[id]);
   }
   const doc = makeFireable({
     readyState: 'complete',
@@ -1571,6 +1722,7 @@ function makeDoc(ids) {
         const cv = makeDomEl('#created-canvas');
         cv._ctx = makeRecCtx();
         cv.getContext = function () { return this._ctx; };
+        canvasCaps(cv);
         created.canvases.push(cv);
         return cv;
       }
@@ -1600,7 +1752,7 @@ const sandboxWin = {
   clearTimeout(id) { for (const t of timers) if (t.id === id) t.cancelled = true; },
   performance: { now: () => 0 },
   Blob: class StubBlob { constructor(parts, opts) { this.parts = parts; this.type = (opts || {}).type; } },
-  URL: { createObjectURL: () => 'blob:stub/1', revokeObjectURL() {} },
+  URL: makeUrlStub(),
   localStorage: (function () { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); } }; })()
 };
 const dropTimers = () => { timers.length = 0; };
@@ -1698,7 +1850,12 @@ pngCalls.length = 0;
 st.pattern = pat6;
 ui.exportPng();
 const statusTooLarge = String(els.statusText.textContent);
-ok('判断顺序 | ok:false + reason:too-large → 提示「倍数太大」', statusTooLarge.includes('倍数太大'), statusTooLarge);
+/* 原断言钉死了旧措辞「倍数太大」；本轮 A 把文案改成更明确的说法
+   （「格子像素太大，画布超出浏览器上限（需要约 900M 像素…）。请降低导出倍数（把「分辨率倍数」改成 1× 或 2×）后重试。」），
+   钉死措辞会逼实现保留更差的文案。改为语义判定：必须同时给出「原因（尺寸/像素超出上限）」与「出路（降低倍数）」。 */
+ok('判断顺序 | ok:false + reason:too-large → 文案同时给出原因（像素/尺寸超出上限）与出路（降低倍数）',
+  /(像素|尺寸|画布).{0,14}(太大|超出|上限)/.test(statusTooLarge)
+  && statusTooLarge.indexOf('降低') >= 0 && statusTooLarge.indexOf('倍数') >= 0, statusTooLarge);
 ok('判断顺序 | ok:false 时不出现「色号没画出来」（先看 ok/reason，再看 labelsSuppressed）', !statusTooLarge.includes('色号没画出来'), statusTooLarge);
 ok('判断顺序 | 提示里带上了 needPixels/maxPixels 量级', statusTooLarge.includes('像素'), statusTooLarge);
 eq('面积守卫联动 | 零下载：未调用 Render.exportPNG', pngCalls.length, 0);
@@ -1840,10 +1997,16 @@ const TAB_NEW_IDS = ['tabBasic', 'tabAdvanced', 'panelBasic', 'panelAdvanced', '
   'chartTitle', 'toolNone', 'toolWand', 'toolEraser', 'eraserSize', 'toolHint'];
 ok('控件清单 | 上一轮新增、本轮仍在的 11 个 id 全在 ui.html 里', TAB_NEW_IDS.every((id) => htmlIds.includes(id)), TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
 ok('控件清单 | 且这 11 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
-/* 本轮增删后的精确计数：91（上一轮）+ 2（showCodes / maxColorsNum）− 3（cellLabelMode / maxColorsVal / btnExportCompare）= 90 */
-eq('控件清单 | ui.html 的 id 总数 = 90（91 + 本轮新增 2 − 删除 3）', htmlIds.length, 90);
-eq('控件清单 | 本轮删除的 3 个 id 一个都不在产物 id 集合里',
+/* 本轮增删后的精确计数：90（上一轮）+ 7（移动端：inputHint / saveOverlay / saveTip / saveImage / saveText / saveCopy / saveClose）= 97 */
+eq('控件清单 | ui.html 的 id 总数 = 97（90 + 本轮移动端新增 7）', htmlIds.length, 97);
+eq('控件清单 | 上一轮删除的 3 个 id 一个都不在产物 id 集合里',
   ['cellLabelMode', 'maxColorsVal', 'btnExportCompare'].filter((id) => htmlIds.includes(id)), []);
+const MOBILE_NEW_IDS = ['inputHint', 'saveOverlay', 'saveTip', 'saveImage', 'saveText', 'saveCopy', 'saveClose'];
+ok('控件清单 | 本轮移动端新增的 7 个 id 全在 ui.html 里', MOBILE_NEW_IDS.every((id) => htmlIds.includes(id)), MOBILE_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 7 个 id 全部被 app.js 引用（没有一个是摆设）', MOBILE_NEW_IDS.every((id) => appRefs.includes(id)), MOBILE_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
+ok('控件清单 | 触摸端兜底层默认全部隐藏（#saveOverlay 与层内元素都带 hidden）',
+  /id="saveOverlay"[^>]*hidden/.test(UI_HTML) && /id="saveImage"[^>]*hidden/.test(UI_HTML)
+  && /id="saveText"[^>]*hidden/.test(UI_HTML) && /id="saveCopy"[^>]*hidden/.test(UI_HTML));
 
 const maxColorsTag = (UI_HTML.match(/<input\b[^>]*\bid="maxColors"[^>]*>/) || [''])[0];
 ok('控件 | #maxColors 仍是 range（min 2 / max 221 / step 1 / value 24，可拖到色卡上限）',
@@ -2440,6 +2603,360 @@ const inputRule = ruleBodyOf('input[type="number"],input[type="text"],select');
 ok('卡片配色 | 输入框 / 下拉仍用 var(--panel2)（没被一起改亮）', !!inputRule && /background\s*:\s*var\(--panel2\)/.test(inputRule), JSON.stringify(inputRule));
 ok('卡片配色 | --panel2 的 4 个其它使用者都还在引用它（一个都没被摘掉）',
   ['.legend-row', '.sw-grid-wrap', '.progress'].every((s) => new RegExp(s.replace(/\./g, '\\.') + '\\{[^}]*var\\(--panel2\\)').test(UI_HTML)) && /input\[type="text"\],select\{[^}]*var\(--panel2\)/.test(UI_HTML));
+
+/* ══════════════════════════════════════════════════════════════════════
+   移动端 / 服务器部署：布局（CSS 文本层）、触摸、导出兜底、文案诚实性
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── CSS 解析：先剥掉注释（否则注释文本会被当成选择器），再做一层 @media 嵌套 ── */
+const cssSource = (UI_HTML.match(/<style>([\s\S]*?)<\/style>/) || ['', ''])[1].replace(/\/\*[\s\S]*?\*\//g, ' ');
+function parseCssRules(css) {
+  const out = [];
+  let i = 0;
+  while (i < css.length) {
+    const at = css.indexOf('{', i);
+    if (at < 0) break;
+    const prelude = css.slice(i, at).trim();
+    let depth = 1, j = at + 1;
+    while (j < css.length && depth > 0) { if (css[j] === '{') depth++; else if (css[j] === '}') depth--; j++; }
+    const body = css.slice(at + 1, j - 1);
+    if (/^@media\b/i.test(prelude)) {
+      for (const r of parseCssRules(body)) { r.media = prelude; out.push(r); }
+    } else if (prelude) {
+      out.push({ selector: prelude, body: body, media: null });
+    }
+    i = j;
+  }
+  return out;
+}
+const cssRules = parseCssRules(cssSource);
+ok('CSS 前置 | 解析出 ' + cssRules.length + ' 条规则 / 含 ' + cssRules.filter((r) => r.media).length + ' 条在 @media 内（下面的断言不是空转）',
+  cssRules.length > 40 && cssRules.filter((r) => r.media).length > 3);
+const simpleSel = (r) => r.selector.split(',').map((s) => s.trim());
+const mediaMax = (media) => { const m = /max-width\s*:\s*([\d.]+)px/.exec(media || ''); return m ? Number(m[1]) : null; };
+/* CSS 级联：同一条规则里如果写了多条 touch-action，**最后一条**才生效。
+   只看「body 里出现过 none」会被 `touch-action:none;touch-action:pan-y` 这种写法骗过去。 */
+const touchActionOf = (body) => {
+  const all = [...String(body).matchAll(/touch-action\s*:\s*([^;}]+)/g)].map((m) => m[1].trim().toLowerCase());
+  return all.length ? all[all.length - 1] : null;
+};
+
+/* ── touch-action：源画布恒 none；图纸画布只在橡皮刷激活态为 none ─────── */
+const sourceCanvasRules = cssRules.filter((r) => /#sourceCanvas|\.source-canvas\b/.test(r.selector));
+ok('触摸 | CSS 里能定位到源画布规则（下面不是空转）', sourceCanvasRules.length > 0, JSON.stringify(sourceCanvasRules.map((r) => r.selector)));
+ok('触摸 | 源画布【实际生效】的 touch-action 恒为 none（按级联取最后一条；任何一条提到它的规则都不许是别的值）',
+  sourceCanvasRules.some((r) => touchActionOf(r.body) === 'none')
+  && sourceCanvasRules.every((r) => touchActionOf(r.body) === null || touchActionOf(r.body) === 'none'),
+  JSON.stringify(sourceCanvasRules.map((r) => [r.selector, touchActionOf(r.body)])));
+const patternPlainRules = cssRules.filter((r) => simpleSel(r).some((s) => /^(#patternCanvas|\.pattern-canvas)$/.test(s)));
+ok('触摸 | CSS 里能定位到图纸画布的【常态】规则（下面不是空转）', patternPlainRules.length > 0, JSON.stringify(patternPlainRules.map((r) => r.selector)));
+ok('触摸 | 图纸画布【常态】实际生效的 touch-action 不是 none（否则大图在手机上没法滚动）',
+  patternPlainRules.length > 0 && patternPlainRules.every((r) => touchActionOf(r.body) !== 'none'),
+  JSON.stringify(patternPlainRules.map((r) => [r.selector, touchActionOf(r.body)])));
+const patternStateRules = cssRules.filter((r) => /(#patternCanvas|\.pattern-canvas)\.[\w-]+/.test(r.selector));
+const patternEraserRules = patternStateRules.filter((r) => touchActionOf(r.body) === 'none');
+ok('触摸 | 存在「图纸画布 + 状态类」的规则设为 touch-action:none（橡皮刷激活态）',
+  patternEraserRules.length >= 1, JSON.stringify(patternStateRules.map((r) => [r.selector, /touch-action[^;]*/.exec(r.body) ? /touch-action[^;]*/.exec(r.body)[0] : null])));
+const eraserStateClass = patternEraserRules.length
+  ? (new RegExp('(?:#patternCanvas|\\.pattern-canvas)\\.([\\w-]+)').exec(patternEraserRules[0].selector) || [null, '__none__'])[1]
+  : '__none__';
+
+/* ── 响应式：100dvh 兜底、hover 隔离、移动字号、触控目标、桌面三栏 ─────── */
+const dvhRules = cssRules.filter((r) => /100dvh/.test(r.body));
+ok('响应式 | 存在 100dvh 用法（移动端地址栏动态高度）', dvhRules.length > 0);
+ok('响应式 | 含 100dvh 的规则里同时保留 100vh 兜底，且 vh 写在 dvh 之前（老浏览器按后者覆盖）',
+  dvhRules.every((r) => /100vh/.test(r.body) && r.body.indexOf('100vh') < r.body.indexOf('100dvh')),
+  JSON.stringify(dvhRules.map((r) => r.body.replace(/\s+/g, ' ').slice(0, 120))));
+const hoverRules = cssRules.filter((r) => r.selector.indexOf(':hover') >= 0);
+ok('响应式 | 存在 :hover 规则（下面不是空转）', hoverRules.length > 0, String(hoverRules.length));
+ok('响应式 | 所有 :hover 规则都包在 @media (hover:hover) 里（触摸端不该有悬停态）',
+  hoverRules.every((r) => !!r.media && /hover\s*:\s*hover/.test(r.media)),
+  JSON.stringify(hoverRules.filter((r) => !(r.media && /hover\s*:\s*hover/.test(r.media))).map((r) => r.selector + ' @ ' + r.media)));
+const inputFontRules = cssRules.filter((r) => !!r.media && /(^|[\s,[>])(input|select|textarea)/.test(r.selector) && /font-size\s*:\s*[\d.]+px/.test(r.body));
+const inputFontSizes = inputFontRules.map((r) => ({ sel: r.selector, media: r.media, px: Number(/font-size\s*:\s*([\d.]+)px/.exec(r.body)[1]) }));
+ok('响应式 | 移动断点内有 ≥16px 的输入框字号（防 iOS 聚焦自动放大）',
+  inputFontSizes.some((x) => x.px >= 16), JSON.stringify(inputFontSizes));
+const touchTargetRules = cssRules.filter((r) => !!r.media && /button|\.btn\b|\.tab\b/.test(r.selector));
+const touchTargetSizes = [];
+for (const r of touchTargetRules) {
+  const m = /(?:min-)?height\s*:\s*([\d.]+)px/.exec(r.body);
+  if (m) touchTargetSizes.push({ sel: r.selector, media: r.media, px: Number(m[1]) });
+}
+ok('响应式 | 移动断点内触控目标 ≥44px（按钮/标签页）',
+  touchTargetSizes.some((x) => x.px >= 44), JSON.stringify(touchTargetSizes));
+const layoutColRules = cssRules.filter((r) => /(?:^|[\s,])\.layout\b/.test(r.selector) && /grid-template-columns/.test(r.body));
+ok('桌面布局 | 三栏定义 310px minmax(0,1fr) 320px 原样保留（不得改动）',
+  layoutColRules.some((r) => /310px\s+minmax\(\s*0\s*,\s*1fr\s*\)\s+320px/.test(r.body)),
+  JSON.stringify(layoutColRules.map((r) => [r.selector, r.body.replace(/\s+/g, ' ').slice(0, 70)])));
+ok('桌面布局 | 任何改写 .layout 列定义的规则都只在 <1181px 生效（动不到桌面三栏）',
+  layoutColRules.filter((r) => !/310px\s+minmax\(\s*0\s*,\s*1fr\s*\)\s+320px/.test(r.body))
+    .every((r) => { const mx = mediaMax(r.media); return mx !== null && mx < 1181; }),
+  JSON.stringify(layoutColRules.filter((r) => !/310px\s+minmax\(\s*0\s*,\s*1fr\s*\)\s+320px/.test(r.body)).map((r) => [r.media, r.body.replace(/\s+/g, ' ').slice(0, 60)])));
+/* 手机上预览区要能出现在前面：要么 DOM 把预览排到控制面板之前，要么移动断点里用 order 指定 */
+const mobileOrderRules = cssRules.filter((r) => !!r.media && mediaMax(r.media) !== null && mediaMax(r.media) <= 1180
+  && /(^|[^-\w])order\s*:\s*-?\d+/.test(r.body)
+  && /dropZone|canvas-panel|controls|aside|layout/.test(r.selector));
+ok('移动布局 | 手机上预览区排到控制面板之前（DOM 重排 或 移动断点里用 order 指定）',
+  mobileOrderRules.length > 0,
+  JSON.stringify(mobileOrderRules.map((r) => [r.media, r.selector, r.body.replace(/\s+/g, ' ').slice(0, 60)])));
+
+/* ── 触摸行为：橡皮刷状态类增删 ───────────────────────────────────────── */
+ok('触摸行为前置 | 从 CSS 里解析出了橡皮刷状态类名（下面不是空转）', eraserStateClass !== '__none__', eraserStateClass);
+els.toolEraser.checked = true;
+fire(els.toolEraser, 'change');
+eq('触摸行为 | 橡皮刷激活 → #patternCanvas 带上 ' + eraserStateClass + ' 类（该类的规则就是 touch-action:none）',
+  els.patternCanvas.classList.contains(eraserStateClass), true);
+els.toolWand.checked = true;
+fire(els.toolWand, 'change');
+eq('触摸行为 | 换成魔术棒 → 该类被移除（只有橡皮刷需要吃掉手势）',
+  els.patternCanvas.classList.contains(eraserStateClass), false);
+els.toolNone.checked = true;
+fire(els.toolNone, 'change');
+eq('触摸行为 | 关闭工具 → 常态无该类（画布可正常滚动）', els.patternCanvas.classList.contains(eraserStateClass), false);
+erFlushAll();
+
+/* ── 文案诚实性（服务器 + 触摸端）──────────────────────────────────────
+   实现口径（app.js applyEnvironmentText）：桌面端三条入口都真的能用，照旧写；
+   触摸端只剩「从相册选」这一条走得通，必须改掉；副标题在任何端都不许再写「纯本地运行」。 */
+const dropHintHtml = (UI_HTML.match(/<span id="dropHint"[^>]*>([^<]*)</) || [null, ''])[1];
+const subHtml = (UI_HTML.match(/<p class="app-sub"[^>]*>([^<]*)</) || [null, ''])[1];
+info('文案原文 | #dropHint(HTML) = ' + JSON.stringify(dropHintHtml) + ' ｜ 副标题(HTML) = ' + JSON.stringify(subHtml));
+ok('文案 | #dropHint 与副标题在 HTML 里都非空（下面的否定断言才有意义，不是空转）',
+  !!dropHintHtml && !!subHtml, JSON.stringify([dropHintHtml, subHtml]));
+ok('文案 | 顶部副标题不再宣称「纯本地运行」（发到服务器后这句不成立）',
+  !!subHtml && subHtml.indexOf('纯本地运行') < 0, JSON.stringify(subHtml));
+ok('文案 | 整个 ui.html 里都不再出现「纯本地运行」', UI_HTML.indexOf('纯本地运行') < 0);
+ok('文案 | 副标题如实说明图片在浏览器里处理 / 不会上传（服务器部署下仍然成立的说法）',
+  /不上传|不会上传|不会离开|浏览器内|浏览器里/.test(subHtml || ''), JSON.stringify(subHtml));
+
+/* ── 捏合缩放：两指距离比 → state.viewZoom（与 +/−/适应窗口同一套）────── */
+els.toolNone.checked = true;
+fire(els.toolNone, 'change');
+erFlushAll();
+st.pattern = st.pattern || Pipeline.generateFromRGBA(synth(20, 20, (x) => [x * 9 % 256, 120, 60]), 20, 20, { gridW: 8, gridH: 8 });
+const pinchCv = dom.map.patternCanvas;
+globalThis.Render.drawPattern(st.pattern, pinchCv, ui.viewOpts());   // applyViewZoom 需要画布已有尺寸
+const handlersOf = (el) => (el && el._handlers) ? el._handlers : {};
+const bindTypes = (el) => Object.keys(handlersOf(el));
+const pinchUsesTouch = [pinchCv, dom.map.canvasScroll, dom.doc].some((el) => bindTypes(el).indexOf('touchstart') >= 0 || bindTypes(el).indexOf('touchmove') >= 0);
+const pinchDownT = bindTypes(pinchCv).indexOf('touchstart') >= 0 ? pinchCv : (handlersOf(pinchCv).pointerdown ? pinchCv : dom.map.canvasScroll);
+const pinchMoveT = bindTypes(pinchCv).indexOf('touchmove') >= 0 ? pinchCv : (handlersOf(pinchCv).pointermove ? pinchCv : dom.doc);
+const pinchUpT = handlersOf(pinchCv).pointerup ? pinchCv : dom.doc;
+const pinchDownType = pinchUsesTouch ? 'touchstart' : 'pointerdown';
+const pinchMoveType = pinchUsesTouch ? 'touchmove' : 'pointermove';
+const pinchUpType = pinchUsesTouch ? 'touchend' : 'pointerup';
+const pinchEv = (a, b) => (pinchUsesTouch
+  ? { touches: [{ identifier: 11, clientX: a, clientY: 100 }, { identifier: 12, clientX: b, clientY: 100 }], changedTouches: [{ identifier: 11, clientX: a, clientY: 100 }, { identifier: 12, clientX: b, clientY: 100 }] }
+  : { pointerId: 11, clientX: a, clientY: 100 });
+const pinchEv2 = (a, b) => (pinchUsesTouch
+  ? { touches: [{ identifier: 11, clientX: a, clientY: 100 }, { identifier: 12, clientX: b, clientY: 100 }], changedTouches: [{ identifier: 12, clientX: b, clientY: 100 }] }
+  : { pointerId: 12, clientX: b, clientY: 100 });
+ok('捏合前置 | 找到了手势事件的绑定目标与事件类型（下面不是空转）',
+  bindTypes(pinchCv).concat(bindTypes(dom.doc), bindTypes(dom.map.canvasScroll)).some((t) => /pointerdown|touchstart/.test(t)),
+  'event=' + pinchDownType + ' downOnCanvas=' + (pinchDownT === pinchCv) + ' handlers=' + JSON.stringify(bindTypes(pinchCv)));
+ui.setViewZoom(1);
+st.history.length = 0;
+const pinchCellsBefore = Array.from(st.pattern.cells).join(',');
+const pinchHistBefore = st.history.length;
+fire(pinchDownT, pinchDownType, pinchEv(100, 200));
+fire(pinchMoveT, pinchMoveType, pinchEv(50, 250));
+eq('捏合 | 两指距离 100 → 200（比例 2）→ viewZoom 1 → 2', st.viewZoom, 2);
+eq('捏合 | 与按钮走同一套 applyViewZoom（viewZoomApplied 同步）', st.viewZoomApplied, st.viewZoom);
+ok('捏合 | applyViewZoom 真的跑了（画布 CSS 尺寸被写成 px）',
+  /^\d+px$/.test(String(pinchCv.style.width || '')) && /^\d+px$/.test(String(pinchCv.style.height || '')),
+  JSON.stringify([pinchCv.style.width, pinchCv.style.height]));
+eq('捏合 | 捏合不改 cells', Array.from(st.pattern.cells).join(','), pinchCellsBefore);
+eq('捏合 | 捏合不进历史栈', st.history.length, pinchHistBefore);
+fire(pinchDownT, pinchDownType, pinchEv(100, 200));
+fire(pinchMoveT, pinchMoveType, pinchEv(-4000, 4000));
+eq('捏合 | 比例极大 → 夹取到上限 4×', st.viewZoom, 4);
+fire(pinchMoveT, pinchMoveType, pinchEv(100, 200));
+fire(pinchMoveT, pinchMoveType, pinchEv2(100, 101));
+eq('捏合 | 比例极小 → 夹取到下限 0.25×', st.viewZoom, 0.25);
+fire(pinchUpT, pinchUpType, pinchEv(100, 200));
+ui.setViewZoom(1);
+erFlushAll();
+ok('捏合 | 触摸端常态下图纸画布没有 touch-action:none（有人图省事写死的话就没法滚动了）',
+  !els.patternCanvas.classList.contains(eraserStateClass), eraserStateClass);
+
+/* ── 能力检测 + 触摸端导出兜底（第二/第三个 app 实例）────────────────── */
+ok('兜底 | 触摸判定走能力检测（matchMedia 的 (pointer: coarse) / 窄屏），不是 UA 嗅探',
+  /matchMedia/.test(APP_SRC) && /pointer\s*:\s*coarse/.test(APP_SRC) && !/userAgent|navigator\.platform/.test(APP_SRC));
+ok('兜底 | 声明了「长按 / 保存到相册」入口文案', /长按/.test(APP_SRC) && /相册/.test(APP_SRC));
+ok('兜底 | CSV 有「剪贴板 + 可长按选中文本框」两级降级',
+  /clipboard/.test(APP_SRC) && /writeText/.test(APP_SRC) && /saveText/.test(APP_SRC));
+function mkInstance(winExtra, instrument) {
+  const d = makeDoc(htmlIds);
+  const timers = [];
+  let seq = 0;
+  const win = Object.assign({
+    PINDOU_PALETTES: globalThis.PINDOU_PALETTES,
+    Pipeline: globalThis.Pipeline,
+    Render: globalThis.Render,
+    setTimeout(fn) { const id = ++seq; timers.push({ id, fn, cancelled: false }); return id; },
+    clearTimeout(id) { for (const t of timers) if (t.id === id) t.cancelled = true; },
+    performance: { now: () => 0 },
+    Blob: class StubBlob { constructor() {} },
+    URL: makeUrlStub(),
+    localStorage: (function () { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); } }; })()
+  }, winExtra || {});
+  const ctx = vm.createContext({ window: win, document: d.doc, console: { warn() {}, log() {} } });
+  let err = null;
+  try { vm.runInContext(APP_SRC, ctx, { filename: 'app.js' }); } catch (e) { err = e; }
+  if (instrument) instrument(d);
+  const flush = (n) => { for (let i = 0; i < (n || 3); i++) { const q = timers.splice(0); for (const t of q) if (!t.cancelled) t.fn(); } };
+  return { win: win, d: d, api: win.PindouUI, err: err, flush: flush };
+}
+const coarseMedia = (q) => ({ matches: /pointer\s*:\s*coarse/.test(String(q)), media: String(q), addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+const clipWrites = [];
+const coarse = mkInstance({ matchMedia: coarseMedia, navigator: { clipboard: { writeText(t) { clipWrites.push(String(t)); return Promise.resolve(); } } } });
+ok('兜底 | coarse 实例（(pointer: coarse) 为真）app.js 加载无抛错', coarse.err === null, coarse.err ? coarse.err.message : '');
+ok('兜底 | coarse 实例挂上了 PindouUI', !!coarse.api && typeof coarse.api.boot === 'function');
+if (coarse.api && typeof coarse.api.boot === 'function') coarse.api.boot();
+const coarseEls = (coarse.api && typeof coarse.api.elements === 'function') ? coarse.api.elements() : {};
+const missingIn = (obj, names) => names.filter((n) => !obj || !obj[n]);
+/* 派发事件前先确认元素真的在：src/ 半成品（元素缺失）时必须「断言失败」而不是「整个套件崩掉」 */
+const safeFire = (el, type, extra) => { if (el && typeof el.dispatchEvent === 'function') { fire(el, type, extra); return true; } return false; };
+const stateOf = (inst) => (inst.api && typeof inst.api.state === 'function') ? inst.api.state() : null;
+const OVERLAY_ELS = ['saveOverlay', 'saveTip', 'saveImage', 'saveText', 'saveCopy'];
+const UI_REQUIRED = OVERLAY_ELS.concat(['btnExportPng', 'btnExportCsv', 'patternCanvas', 'dropHint', 'inputHint', 'statusText', 'fileInput']);
+const coarseOverlayReady = missingIn(coarseEls, OVERLAY_ELS).length === 0;
+eq('兜底前置 | coarse 实例暴露了覆盖层与导出按钮（元素缺失时下面的行为断言会一起报假）', missingIn(coarseEls, UI_REQUIRED), []);
+const coarseState = stateOf(coarse);
+if (coarseState) coarseState.pattern = pat6;
+
+/* ── 文案诚实性：触摸端不得再写触摸端做不到的入口（桌面端保留真实可用的提示）──────
+   A 的实现是 applyEnvironmentText() 按端改写；所以否定断言只对 coarse 实例做，
+   桌面端那两个入口（拖拽 / Ctrl+V）真的能用，断它们「不含」等于要求界面对桌面用户撒谎。 */
+ok('文案 | 触摸端 #dropHint 不含「Ctrl+V」（手机上做不到）',
+  String(coarseEls.dropHint.textContent).indexOf('Ctrl+V') < 0, String(coarseEls.dropHint.textContent));
+ok('文案 | 触摸端 #dropHint 不含「拖拽」（触摸端无法拖拽）',
+  !/拖拽/.test(String(coarseEls.dropHint.textContent)), String(coarseEls.dropHint.textContent));
+ok('文案 | 触摸端 #dropHint 给出真正可行的入口（从相册选）',
+  /选择图片|相册/.test(String(coarseEls.dropHint.textContent)), String(coarseEls.dropHint.textContent));
+ok('文案 | 触摸端 #inputHint 同样不含 Ctrl+V / 拖拽',
+  !/Ctrl\+V|拖拽/.test(String(coarseEls.inputHint.textContent)), String(coarseEls.inputHint.textContent));
+ok('文案 | 桌面端 #dropHint 仍保留 Ctrl+V 与拖拽（这两个入口在桌面真的能用）',
+  /Ctrl\+V/.test(String(els.dropHint.textContent)) && /拖拽/.test(String(els.dropHint.textContent)), String(els.dropHint.textContent));
+ok('文案 | 桌面端 #inputHint 同理保留 Ctrl+V（不做否定断言）',
+  /Ctrl\+V/.test(String(els.inputHint.textContent)), String(els.inputHint.textContent));
+
+/* 触摸端 PNG：覆盖层 + 可长按保存的 <img>；三条路径都要断言（toBlob → toDataURL → 诚实降级） */
+safeFire(coarseEls.btnExportPng, 'click');
+ok('兜底 | 触摸端导出 PNG → 覆盖层打开', coarseOverlayReady && coarseEls.saveOverlay.hidden === false, String(coarseEls.saveOverlay && coarseEls.saveOverlay.hidden));
+ok('兜底 | 路径1 有 toBlob → 显示可长按保存的 img（而不是空白框）', coarseOverlayReady && coarseEls.saveImage.hidden === false, String(coarseEls.saveImage && coarseEls.saveImage.hidden));
+ok('兜底 | 路径1 img.src 以 blob: 开头（走 toBlob → createObjectURL，不产生 base64 膨胀）',
+  coarseOverlayReady && /^blob:/.test(String(coarseEls.saveImage.src || '')), String((coarseEls.saveImage || {}).src || ''));
+ok('兜底 | 提示文案写明「长按…存储到相册 / 保存图片」',
+  coarseOverlayReady && /长按/.test(String(coarseEls.saveTip.textContent)) && /相册|保存图片/.test(String(coarseEls.saveTip.textContent)), String((coarseEls.saveTip || {}).textContent));
+/* 路径2：老内核没有 toBlob，但有 toDataURL → img.src = data:image/png;… */
+const noBlob = mkInstance({ matchMedia: coarseMedia }, (d) => {
+  const orig = d.doc.createElement;
+  d.doc.createElement = function (tag) {
+    const el = orig.call(this, tag);
+    if (String(tag).toLowerCase() === 'canvas') delete el.toBlob;      // 只有 toDataURL
+    return el;
+  };
+});
+if (noBlob.api && typeof noBlob.api.boot === 'function') noBlob.api.boot();
+const noBlobEls = (noBlob.api && typeof noBlob.api.elements === 'function') ? noBlob.api.elements() : {};
+const noBlobReady = missingIn(noBlobEls, OVERLAY_ELS).length === 0;
+eq('兜底前置 | 路径2 实例暴露了覆盖层元素', missingIn(noBlobEls, OVERLAY_ELS), []);
+if (stateOf(noBlob)) stateOf(noBlob).pattern = pat6;
+safeFire(noBlobEls.btnExportPng, 'click');
+ok('兜底 | 路径2 无 toBlob 但有 toDataURL → img 可见且 src 以 data:image/png 开头',
+  noBlobReady && noBlobEls.saveImage.hidden === false && /^data:image\/png/.test(String(noBlobEls.saveImage.src || '')),
+  JSON.stringify({ hidden: noBlobEls.saveImage && noBlobEls.saveImage.hidden, src: String((noBlobEls.saveImage || {}).src).slice(0, 30) }));
+/* 路径3：两者都没有 → 不给假地址，必须同时「藏起 img」+「给出明确的存不了文案」 */
+const noCaps = mkInstance({ matchMedia: coarseMedia }, (d) => {
+  const orig = d.doc.createElement;
+  d.doc.createElement = function (tag) {
+    const el = orig.call(this, tag);
+    if (String(tag).toLowerCase() === 'canvas') { delete el.toBlob; delete el.toDataURL; }
+    return el;
+  };
+});
+if (noCaps.api && typeof noCaps.api.boot === 'function') noCaps.api.boot();
+const noCapsEls = (noCaps.api && typeof noCaps.api.elements === 'function') ? noCaps.api.elements() : {};
+const noCapsReady = missingIn(noCapsEls, OVERLAY_ELS).length === 0;
+eq('兜底前置 | 路径3 实例暴露了覆盖层元素', missingIn(noCapsEls, OVERLAY_ELS), []);
+if (stateOf(noCaps)) stateOf(noCaps).pattern = pat6;
+safeFire(noCapsEls.btnExportPng, 'click');
+ok('兜底 | 路径3 两种能力都没有 → img 藏起来、src 为空、且给出明确的「这里存不了」文案（两件事同时成立，不是随便什么文案都算）',
+  noCapsReady && noCapsEls.saveImage.hidden === true && String(noCapsEls.saveImage.src || '') === ''
+  && /用不了|无法|不支持|存不了/.test(String(noCapsEls.saveTip.textContent))
+  && /截图|电脑浏览器|手动/.test(String(noCapsEls.saveTip.textContent)),
+  JSON.stringify({ hidden: noCapsEls.saveImage && noCapsEls.saveImage.hidden, src: String((noCapsEls.saveImage || {}).src), tip: String((noCapsEls.saveTip || {}).textContent) }));
+/* 触摸端 CSV（剪贴板可用）：先给文本框 + 「复制到剪贴板」按钮；点按钮才真的写剪贴板 */
+safeFire(coarseEls.btnExportCsv, 'click');
+ok('兜底 | 触摸端导出 CSV → 覆盖层打开、文本框里是可复制的 CSV 全文',
+  coarseOverlayReady && coarseEls.saveOverlay.hidden === false && coarseEls.saveText.hidden === false && String(coarseEls.saveText.value).indexOf('编号,色号') >= 0,
+  JSON.stringify({ overlay: coarseEls.saveOverlay && coarseEls.saveOverlay.hidden, ta: coarseEls.saveText && coarseEls.saveText.hidden, v: String((coarseEls.saveText || {}).value).slice(0, 22) }));
+ok('兜底 | 剪贴板可用 → 「复制到剪贴板」按钮可见且可用',
+  coarseOverlayReady && coarseEls.saveCopy.hidden === false && coarseEls.saveCopy.disabled === false,
+  JSON.stringify({ hidden: coarseEls.saveCopy && coarseEls.saveCopy.hidden, disabled: coarseEls.saveCopy && coarseEls.saveCopy.disabled }));
+safeFire(coarseEls.saveCopy, 'click');
+ok('兜底 | 点「复制到剪贴板」→ navigator.clipboard.writeText 收到 CSV 全文',
+  clipWrites.some((t) => t.indexOf('编号,色号') >= 0), JSON.stringify(clipWrites.map((t) => String(t).slice(0, 24))));
+
+/* 桌面端：就算给了剪贴板能力也不走兜底 —— 照样下载，覆盖层内容不被填充 */
+const fineClip = [];
+let finePng = 0;
+const fine = mkInstance({
+  matchMedia: (q) => ({ matches: false, media: String(q), addEventListener() {}, addListener() {} }),
+  navigator: { clipboard: { writeText(t) { fineClip.push(String(t)); return Promise.resolve(); } } },
+  Render: Object.assign({}, globalThis.Render, { exportPNG() { finePng++; return undefined; } })
+});
+if (fine.api && typeof fine.api.boot === 'function') fine.api.boot();
+const fineEls = (fine.api && typeof fine.api.elements === 'function') ? fine.api.elements() : {};
+const fineOverlayReady = missingIn(fineEls, OVERLAY_ELS).length === 0;
+ok('兜底前置 | 桌面实例 app.js 加载无抛错且暴露了导出按钮（否则下面那条 0 次调用会产生误导）',
+  fine.err === null && missingIn(fineEls, ['btnExportPng', 'btnExportCsv']).length === 0,
+  JSON.stringify({ err: fine.err ? fine.err.message : null, missing: missingIn(fineEls, ['btnExportPng', 'btnExportCsv']) }));
+if (stateOf(fine)) stateOf(fine).pattern = pat6;
+safeFire(fineEls.btnExportCsv, 'click');
+eq('兜底 | 桌面端导出 CSV 不碰剪贴板、不填触摸端文本框',
+  [fineClip.length, fineOverlayReady ? String(fineEls.saveText.value) : ''], [0, '']);
+ok('兜底 | 桌面端导出 CSV 仍然产生真实下载（新建 <a>）', fine.d.created.anchors.length > 0, String(fine.d.created.anchors.length));
+safeFire(fineEls.btnExportPng, 'click');
+ok('兜底 | 桌面端导出 PNG 仍然走 Render.exportPNG（不打开覆盖层）', finePng > 0, String(finePng));
+eq('兜底前置 | 桌面实例暴露了覆盖层元素（下面那条 img 为空的断言才有意义）', missingIn(fineEls, OVERLAY_ELS), []);
+eq('兜底 | 桌面端全程没有填充过 img（覆盖层那条路没被走到）', String(fineEls.saveImage.src || ''), '');
+
+/* 触摸端 + 剪贴板不可用：只给可长按选中的文本框，不画一个点了没反应的按钮 */
+const noClipSel = { n: 0 };
+const noClip = mkInstance({ matchMedia: coarseMedia }, (d) => {
+  const orig = d.doc.createElement;
+  d.doc.createElement = function (tag) {
+    const el = orig.call(this, tag);
+    el._createdTag = String(tag).toLowerCase();
+    if (el._createdTag === 'textarea') el.select = function () { noClipSel.n++; };
+    return el;
+  };
+});
+if (noClip.api && typeof noClip.api.boot === 'function') noClip.api.boot();
+const noClipEls = (noClip.api && typeof noClip.api.elements === 'function') ? noClip.api.elements() : {};
+const noClipReady = missingIn(noClipEls, OVERLAY_ELS).length === 0;
+if (stateOf(noClip)) stateOf(noClip).pattern = pat6;
+safeFire(noClipEls.btnExportCsv, 'click');
+eq('兜底 | 剪贴板不可用 → 覆盖层打开、文本框可见且已填入 CSV',
+  noClipReady ? [noClipEls.saveOverlay.hidden, noClipEls.saveText.hidden, String(noClipEls.saveText.value).indexOf('编号,色号') >= 0] : 'not-ready',
+  [false, false, true]);
+eq('兜底 | 剪贴板不可用 → 「复制到剪贴板」按钮藏起来并置灰（绝不画一个点了没反应的按钮）',
+  noClipReady ? [noClipEls.saveCopy.hidden, noClipEls.saveCopy.disabled] : 'not-ready', [true, true]);
+ok('兜底 | 剪贴板不可用时提示改成「在文本框里长按全选复制」',
+  noClipReady && /长按/.test(String(noClipEls.saveTip.textContent)) && /文本框/.test(String(noClipEls.saveTip.textContent)), String((noClipEls.saveTip || {}).textContent));
+/* drawPattern 失败提示：降低导出倍数 */
+forceTooLarge = true;
+st.pattern = pat6;
+dom.created.canvases.length = 0;
+pngCalls.length = 0;
+ui.exportPng();
+ok('兜底 | drawPattern 返回 ok:false 时文案同时含「降低」与「倍数」（语义判定，不钉死实现措辞）',
+  String(els.statusText.textContent).indexOf('降低') >= 0 && String(els.statusText.textContent).indexOf('倍数') >= 0
+  && /超出|太大|上限/.test(String(els.statusText.textContent)), String(els.statusText.textContent));
+forceTooLarge = false;
+eq('兜底 | 该分支仍然零下载', pngCalls.length, 0);
 
 /* ══════════════════════════════════════════ 第 7 组 · 原图编辑（srcedit.js） */
 startGroup('第 7 组 · 原图编辑（SourceEdit）');

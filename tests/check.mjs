@@ -114,6 +114,10 @@ const Render = globalThis.Render;
 const SourceEdit = globalThis.SourceEdit;
 ok('globalThis.SourceEdit 已挂载（srcedit.js 无 document 也能挂）', !!SourceEdit && typeof SourceEdit === 'object');
 ok('typeof SourceEdit.mount === "function"', !!SourceEdit && typeof SourceEdit.mount === 'function', typeof (SourceEdit && SourceEdit.mount));
+/* Render 的对外 API 冻结清单：本轮删掉「对照图」功能，只剩 4 个（用户要求整条删除） */
+eq('Render 的对外 API 恰好是这 4 个（drawPattern / exportPNG / exportCSV / legendHTML）',
+  Object.keys(Render).sort(), ['drawPattern', 'exportCSV', 'exportPNG', 'legendHTML']);
+ok('Render.drawCompare 已删除（typeof === "undefined"，不是留着不导出）', typeof Render.drawCompare === 'undefined', typeof Render.drawCompare);
 
 /* ══════════════════════════════════════════════ 共用：色号自然序比较器（冻结规则） */
 const GROUP_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'M'];
@@ -613,14 +617,14 @@ function expectedFills(pat, cellPx, pad) {
 const isPaper = (r, cv) => r.x === 0 && r.y === 0 && r.w === cv.width && r.h === cv.height;
 const cellFillsOf = (cv) => cv._rec.fillRect.filter((r) => !isPaper(r, cv));
 
-/* 逐格标签期望值：'code' → colors[cells[i]].code；'index' → String(cells[i]+1) */
-function expectedLabels(pat, cellPx, pad, mode) {
+/* 逐格标签期望值：只保留 'code'（'index' 数字编码已被用户要求彻底删除） */
+function expectedLabels(pat, cellPx, pad) {
   const out = [];
   for (let i = 0; i < pat.w * pat.h; i++) {
     const idx = pat.cells[i];
     if (idx === EMPTY) continue;
     out.push({
-      text: mode === 'index' ? String(idx + 1) : String(pat.colors[idx].code),
+      text: String(pat.colors[idx].code),
       x: pad + (i % pat.w) * cellPx + cellPx / 2,
       y: pad + Math.floor(i / pat.w) * cellPx + cellPx / 2 + 0.5
     });
@@ -688,39 +692,27 @@ eq('drawPattern | 首条细网格线起点 x = pad + 0.5', cv1._rec.strokes[0].p
 eq('drawPattern | 竖板边界在 x = pad + w*cellPx', cv1._rec.strokes[1].path[0][1], HP_PAD + HP.w * 12);
 eq('drawPattern | 横板边界在 y = pad + h*cellPx', cv1._rec.strokes[2].path[0][2], HP_PAD + HP.h * 12);
 
-/* 旧「编号文字 = String(cells[i]+1)」的规则只在 cellLabel:'index' 下成立，
- * 而且必须把 cellPx 抬到 index 阈值（17）之上才会真的画出来。 */
+/* 'index'（格内数字编号）已被用户要求彻底删除：它不再是一种模式。
+   传 'index' 必须等价于「不画」（fail-safe），绝不能回退成数字编号。 */
 const INDEX_PX = 20;
-const PAD_I = Math.max(40, INDEX_PX * 3 + 20);
 const cv1i = makeMockCanvas();
 const r1i = Render.drawPattern(HP, cv1i, { cellPx: INDEX_PX, cellLabel: 'index', showRuler: false, padMode: 'normal' });
-eq('drawPattern | cellLabel:index + cellPx=20 → codesDrawn === true', r1i.codesDrawn, true);
-eq('drawPattern | cellLabel:index + cellPx=20 → labelsSuppressed === false', r1i.labelsSuppressed, false);
-eq('drawPattern | cellLabel:index → fillText 次数 === 非空格子数', cv1i._rec.fillText.length, HP_NONEMPTY);
-eq(
-  'drawPattern | 编号文字逐格 === String(cells[i]+1)',
-  cv1i._rec.fillText.map((t) => t.text),
-  Array.from(HP.cells).map((c) => (c === EMPTY ? null : String(c + 1))).filter((v) => v !== null)
-);
-eq(
-  'drawPattern | 编号位置 = 格中心',
-  cv1i._rec.fillText.map((t) => [t.x, t.y]),
-  Array.from(HP.cells)
-    .map((c, i) => (c === EMPTY ? null : [PAD_I + (i % 5) * INDEX_PX + INDEX_PX / 2, PAD_I + Math.floor(i / 5) * INDEX_PX + INDEX_PX / 2 + 0.5]))
-    .filter((v) => v !== null)
-);
+eq('drawPattern | cellLabel:"index" 已不是一种模式 → codesDrawn === false', r1i.codesDrawn, false);
+eq('drawPattern | cellLabel:"index" → labelsDrawn/labelsSuppressed 都是 false', [r1i.labelsDrawn, r1i.labelsSuppressed], [false, false]);
+eq('drawPattern | cellLabel:"index" → 一次文字都不画（等价于 none）', cv1i._rec.fillText.length, 0);
+eq('drawPattern | cellLabel:"index" → 仍然逐格填色（删掉的只是文字模式）', cellFillsOf(cv1i).length, HP_NONEMPTY);
+ok('drawPattern | cellLabel:"index" → 绝不出现纯数字编号', !cv1i._rec.fillText.some((t) => /^\d+$/.test(String(t.text))), JSON.stringify(cv1i._rec.fillText.slice(0, 4)));
 
 const cv8 = makeMockCanvas();
-const r8 = Render.drawPattern(HP, cv8, { cellPx: 8, cellLabel: 'index', showRuler: false, padMode: 'normal' });
-eq('drawPattern | cellPx=8 → 返回 codesDrawn:false（index 阈值 17）', r8.codesDrawn, false);
+const r8 = Render.drawPattern(HP, cv8, { cellPx: 8, cellLabel: 'none', showRuler: false, padMode: 'normal' });
+eq('drawPattern | cellPx=8 + cellLabel:none → 返回 codesDrawn:false', r8.codesDrawn, false);
 eq('drawPattern | cellPx=8 → 不写编号（fillText 0 次）', cv8._rec.fillText.length, 0);
 eq('drawPattern | cellPx=8 → 仍然逐格填色', cellFillsOf(cv8).length, HP_NONEMPTY);
 eq('drawPattern | cellPx=8 → pad = max(40, 8*3+20) = 44，画布宽 128', cv8._rec.fillRect[0].w, Math.max(40, 8 * 3 + 20) * 2 + HP.w * 8);
 
 const cv9 = makeMockCanvas();
 const r9 = Render.drawPattern(HP, cv9, { cellPx: 9, cellLabel: 'index', showRuler: false, padMode: 'normal' });
-/* 阈值已提高：9px 在 index 模式（17）下同样画不出来，旧期望 codesDrawn:true 已过期 */
-eq('drawPattern | cellPx=9 → codesDrawn:false（index 阈值 17）', r9.codesDrawn, false);
+eq('drawPattern | cellPx=9 + cellLabel:"index"（已删除的模式）→ codesDrawn:false', r9.codesDrawn, false);
 eq('drawPattern | cellPx=9 → 写编号次数 === 0', cv9._rec.fillText.length, 0);
 
 const cvBad = { width: 0, height: 0 };
@@ -739,20 +731,22 @@ eq('drawPattern | codesDrawn 是 labelsDrawn 的别名', rBad.codesDrawn, rBad.l
 const realPat = Pipeline.generateFromRGBA(synth(40, 30, (x, y) => [(x * 17) % 256, (y * 23) % 256, 128]), 40, 30, { boards: 1 });
 const realNonEmpty = Array.from(realPat.cells).filter((c) => c !== EMPTY).length;
 const cvR = makeMockCanvas();
-const rR = Render.drawPattern(realPat, cvR, { cellPx: 12, padMode: 'normal' });
+/* 必须显式给 cellLabel:'code'：本轮 render.js 的缺省规则改成「没给 cellLabel 时按缺省 none」，
+   不给就测不到「code 模式在 12px 被抑制」这件事本身（断言意图不变，只是把隐式默认写成显式）。 */
+const rR = Render.drawPattern(realPat, cvR, { cellPx: 12, cellLabel: 'code', padMode: 'normal' });
 eq('整合 | 真实 Pattern（' + realPat.w + '×' + realPat.h + '）cellsDrawn === 非空格数', cvR._rec.fillRect.length - 1, realNonEmpty);
 eq('整合 | 真实 Pattern 逐格填色位置与颜色精确匹配', cellFillsOf(cvR), expectedFills(realPat, 12, 56));
 /* cellPx=12 下 code 模式被抑制 → 只剩刻度数字：w=29 有 6 个刻度、h=22 有 5 个刻度 */
 eq('整合 | cellPx=12 → 标签被抑制，fillText 只剩刻度 6+5=11 个', cvR._rec.fillText.length, 11);
 eq('整合 | cellPx=12 → labelsSuppressed === true', rR.labelsSuppressed, true);
-/* 显式 cellLabel + cellPx ≥ 20 时才是「非空格数 + 刻度数」 */
+/* 显式 cellLabel + cellPx ≥ 20 时才是「非空格数 + 刻度数」（原 index 用例改为 code：index 已删除） */
 const cvR2 = makeMockCanvas();
-const rR2 = Render.drawPattern(realPat, cvR2, { cellPx: 20, cellLabel: 'index', padMode: 'normal' });
-eq('整合 | cellPx=20 + cellLabel:index → fillText = 非空格数 + 刻度数', cvR2._rec.fillText.length, realNonEmpty + 11, 'w=29 有 6 个刻度、h=22 有 5 个刻度');
-eq('整合 | cellPx=20 + cellLabel:index → labelsDrawn === true', rR2.labelsDrawn, true);
+const rR2 = Render.drawPattern(realPat, cvR2, { cellPx: 20, cellLabel: 'code', padMode: 'normal' });
+eq('整合 | cellPx=20 + cellLabel:code → fillText = 非空格数 + 刻度数', cvR2._rec.fillText.length, realNonEmpty + 11, 'w=29 有 6 个刻度、h=22 有 5 个刻度');
+eq('整合 | cellPx=20 + cellLabel:code → labelsDrawn === true', rR2.labelsDrawn, true);
 
 /* ══════════════════════════════════ 新增覆盖：标签模式 / 版式 / 守卫 / 刻度 / 板边界 */
-/* 本次用 HP（5×4，色号 2 字符）作为标签用例的载体：code 阈值 20、index 阈值 17 */
+/* 本次用 HP（5×4，色号 2 字符）作为标签用例的载体：只剩 code 一档阈值 20（index 已删除） */
 const LABEL_PX = 24;
 const LABEL_PAD = Math.max(40, LABEL_PX * 3 + 20);          // 92
 const drawHP = (opts) => {
@@ -765,15 +759,14 @@ const code24 = drawHP({ cellPx: LABEL_PX, cellLabel: 'code' });
 const index24 = drawHP({ cellPx: LABEL_PX, cellLabel: 'index' });
 const none24 = drawHP({ cellPx: LABEL_PX, cellLabel: 'none' });
 eq('新增 | cellPx=24 + cellLabel:code → codesDrawn true 且填字次数 = 非空格数', [code24.r.codesDrawn, code24.texts.length], [true, HP_NONEMPTY]);
-eq('新增 | cellLabel:code → 逐格文字 === colors[cells[i]].code', code24.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'code').map((o) => o.text));
-eq('新增 | cellLabel:code → 逐格位置 === 格中心', code24.pos, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'code').map((o) => [o.x, o.y]));
-eq('新增 | cellLabel:index → 逐格文字 === String(cells[i]+1)', index24.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'index').map((o) => o.text));
-eq('新增 | cellLabel:index → 逐格位置 === 格中心', index24.pos, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'index').map((o) => [o.x, o.y]));
+eq('新增 | cellLabel:code → 逐格文字 === colors[cells[i]].code', code24.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD).map((o) => o.text));
+eq('新增 | cellLabel:code → 逐格位置 === 格中心', code24.pos, expectedLabels(HP, LABEL_PX, LABEL_PAD).map((o) => [o.x, o.y]));
 eq('新增 | cellLabel:none → 零 fillText', none24.texts.length, 0);
 eq('新增 | cellLabel:none → labelsDrawn/labelsSuppressed/labelMinPx', [none24.r.labelsDrawn, none24.r.labelsSuppressed, none24.r.labelMinPx], [false, false, 0]);
 eq('新增 | cellLabel:none → 仍然逐格填色', cellFillsOf(none24.cv).length, HP_NONEMPTY);
+ok('新增 | cellLabel:"index"（已删除的模式）→ 文字与 none 完全一致（零文字）', index24.texts.length === 0 && index24.r.labelsDrawn === false, JSON.stringify(index24.texts.slice(0, 4)));
 
-/* 阈值边界：code 19 不画 / 20 画；index 16 不画 / 17 画 */
+/* 阈值边界：只剩 code 一档（19 不画 / 20 画）；index 模式已删除，不再有 17 这一档 */
 const code19 = drawHP({ cellPx: 19, cellLabel: 'code' });
 const code20 = drawHP({ cellPx: 20, cellLabel: 'code' });
 const index16 = drawHP({ cellPx: 16, cellLabel: 'index' });
@@ -781,11 +774,11 @@ const index17 = drawHP({ cellPx: 17, cellLabel: 'index' });
 eq('新增 | 阈值 | code@19 不画（codesDrawn/填字）', [code19.r.codesDrawn, code19.texts.length], [false, 0]);
 eq('新增 | 阈值 | code@20 画（codesDrawn/填字）', [code20.r.codesDrawn, code20.texts.length], [true, HP_NONEMPTY]);
 eq('新增 | 阈值 | code 的 labelsSuppressed / labelMinPx（19 / 20）', [code19.r.labelsSuppressed, code20.r.labelsSuppressed, code19.r.labelMinPx, code20.r.labelMinPx], [true, false, 20, 20]);
-eq('新增 | 阈值 | index@16 不画（codesDrawn/填字）', [index16.r.codesDrawn, index16.texts.length], [false, 0]);
-eq('新增 | 阈值 | index@17 画（codesDrawn/填字）', [index17.r.codesDrawn, index17.texts.length], [true, HP_NONEMPTY]);
-eq('新增 | 阈值 | index 的 labelsSuppressed / labelMinPx（16 / 17）', [index16.r.labelsSuppressed, index17.r.labelsSuppressed, index16.r.labelMinPx, index17.r.labelMinPx], [true, false, 17, 17]);
+eq('新增 | 阈值 | index@16 / index@17 都不画（该模式已删除，不存在 17 阈值档）',
+  [index16.r.codesDrawn, index16.texts.length, index17.r.codesDrawn, index17.texts.length], [false, 0, false, 0]);
+eq('新增 | 阈值 | index 模式的 labelMinPx 不再是 17（回落到 none 的 0）', [index16.r.labelMinPx, index17.r.labelMinPx], [0, 0]);
 
-/* 向后兼容：showCodes 旧键与 cellLabel 新键的优先级 */
+/* 向后兼容：showCodes 旧键与 cellLabel 新键的优先级（index 已删除，只保证不再画数字编号） */
 const oldFalse = drawHP({ cellPx: LABEL_PX, cellLabel: undefined, showCodes: false });
 const oldTrue = drawHP({ cellPx: LABEL_PX, cellLabel: undefined, showCodes: true });
 const both = drawHP({ cellPx: LABEL_PX, cellLabel: 'code', showCodes: true });
@@ -793,10 +786,19 @@ const both2 = drawHP({ cellPx: LABEL_PX, cellLabel: 'index', showCodes: false })
 const noKey = drawHP({ cellPx: LABEL_PX });
 eq('新增 | 兼容 | {showCodes:false} → 零标签', oldFalse.texts.length, 0);
 eq('新增 | 兼容 | {showCodes:false} → codesDrawn false', oldFalse.r.codesDrawn, false);
-eq('新增 | 兼容 | {showCodes:true} 单独给出 → 走 index', oldTrue.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'index').map((o) => o.text));
-eq('新增 | 兼容 | 两者同给时 cellLabel 优先（code 赢过 showCodes:true）', both.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'code').map((o) => o.text));
-eq('新增 | 兼容 | 两者同给时 cellLabel 优先（index 赢过 showCodes:false）', both2.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'index').map((o) => o.text));
-eq('新增 | 兼容 | 两个键都不给 → 默认 code（新语义）', noKey.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD, 'code').map((o) => o.text));
+ok('新增 | 兼容 | {showCodes:true} 单独给出 → 绝不画数字编号（index 已删除）',
+  !oldTrue.texts.some((t) => /^\d+$/.test(String(t))), JSON.stringify(oldTrue.texts.slice(0, 6)));
+eq('新增 | 兼容 | 两者同给时 cellLabel 优先（code 赢过 showCodes:true）', both.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD).map((o) => o.text));
+ok('新增 | 兼容 | cellLabel:"index" 时 showCodes:false 仍不画任何文字（已删除的模式 fail-safe 成 none）',
+  both2.texts.length === 0 && both2.r.labelsDrawn === false, JSON.stringify(both2.texts.slice(0, 4)));
+/* 本轮 render.js 改了缺省契约（见其 normCellLabel 注释）：没给 cellLabel / 给 null / 空串
+   → 回落到旧键 showCodes；showCodes 也不是 true → 'none'（fail-safe）。即「什么都不给 = 不画」，
+   不再有上一版那层「缺省画色号」。下面按新契约断言，并保留旧键 showCodes 的合同。 */
+eq('新增 | 缺省 | 两个键都不给 → 按缺省 none 处理（不画任何格内文字）', [noKey.texts.length, noKey.r.labelsDrawn, noKey.r.labelMinPx], [0, false, 0]);
+eq('新增 | 缺省 | cellLabel 给空串 / null 时同样回落到 showCodes（结果仍是 none）',
+  [drawHP({ cellPx: LABEL_PX, cellLabel: '' }).texts.length, drawHP({ cellPx: LABEL_PX, cellLabel: null }).texts.length], [0, 0]);
+eq('新增 | 缺省 | showCodes:true 单独给出 → 仍然画色号（旧键的合同没被破坏）', oldTrue.texts, expectedLabels(HP, LABEL_PX, LABEL_PAD).map((o) => o.text));
+eq('新增 | 缺省 | showCodes:true + cellLabel:none → cellLabel 优先，仍然不画', drawHP({ cellPx: LABEL_PX, cellLabel: 'none', showCodes: true }).texts.length, 0);
 
 /* padMode：normal 复现旧公式；tight 在 116 格 @24px 时白边约 4%，且不大于 normal */
 const BIG = 116;
@@ -1159,15 +1161,84 @@ ok('legendHTML | 非法 hex 被兜底为 #000000（不注入 javascript:）', !l
 ok('legendHTML | 无外链（无 http(s):// 与 <a href）', !/https?:\/\//i.test(legend) && !/<a\b/i.test(legend));
 ok('legendHTML | 空 Pattern 不抛错', Render.legendHTML({ colors: [], cells: [] }) === '');
 
+/* ══════════ 本轮唯一被改的排序：图上「用量条」改按色号自然序 ══════════
+   A) 用量条算例：colors **自然序**、counts **恰好是自然序的逆序**（M1 最多 → A1 最少）。
+      这正是用户抱怨的场景——旧实现读 counts，用量条于是按颗数降序 = 与色号序完全相反。
+   B) 图例 / CSV 算例：colors 刻意乱序（既不是自然序也不是颗数序），用来证明这两条输出
+      仍然只跟 pattern.colors 的数组顺序走、没被动过（「只改图上那一条」的直接对照）。 */
+const USAGE_NATURAL = ['A1', 'A2', 'A9', 'A10', 'B1', 'B2', 'M1'];
+const USAGE_SCRAMBLED = ['M1', 'B2', 'A10', 'B1', 'A9', 'A2', 'A1'];
+const USAGE_HEX_OF = { A1: '#F00A01', A2: '#F00A02', A9: '#F00A09', A10: '#F00A10', B1: '#F00B01', B2: '#F00B02', M1: '#F00D01' };
+const USAGE_REV_COUNT = { M1: 7, B2: 6, B1: 5, A10: 4, A9: 3, A2: 2, A1: 1 };   // 颗数 = 自然序的逆序
+function usagePatOf(colorOrder, countOf) {
+  const w = 7, h = 4;
+  const colors = colorOrder.map((code) => ({ code: code, hex: USAGE_HEX_OF[code], rgb: [1, 2, 3], group: code.charAt(0) }));
+  const cells = new Uint16Array(w * h).fill(EMPTY);
+  const idxOf = (code) => colorOrder.indexOf(code);
+  const layout = [];
+  for (let ci = 0; ci < colorOrder.length; ci++) for (let k = 0; k < countOf[colorOrder[ci]]; k++) layout.push(idxOf(colorOrder[ci]));
+  for (let i = 0; i < layout.length && i < w * h; i++) cells[i] = layout[i];
+  const counts = colorOrder.map((c) => ({ code: c, hex: USAGE_HEX_OF[c], rgb: [1, 2, 3], count: countOf[c] }))
+    .sort((a, b) => b.count - a.count);
+  return { w: w, h: h, colors: colors, cells: cells, locked: new Uint8Array(w * h), counts: counts, stats: { total: w * h } };
+}
+const usagePat = usagePatOf(USAGE_NATURAL, USAGE_REV_COUNT);
+const usageCountOrder = usagePat.counts.map((c) => c.code);
+ok('用量条前置 | counts 顺序恰好是自然序的逆序（所以「按颗数降序」与「按色号」完全相反）',
+  JSON.stringify(usageCountOrder) === JSON.stringify(USAGE_NATURAL.slice().reverse()), JSON.stringify(usageCountOrder));
+eq('用量条前置 | colors 数组是自然序（app 侧的真实不变量：pipeline 排序 + insertColorNatural 插位）',
+  usagePat.colors.map((c) => c.code), USAGE_NATURAL);
+eq('用量条前置 | 非空格子总数 = 28（7 个色号各有颗数）', Array.from(usagePat.cells).filter((c) => c !== EMPTY).length, 28);
+
+const usageCv = makeMockCanvas();
+Render.drawPattern(usagePat, usageCv, { cellPx: 24, cellLabel: 'none', showRuler: false, annotate: true, padMode: 'normal' });
+eq('用量条 | 画了 7 个圆角块（每个色号一个）', usageCv._rec.fills.filter((f) => f.fillStyle === '#F5F7FA').length, 7);
+const usageTextSeq = usageCv._rec.fillText.map((t) => String(t.text));
+const usageCodeSeq = usageTextSeq.filter((t) => USAGE_NATURAL.includes(t));
+eq('用量条 | 色号文字序列 = 自然序 A1,A2,A9,A10,B1,B2,M1', usageCodeSeq, USAGE_NATURAL);
+ok('用量条 | A9 必须排在 A10 之前（数字不能按字符串比）',
+  usageCodeSeq.indexOf('A9') >= 0 && usageCodeSeq.indexOf('A9') < usageCodeSeq.indexOf('A10'), JSON.stringify(usageCodeSeq));
+ok('用量条 | 顺序不是按颗数降序（不是 counts 的顺序 —— 旧行为就是这一条）',
+  JSON.stringify(usageCodeSeq) !== JSON.stringify(usageCountOrder), JSON.stringify(usageCodeSeq));
+const usageSwatchSeq = usageCv._rec.fills
+  .map((f) => String(f.fillStyle)).filter((s) => Object.values(USAGE_HEX_OF).indexOf(s) >= 0)
+  .map((s) => Object.keys(USAGE_HEX_OF).filter((k) => USAGE_HEX_OF[k] === s)[0]);
+eq('用量条 | 色块（fill）顺序同样是自然序（独立于文字的第二个信号）', usageSwatchSeq, USAGE_NATURAL);
+for (const code of USAGE_NATURAL) {
+  ok('用量条 | ' + code + ' 的颗数文字 = ' + USAGE_REV_COUNT[code] + ' 颗', usageTextSeq.includes(USAGE_REV_COUNT[code] + ' 颗'));
+}
+
+/* B) 图例 / CSV：colors 乱序时仍然不重排（用户只要求改图上那一条） */
+const usageScramblePat = usagePatOf(USAGE_SCRAMBLED, USAGE_REV_COUNT);
+ok('图例前置 | 乱序 colors 与自然序、与颗数序都不相同',
+  JSON.stringify(USAGE_SCRAMBLED) !== JSON.stringify(USAGE_NATURAL)
+  && JSON.stringify(USAGE_SCRAMBLED) !== JSON.stringify(usageScramblePat.counts.map((c) => c.code)));
+const usageLegend = Render.legendHTML(usageScramblePat);
+const usageLegendCodes = [...usageLegend.matchAll(/class="pd-legend-code"[^>]*>([^<]*)</g)].map((m) => m[1]);
+const usageCsvCodes = Render.exportCSV(usageScramblePat).replace(/^\uFEFF/, '').split('\r\n')
+  .filter((l) => l !== '' && !/^(编号|合计)/.test(l)).map((l) => l.split(',')[1]);
+eq('图例 | 7 行都在', usageLegendCodes.length, 7);
+eq('图例 | 顺序未变：仍按 pattern.colors 数组顺序（不重排）', usageLegendCodes, USAGE_SCRAMBLED);
+eq('CSV | 7 行都在', usageCsvCodes.length, 7);
+eq('CSV | 顺序未变：仍按 pattern.colors 数组顺序（不重排）', usageCsvCodes, USAGE_SCRAMBLED);
+ok('对照 | 图例与 CSV 都没有改成自然序（自然序是图上用量条独有的新行为）',
+  JSON.stringify(usageLegendCodes) !== JSON.stringify(USAGE_NATURAL) && JSON.stringify(usageCsvCodes) !== JSON.stringify(USAGE_NATURAL),
+  JSON.stringify({ legend: usageLegendCodes, csv: usageCsvCodes }));
+/* 加强（防御性）：colors 数组的顺序**不由 render.js 保证**（它只保证自己按色号现算），
+   所以这里额外用一个 colors 乱序的算例验证：即使上游数组顺序不自然，图上仍按 A1,A2,… 排。 */
+const usageScrambleCv = makeMockCanvas();
+Render.drawPattern(usageScramblePat, usageScrambleCv, { cellPx: 24, cellLabel: 'none', showRuler: false, annotate: true, padMode: 'normal' });
+const usageScrambleSeq = usageScrambleCv._rec.fillText.map((t) => String(t.text)).filter((t) => USAGE_NATURAL.includes(t));
+eq('用量条 | colors 数组乱序时仍按自然序输出（比较器自己现算，不依赖上游数组顺序）', usageScrambleSeq, USAGE_NATURAL);
+
 /* 不可变性：一串渲染/导出调用后 Pattern 快照不变 */
 ok('不可变性 | 手造 Pattern 渲染+导出后快照不变', JSON.stringify({ c: Array.from(HP.cells), l: Array.from(HP.locked), colors: HP.colors }) === hpSnap);
 const realSnap = JSON.stringify(realPat);
 const legendSnap = JSON.stringify({ cells: Array.from(EVIL.cells), colors: EVIL.colors });
 Render.drawPattern(realPat, makeMockCanvas(), { showCodes: true, showRuler: true, cellPx: 20, highlightLocked: true });
-Render.drawCompare(realPat, { width: 40, height: 30 }, makeMockCanvas(), { cellPx: 6 });
 Render.exportCSV(realPat);
 Render.legendHTML(realPat);
-ok('不可变性 | drawPattern/drawCompare/exportCSV/legendHTML 后 Pattern 快照不变', JSON.stringify(realPat) === realSnap);
+ok('不可变性 | drawPattern/exportCSV/legendHTML 后 Pattern 快照不变（drawCompare 已删除，故只测这 3 个）', JSON.stringify(realPat) === realSnap);
 Render.legendHTML(EVIL);
 ok('不可变性 | legendHTML 不改 colors/cells', JSON.stringify({ cells: Array.from(EVIL.cells), colors: EVIL.colors }) === legendSnap);
 
@@ -1250,7 +1321,8 @@ if (!productExists) {
 
   /* ── 产物新鲜度：7 个内联段（ui.html + 6 个模块）逐字节比对 ─────────────
      真实漏洞：旧套件只比对 srcedit 那一段，于是「src/ 改了但没跑 node build.mjs」
-     照样 50/50 全绿 —— 而产物里的 toolWand / tabBasic / maxColorsVal / effCurve 根本不存在。
+     照样 50/50 全绿 —— 而那时产物里根本没有新加的东西（当时缺的是 toolWand / tabBasic /
+     effCurve；换到本轮就是 #showCodes / #maxColorsNum / #chartTitle 这一类）。
      只在文本上「含有这些代码」的检查等于没有检查，所以这里逐字节比对全部 7 段，
      并由紧随其后的正向 / 负向对照证明它既会通过、也会红、而且能指出是哪一段。 */
   const BARE_FILES = BANNERS.map((b) => b.replace(/^src\//, ''));
@@ -1295,43 +1367,56 @@ if (!productExists) {
     BARE_FILES.every((f) => html.split(segmentOpen(f)).length - 1 === 1),
     BARE_FILES.map((f) => f + '×' + (html.split(segmentOpen(f)).length - 1)).join(' '));
 
-  /* 正向对照：把产物里的 render.js 段换成当前 src/ 的内容 → 必须 7 段全绿。
-     证明比对函数在内容一致时确实会通过（不是恒假的假检查）。 */
+  /* 正向对照 + 负向对照都跑在「现场用 src/ 重建出的产物文本」上：
+     把 7 段内容各自换成当前 src/ 的内容（结构、横幅、标签一律沿用真产物），
+     得到一个**必然与 src/ 同步**的文本。这样对照的有效性不依赖真产物是否已重建，
+     而且比对函数一旦退化成恒真/恒假都会被立刻抓到。 */
   const patchSegment = (text, file, replacement) => {
     const span = segmentSpan(text, file);
     return (span && replacement !== null) ? text.slice(0, span[0]) + replacement + text.slice(span[1]) : null;
   };
-  const freshRenderText = trimTailText(srcText['render.js']);
-  const freshRenderHtml = patchSegment(html, 'render.js', freshRenderText);
-  const segRepFresh = freshRenderHtml === null ? null : productSegmentReport(freshRenderHtml);
-  ok('正向对照 | 把 render.js 段替换成当前 src/render.js 后 7 段全绿（证明比对函数会通过）',
-    !!segRepFresh && segRepFresh.ok, segRepFresh ? ('不一致：' + segRepFresh.failed.join('、')) : '截取失败');
+  const inSyncHtml = ['ui.html'].concat(BARE_FILES).reduce((t, file) => {
+    const src = (file === 'ui.html') ? readSrc('ui.html') : srcText[file];
+    return (t === null || src === undefined || src === null) ? null : patchSegment(t, file, trimTailText(src));
+  }, html);
+  const segRepInSync = inSyncHtml === null ? null : productSegmentReport(inSyncHtml);
+  ok('正向对照 | 现场用 src/ 重建出的产物文本 7 段全绿（证明比对函数内容一致时会通过，不是恒假）',
+    !!segRepInSync && segRepInSync.ok, segRepInSync ? ('不一致：' + segRepInSync.failed.join('、')) : '重建失败');
+  ok('正向对照 | 重建只改了段内容，段数与横幅结构没变（7 段、6 个横幅各一次）',
+    !!inSyncHtml && (inSyncHtml.match(/<script>/g) || []).length === 6
+    && BARE_FILES.every((f) => inSyncHtml.split(segmentOpen(f)).length - 1 === 1));
 
   /* ── 负向对照：在内存里改坏 1 个字节，比对必须报红，并指出是哪一段 ──────
      没有这几条，就无法区分「全绿是因为产物新鲜」还是「因为比对本身在空转」。 */
   const flipAt = (text, pos) => text.slice(0, pos) + (text.charAt(pos) === 'X' ? 'Y' : 'X') + text.slice(pos + 1);
   const dropAt = (text, pos) => text.slice(0, pos) + text.slice(pos + 1);
   const midOf = (span) => (span ? Math.floor((span[0] + span[1]) / 2) : 0);
-  const ctlAppSpan = segmentSpan(html, 'app.js') || [0, 1];
-  const ctlUiSpan = segmentSpan(html, 'ui.html') || [0, 1];
-  const ctlPalSpan = segmentSpan(html, 'palette.js') || [0, 1];
+  const ctlAppSpan = segmentSpan(inSyncHtml || '', 'app.js') || [0, 1];
+  const ctlUiSpan = segmentSpan(inSyncHtml || '', 'ui.html') || [0, 1];
+  const ctlPalSpan = segmentSpan(inSyncHtml || '', 'palette.js') || [0, 1];
   ok('负向对照 | 三个对照组用的段边界都截取到了（否则下面的破坏点落在段外，对照无意义）',
-    !!segmentSpan(html, 'app.js') && !!segmentSpan(html, 'ui.html') && !!segmentSpan(html, 'palette.js'));
-  const repTamperApp = productSegmentReport(flipAt(html, midOf(ctlAppSpan)));
-  const repTamperUi = productSegmentReport(flipAt(html, midOf(ctlUiSpan)));
-  const repTamperPal = productSegmentReport(dropAt(html, midOf(ctlPalSpan)));
-  ok('负向对照 | 改坏 app.js 段 1 个字节 → 总判必须为 false（比对不是空转）', repTamperApp.ok === false, '总判 ' + repTamperApp.ok);
-  eq('负向对照 | 且只报 app.js 这一段（定位精确，其余 6 段仍绿）', repTamperApp.failed, ['app.js']);
-  ok('负向对照 | 改坏 ui.html 段 1 个字节 → 总判必须为 false（旧套件漏掉的正是这一段）', repTamperUi.ok === false, '总判 ' + repTamperUi.ok);
-  eq('负向对照 | 且只报 ui.html 这一段', repTamperUi.failed, ['ui.html']);
-  eq('负向对照 | 从 palette.js 段删掉 1 个字节（长度变化也要抓到）→ 只报 palette.js', repTamperPal.failed, ['palette.js']);
-  ok('负向对照 | 三种破坏各只影响自己那一段（7 段都仍在报，不串段）',
+    !!segmentSpan(inSyncHtml || '', 'app.js') && !!segmentSpan(inSyncHtml || '', 'ui.html') && !!segmentSpan(inSyncHtml || '', 'palette.js'));
+  const repTamperApp = productSegmentReport(flipAt(inSyncHtml, midOf(ctlAppSpan)));
+  const repTamperUi = productSegmentReport(flipAt(inSyncHtml, midOf(ctlUiSpan)));
+  const repTamperPal = productSegmentReport(dropAt(inSyncHtml, midOf(ctlPalSpan)));
+  ok('负向对照 | 改坏 app.js 段 1 个字节（字节数不变）→ 总判必须为 false（比对不是空转）', repTamperApp.ok === false, '总判 ' + repTamperApp.ok);
+  eq('负向对照 | 且恰好只报 app.js 这一段（其余 6 段仍绿）', repTamperApp.failed, ['app.js']);
+  ok('负向对照 | 改坏 ui.html 段 1 个字节（字节数不变）→ 总判必须为 false（旧套件漏掉的正是这一段）', repTamperUi.ok === false, '总判 ' + repTamperUi.ok);
+  eq('负向对照 | 且恰好只报 ui.html 这一段', repTamperUi.failed, ['ui.html']);
+  eq('负向对照 | 从 palette.js 段删掉 1 个字节（长度变化也要抓到）→ 恰好只报 palette.js', repTamperPal.failed, ['palette.js']);
+  const segAppBytes = Buffer.byteLength(trimTailText(srcText['app.js']), 'utf8');
+  const tamperedAppRow = repTamperApp.rows.filter((r) => r.file === 'app.js')[0];
+  eq('负向对照 | 字节数不变的那次破坏：两侧字节数完全相同却仍判不一致（证明靠内容判，不是靠长度）',
+    tamperedAppRow.detail, segAppBytes + ' vs ' + segAppBytes + ' 字节（不一致）');
+  ok('负向对照 | 三种破坏各只炸自己那一段（7 段都在报、不串段、不整体崩）',
     repTamperApp.rows.length === 7 && repTamperUi.rows.length === 7 && repTamperPal.rows.length === 7
     && repTamperApp.failed.length === 1 && repTamperUi.failed.length === 1 && repTamperPal.failed.length === 1,
     [repTamperApp.failed, repTamperUi.failed, repTamperPal.failed].join(' | '));
-  ok('负向对照 | 未改动的那 6 段在破坏后仍判为一致（说明红的是被改的那一段，不是整体崩）',
-    repTamperApp.rows.filter((r) => r.ok).length === 6 && repTamperUi.rows.filter((r) => r.ok).length === 6,
-    repTamperApp.rows.filter((r) => r.ok).length + ' / ' + repTamperUi.rows.filter((r) => r.ok).length);
+  eq('负向对照 | 三种破坏下其余 6 段都仍判为一致', [
+    repTamperApp.rows.filter((r) => r.ok).length,
+    repTamperUi.rows.filter((r) => r.ok).length,
+    repTamperPal.rows.filter((r) => r.ok).length
+  ], [6, 6, 6]);
 
   // 清掉所有模块全局（含 app.js 可能挂的键），便于后续判断"重新 eval 后新增了什么"
   for (const k of ['PINDOU_PALETTES', 'ColorKit', 'Pipeline', 'Render', 'SourceEdit', 'PindouUI']) delete globalThis[k];
@@ -1393,7 +1478,15 @@ eq('app.js 的 byId 引用数 === ui.html 的 id 数（双向 0 遗漏）', appR
 ok('app.js 无悬空 id 引用（每个 byId(...) 都能在 ui.html 里找到）', appRefs.length > 0 && appRefs.every((id) => htmlIds.includes(id)), appRefs.filter((id) => !htmlIds.includes(id)).join(','));
 ok('ui.html 无未被 app.js 引用的死 id', htmlIds.length > 0 && htmlIds.every((id) => appRefs.includes(id)), htmlIds.filter((id) => !appRefs.includes(id)).join(','));
 ok('本轮替换 | 旧的 #showNumbers 已彻底消失（html + app.js 双清）', !htmlIds.includes('showNumbers') && !appRefs.includes('showNumbers'));
-ok('本轮替换 | #cellLabelMode 存在且被引用', htmlIds.includes('cellLabelMode') && appRefs.includes('cellLabelMode'));
+/* 本轮增删：删 #cellLabelMode（下拉）→ 换成「显示色号」勾选框 #showCodes；
+   删 #maxColorsVal（只读读数）→ 换成可键入的数字框 #maxColorsNum；删「导出对照图」整条。 */
+ok('本轮替换 | #cellLabelMode 已彻底删除（html + app.js 双清，改为并列勾选框）', !htmlIds.includes('cellLabelMode') && !appRefs.includes('cellLabelMode'));
+ok('本轮替换 | #maxColorsVal 已彻底删除（html + app.js 双清，改为数字框）', !htmlIds.includes('maxColorsVal') && !appRefs.includes('maxColorsVal'));
+ok('本轮替换 | #btnExportCompare（导出对照图）已彻底删除（html + app.js 双清）', !htmlIds.includes('btnExportCompare') && !appRefs.includes('btnExportCompare'));
+ok('本轮替换 | 「对照图」字样与标识符在 ui.html / app.js 里都清干净了（不是只藏起按钮）',
+  UI_HTML.indexOf('对照图') < 0 && APP_SRC.indexOf('对照图') < 0 && APP_SRC.indexOf('exportCompare') < 0);
+ok('本轮替换 | 新的「显示色号」勾选框 #showCodes 存在且被引用', htmlIds.includes('showCodes') && appRefs.includes('showCodes'));
+ok('本轮替换 | 新的数字框 #maxColorsNum 存在且被引用', htmlIds.includes('maxColorsNum') && appRefs.includes('maxColorsNum'));
 ok('本轮替换 | 旧的 #recolorColor 已彻底消失（html + app.js 双清）', !htmlIds.includes('recolorColor') && !appRefs.includes('recolorColor'));
 ok('本轮替换 | 色板网格那组 id 齐全且都被引用', ['recolorGrid', 'recolorSearch', 'recolorScope', 'recolorEmpty', 'recolorRecentRow', 'recolorCurrent'].every((id) => htmlIds.includes(id) && appRefs.includes(id)));
 
@@ -1632,7 +1725,11 @@ flushTimers();
 const previewCalls = drawCalls.filter((c) => c.cv === dom.map.patternCanvas);
 ok('预览恒 annotate:false | 预览确实渲染过（≥1 次 drawPattern 打到 #patternCanvas）', previewCalls.length >= 1, String(previewCalls.length));
 ok('预览恒 annotate:false | 每次预览 drawPattern 收到的 annotate === false', previewCalls.length > 0 && previewCalls.every((c) => c.opts.annotate === false), JSON.stringify(previewCalls.map((c) => c.opts.annotate)));
-ok('预览 | 每次都显式给出 cellLabel（只给 showCodes 会退回画数字编号）', previewCalls.length > 0 && previewCalls.every((c) => ['code', 'index', 'none'].includes(c.opts.cellLabel)), JSON.stringify(previewCalls.map((c) => c.opts.cellLabel)));
+/* 允许集里绝不能留 'index'：那等于给「回退成数字编码」这个已删功能留后门。
+   预览只下发 'code' / 'none' 两种值（来自「显示色号」勾选框）。 */
+ok('预览 | 每次都显式给出 cellLabel，且只可能是 "code" / "none"',
+  previewCalls.length > 0 && previewCalls.every((c) => c.opts.cellLabel === 'code' || c.opts.cellLabel === 'none'),
+  JSON.stringify(previewCalls.map((c) => c.opts.cellLabel)));
 ok('预览 | padMode 仍是 normal（与导出的 tight 是有意分开的两套白边策略）', previewCalls.length > 0 && previewCalls.every((c) => c.opts.padMode === 'normal'), JSON.stringify(previewCalls.map((c) => c.opts.padMode)));
 eq('预览 | 预览真的产出了图纸（state.pattern 被 doGenerate 换掉）', st.pattern !== pat6, true);
 
@@ -1738,20 +1835,45 @@ eq('降级 | 无 DOM 时 state().booted === false（确实没启动）', bareWin
    ══════════════════════════════════════════════════════════════════════ */
 
 /* ── 5.1 双标签页（基本 / 高级）───────────────────────────────────────── */
-const TAB_NEW_IDS = ['tabBasic', 'tabAdvanced', 'panelBasic', 'panelAdvanced', 'maxColorsVal', 'preprocessHint',
+/* 上一轮新增、且本轮仍然存在的控件（#maxColorsVal 本轮已被数字框取代，故从这里移出） */
+const TAB_NEW_IDS = ['tabBasic', 'tabAdvanced', 'panelBasic', 'panelAdvanced', 'preprocessHint',
   'chartTitle', 'toolNone', 'toolWand', 'toolEraser', 'eraserSize', 'toolHint'];
-ok('控件清单 | 本轮新增的 12 个 id 全部在 ui.html 里', TAB_NEW_IDS.every((id) => htmlIds.includes(id)), TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
-ok('控件清单 | 且这 12 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
-eq('控件清单 | ui.html 的 id 总数 = 91（原来 79 + 本轮 12）', htmlIds.length, 91);
+ok('控件清单 | 上一轮新增、本轮仍在的 11 个 id 全在 ui.html 里', TAB_NEW_IDS.every((id) => htmlIds.includes(id)), TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 11 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
+/* 本轮增删后的精确计数：91（上一轮）+ 2（showCodes / maxColorsNum）− 3（cellLabelMode / maxColorsVal / btnExportCompare）= 90 */
+eq('控件清单 | ui.html 的 id 总数 = 90（91 + 本轮新增 2 − 删除 3）', htmlIds.length, 90);
+eq('控件清单 | 本轮删除的 3 个 id 一个都不在产物 id 集合里',
+  ['cellLabelMode', 'maxColorsVal', 'btnExportCompare'].filter((id) => htmlIds.includes(id)), []);
 
 const maxColorsTag = (UI_HTML.match(/<input\b[^>]*\bid="maxColors"[^>]*>/) || [''])[0];
-ok('控件 | #maxColors 变成 range（min 2 / max 221 / step 1 / value 24，可拖到色卡上限）',
+ok('控件 | #maxColors 仍是 range（min 2 / max 221 / step 1 / value 24，可拖到色卡上限）',
   /type="range"/.test(maxColorsTag) && /min="2"/.test(maxColorsTag) && /max="221"/.test(maxColorsTag)
   && /step="1"/.test(maxColorsTag) && /value="24"/.test(maxColorsTag), maxColorsTag);
-ok('控件 | #maxColors 不再是 type="number"（旧的数字输入已彻底消失）', !/type="number"/.test(maxColorsTag), maxColorsTag);
-eq('控件 | #maxColorsVal 读数存在且 boot 后显示 24（与 Pipeline 默认一致）', String(els.maxColorsVal.textContent), '24');
-ok('控件 | #chartTitle 是文本输入，且在「图纸显示」组之后（属于该组）',
-  /type="text"/.test((UI_HTML.match(/<input\b[^>]*\bid="chartTitle"[^>]*>/) || [''])[0]) && UI_HTML.indexOf('id="chartTitle"') > UI_HTML.indexOf('<h2>图纸显示</h2>'), UI_HTML.indexOf('id="chartTitle"') + ' vs ' + UI_HTML.indexOf('<h2>图纸显示</h2>'));
+ok('控件 | #maxColors 不是 number（滑杆与数字框是两个并列控件，不是同一个元素兼两种类型）', !/type="number"/.test(maxColorsTag), maxColorsTag);
+const maxColorsNumTag = (UI_HTML.match(/<input\b[^>]*\bid="maxColorsNum"[^>]*>/) || [''])[0];
+ok('控件 | #maxColorsNum 是 number 框（min 2 / max 221 / step 1 / value 24，与滑杆同量程）',
+  /type="number"/.test(maxColorsNumTag) && /min="2"/.test(maxColorsNumTag) && /max="221"/.test(maxColorsNumTag)
+  && /step="1"/.test(maxColorsNumTag) && /value="24"/.test(maxColorsNumTag), maxColorsNumTag);
+ok('控件 | #maxColors 与 #maxColorsNum 在同一个「减色」组里',
+  UI_HTML.indexOf('id="maxColors"') > UI_HTML.indexOf('<h2>减色</h2>') && UI_HTML.indexOf('id="maxColorsNum"') > UI_HTML.indexOf('<h2>减色</h2>')
+  && UI_HTML.indexOf('id="maxColors"') < UI_HTML.indexOf('<h2>色卡版本</h2>') && UI_HTML.indexOf('id="maxColorsNum"') < UI_HTML.indexOf('<h2>色卡版本</h2>'));
+eq('控件 | boot 后滑杆 = 数字框 = 24（与 Pipeline 默认一致）', [String(els.maxColors.value), String(els.maxColorsNum.value)], ['24', '24']);
+
+/* 标题：默认值 + 位置（预览区，不是「图纸显示」组） */
+const chartTitleTag = (UI_HTML.match(/<input\b[^>]*\bid="chartTitle"[^>]*>/) || [''])[0];
+ok('控件 | #chartTitle 默认值就是「未命名图纸」（写在 HTML 的 value 属性上，首屏不空）',
+  /value="未命名图纸"/.test(chartTitleTag), chartTitleTag);
+ok('控件 | #chartTitle 是文本输入', /type="text"/.test(chartTitleTag), chartTitleTag);
+ok('控件 | #chartTitle 落在预览容器 <main id="dropZone"> 内部（DOM 层级，不是「图纸显示」组）',
+  UI_HTML.indexOf('<main id="dropZone"') >= 0 && UI_HTML.indexOf('id="chartTitle"') > UI_HTML.indexOf('<main id="dropZone"')
+  && UI_HTML.indexOf('id="chartTitle"') < UI_HTML.indexOf('</main>', UI_HTML.indexOf('<main id="dropZone"')),
+  UI_HTML.indexOf('id="chartTitle"') + ' vs main ' + UI_HTML.indexOf('<main id="dropZone"') + '…' + UI_HTML.indexOf('</main>'));
+ok('控件 | #chartTitle 已从「图纸显示」组移出（该组文本里不再有它）',
+  (function () { const a = UI_HTML.indexOf('<h2>图纸显示</h2>'); const b = UI_HTML.indexOf('</section>', a); return a >= 0 && b > a && UI_HTML.slice(a, b).indexOf('chartTitle') < 0; })());
+ok('控件 | #chartTitle 位于 #canvasScroll 之前（用户原话：放在预览区「上面」）',
+  UI_HTML.indexOf('id="chartTitle"') >= 0 && UI_HTML.indexOf('id="canvasScroll"') > UI_HTML.indexOf('id="chartTitle"'),
+  UI_HTML.indexOf('id="chartTitle"') + ' < ' + UI_HTML.indexOf('id="canvasScroll"'));
+eq('控件 | boot 后 #showCodes.checked === true（「显示色号」默认开着）', els.showCodes.checked, true);
 ok('控件 | #preprocessHint 落在「预处理」组里', UI_HTML.indexOf('id="preprocessHint"') > UI_HTML.indexOf('<h2>预处理</h2>'));
 ok('控件 | #toolHint 与 #eraserSize 落在「抠图」组里（都在 panelBasic 内、panelAdvanced 之前）',
   UI_HTML.indexOf('id="toolHint"') > UI_HTML.indexOf('<h2>抠图</h2>') && UI_HTML.indexOf('id="toolHint"') < UI_HTML.indexOf('<div id="panelAdvanced"'));
@@ -1955,7 +2077,7 @@ function erBrushMirror(w, h, col, row, size) {
 }
 els.eraserSize.value = '3';
 els.cellSize.value = '24';
-els.cellLabelMode.value = 'none';
+els.showCodes.checked = false;    // 「显示色号」勾选框（本轮取代了 #cellLabelMode 下拉）
 els.showRuler.checked = false;
 fire(els.eraserSize, 'change');
 st.pattern = erMkPat(9, 5, () => 0);
@@ -2138,6 +2260,186 @@ els.chartTitle.value = '';
 fire(els.chartTitle, 'input');
 erFlushAll();
 eq('图纸标题 | 清空标题后 captionName 为空串（render.js 负责整段省略）', ui.viewOpts().captionName, '');
+
+/* ══════════════════════════════════════════════════════════════════════
+   本轮新需求：两个并列勾选框 / 色数上限双控件 / 导出强制色号 / 卡片配色 / 标题落位
+   ══════════════════════════════════════════════════════════════════════ */
+const ruleBodyOf = (sel) => {
+  const i = UI_HTML.indexOf(sel + '{');
+  if (i < 0) return null;
+  return UI_HTML.slice(i + sel.length + 1, UI_HTML.indexOf('}', i));
+};
+const sectionOf = (h2Text) => {
+  const a = UI_HTML.indexOf('<h2>' + h2Text + '</h2>');
+  if (a < 0) return null;
+  return UI_HTML.slice(a, UI_HTML.indexOf('</section>', a));
+};
+const checkboxIdsIn = (h2Text) => ((sectionOf(h2Text) || '').match(/<input\b[^>]*type="checkbox"[^>]*>/g) || [])
+  .map((t) => (/\bid="([^"]+)"/.exec(t) || [null, null])[1]);
+
+/* ── 两个并列勾选框：显示色号 / 显示坐标刻度 ─────────────────────────── */
+const displaySection = sectionOf('图纸显示');
+ok('勾选框 | 「图纸显示」组能定位到（下面几条不是空转）', !!displaySection, String(displaySection).slice(0, 80));
+eq('勾选框 | 该组恰好 2 个勾选框，且就是 #showCodes 与 #showRuler', checkboxIdsIn('图纸显示'), ['showCodes', 'showRuler']);
+ok('勾选框 | #showCodes 的文案是「显示色号」', /id="showCodes"[^>]*\/>\s*显示色号/.test(displaySection || ''));
+ok('勾选框 | #showRuler 的文案仍是「显示坐标刻度」', /id="showRuler"[^>]*\/>\s*显示坐标刻度/.test(displaySection || ''));
+ok('勾选框 | 两个都默认勾选（checked 写在 HTML 上）',
+  /id="showCodes"[^>]*checked/.test(displaySection || '') && /id="showRuler"[^>]*checked/.test(displaySection || ''));
+ok('勾选框 | 该组已无下拉（旧的 #cellLabelMode 换成了勾选框）', (displaySection || '').indexOf('<select') < 0);
+/* 「并列」是用户原话：两个勾选框必须在同一个 .check-row 里，且该容器是横向 flex（不是上下堆叠） */
+const checkRowSpan = (function () {
+  const i = UI_HTML.indexOf('<div class="check-row">');
+  return i < 0 ? null : UI_HTML.slice(i, UI_HTML.indexOf('</div>', i));
+})();
+ok('勾选框 | .check-row 容器能定位到（下面两条不是空转）', !!checkRowSpan, String(checkRowSpan).slice(0, 80));
+eq('勾选框 | #showCodes 与 #showRuler 在同一个 .check-row 容器里（并列成一行）',
+  ((checkRowSpan || '').match(/<input\b[^>]*type="checkbox"[^>]*>/g) || []).map((t) => (/\bid="([^"]+)"/.exec(t) || [null, null])[1]),
+  ['showCodes', 'showRuler']);
+ok('勾选框 | .check-row 用 display:flex（横排，不是上下堆叠）',
+  /display\s*:\s*flex/.test(ruleBodyOf('.check-row') || ''), JSON.stringify(ruleBodyOf('.check-row')));
+els.showCodes.checked = true;
+fire(els.showCodes, 'change');
+eq('勾选框 | 勾上「显示色号」→ viewOpts().cellLabel === "code"', ui.viewOpts().cellLabel, 'code');
+els.showCodes.checked = false;
+fire(els.showCodes, 'change');
+eq('勾选框 | 取消「显示色号」→ viewOpts().cellLabel === "none"', ui.viewOpts().cellLabel, 'none');
+ok('勾选框 | 取消后格内文字真的不画（render 层 labelsDrawn === false）',
+  Render.drawPattern(HP, makeMockCanvas(), ui.viewOpts()).labelsDrawn === false);
+els.showCodes.checked = true;
+fire(els.showCodes, 'change');
+eq('勾选框 | 重新勾上 → 回到 "code"', ui.viewOpts().cellLabel, 'code');
+els.showRuler.checked = false;
+fire(els.showRuler, 'change');
+eq('勾选框 | 取消「显示坐标刻度」只改 showRuler，不动 cellLabel', [ui.viewOpts().showRuler, ui.viewOpts().cellLabel], [false, 'code']);
+els.showRuler.checked = true;
+fire(els.showRuler, 'change');
+ok('勾选框 | #cellLabelHint 文案里不再出现「编号」（数字编号功能已删除）',
+  String(els.cellLabelHint.textContent).length > 0 && String(els.cellLabelHint.textContent).indexOf('编号') < 0, String(els.cellLabelHint.textContent));
+erFlushAll();
+
+/* ── 色数上限：滑杆 ↔ 数字框 双向同步 + 越界夹取 ─────────────────────── */
+const maxColorsBoth = () => [String(els.maxColors.value), String(els.maxColorsNum.value)];
+eq('色数上限 | 前置 | 滑杆与数字框初始一致', maxColorsBoth(), ['24', '24']);
+els.maxColors.value = '60';
+fire(els.maxColors, 'input');
+eq('色数上限 | 拖滑杆 → 数字框跟着变', maxColorsBoth(), ['60', '60']);
+eq('色数上限 | 拖滑杆 → 送进 pipeline 的上限也是 60', ui.options().quantize.maxColors, 60);
+for (const t of [['0', '2'], ['1', '2'], ['222', '221'], ['999', '221'], ['150', '150']]) {
+  els.maxColorsNum.value = t[0];
+  fire(els.maxColorsNum, 'input');
+  eq('色数上限 | 键入 ' + t[0] + ' → 夹取为 ' + t[1] + '，滑杆与数字框都变成该值', maxColorsBoth(), [t[1], t[1]]);
+}
+els.maxColorsNum.value = 'abc';
+fire(els.maxColorsNum, 'input');
+eq('色数上限 | 键入 "abc" 时 input 阶段不动滑杆、且保留原文（便于继续编辑）',
+  [String(els.maxColors.value), String(els.maxColorsNum.value)], ['150', 'abc']);
+fire(els.maxColorsNum, 'change');
+eq('色数上限 | 失焦(change) 时把非法文本回写成上一次有效值 150，两者恢复一致', maxColorsBoth(), ['150', '150']);
+eq('色数上限 | 非法文本不污染送进 pipeline 的值', ui.options().quantize.maxColors, 150);
+ok('色数上限 | 提交之后两个控件相等（结构性同步；输入中途允许数字框暂时持有未提交文本）',
+  String(els.maxColors.value) === String(els.maxColorsNum.value));
+els.quantizeEnabled.checked = false;
+fire(els.quantizeEnabled, 'change');
+eq('色数上限 | 关闭减色 → 滑杆与数字框一起 disabled（不出现一个灰一个亮）', [els.maxColors.disabled, els.maxColorsNum.disabled], [true, true]);
+els.quantizeEnabled.checked = true;
+fire(els.quantizeEnabled, 'change');
+eq('色数上限 | 重新开启减色 → 一起恢复可用', [els.maxColors.disabled, els.maxColorsNum.disabled], [false, false]);
+erFlushAll();
+
+/* ── 导出：格内色号永远画出（与预览开关解耦），导出组没有色号开关 ───── */
+eq('导出 | 「导出」组的控件恰好是这 4 个（无格内色号开关、无对照图按钮）',
+  ((sectionOf('导出') || '').match(/<(?:input|select|button)\b[^>]*>/g) || []).map((t) => (/\bid="([^"]+)"/.exec(t) || [null, '?' + t.slice(0, 18)])[1]),
+  ['exportScale', 'exportAnnotate', 'btnExportPng', 'btnExportCsv']);
+els.showCodes.checked = false;          // 预览侧关掉色号
+fire(els.showCodes, 'change');
+eq('导出 | 预览关掉「显示色号」→ 导出 opts 仍强制 cellLabel === "code"', ui.exportViewOpts(2).cellLabel, 'code');
+eq('导出 | 兼容键 showCodes 也被写成 true（旧键不能把导出色号关掉）', ui.exportViewOpts(2).showCodes, true);
+eq('导出 | 此时预览侧确实是 none（两套开关真的解耦）', ui.viewOpts().cellLabel, 'none');
+els.exportScale.value = '1';
+els.exportAnnotate.checked = false;
+erFlushAll();                   // 不用 dropTimers()：丢弃重渲染定时器会让 renderScheduled 永久卡住
+dom.created.canvases.length = 0;
+drawCalls.length = 0;
+st.pattern = st.pattern || Pipeline.generateFromRGBA(synth(20, 20, (x) => [x * 9 % 256, 120, 60]), 20, 20, { gridW: 8, gridH: 8 });
+ui.exportPng();
+ok('导出 | 真导出路径（exportPng → drawPattern）拿到的 cellLabel 也是 "code"',
+  drawCalls.length > 0 && drawCalls[drawCalls.length - 1].opts.cellLabel === 'code',
+  JSON.stringify(drawCalls.length ? drawCalls[drawCalls.length - 1].opts.cellLabel : null));
+ok('导出 | #exportHint 文案说明了「导出永远画色号、与预览开关无关」',
+  /色号.{0,8}永远画出/.test(String(els.exportHint.textContent)) && String(els.exportHint.textContent).indexOf('显示色号') >= 0,
+  String(els.exportHint.textContent));
+els.showCodes.checked = true;
+fire(els.showCodes, 'change');
+erFlushAll();
+
+/* ── 预览区点击守卫：无图时点标题输入框 / 它的 <label> 不该顺手弹文件选择器 ── */
+const guardSourceBackup = st.source;
+st.source = null;                       // 只在「无图」状态下走这条守卫
+const guardTagNameBackup = els.chartTitle.tagName;
+els.chartTitle.tagName = 'INPUT';       // 桩元素默认 tagName 是 DIV，这里显式模拟真实输入框
+const guardClicks0 = els.fileInput._clicks;
+fire(els.dropZone, 'click', { target: els.chartTitle });
+eq('预览区点击守卫 | 无图时点标题输入框（<input>）→ 不触发文件选择', els.fileInput._clicks - guardClicks0, 0);
+fire(els.dropZone, 'click', { target: { tagName: 'label' } });
+eq('预览区点击守卫 | 无图时点标题的 <label>（会把焦点转发给输入框）→ 也不触发文件选择', els.fileInput._clicks - guardClicks0, 0);
+fire(els.dropZone, 'click', { target: els.patternCanvas });
+eq('预览区点击守卫 | 无图时点预览区其它位置 → 行为不变，仍然弹出文件选择', els.fileInput._clicks - guardClicks0, 1);
+els.chartTitle.tagName = guardTagNameBackup;
+st.source = guardSourceBackup;
+
+/* ── 标题：默认值在 HTML 层面已断言（桩元素不解析 value 属性）；这里补行为契约 ── */
+els.chartTitle.value = '不该被重置的标题';
+fire(els.btnResetAdjust, 'click');
+erFlushAll();
+eq('标题 | 「重置微调」不会清掉用户输入的标题（applyDefaults 刻意不复位 chartTitle）', String(els.chartTitle.value), '不该被重置的标题');
+els.chartTitle.value = '';
+fire(els.chartTitle, 'input');
+erFlushAll();
+eq('标题 | 清空后 viewOpts / exportViewOpts 的 captionName 都是空串（导出侧同步）',
+  [ui.viewOpts().captionName, ui.exportViewOpts(2).captionName], ['', '']);
+els.chartTitle.value = '未命名图纸';
+fire(els.chartTitle, 'input');
+erFlushAll();
+
+/* ── 卡片配色：.group 用自己的专色（更浅），且没有连带改亮 --panel2 的其它使用者 ── */
+const cssVarLit = (name) => {
+  const m = new RegExp('--' + name + '\\s*:\\s*(#[0-9a-fA-F]{3,6})').exec(UI_HTML);
+  return m ? m[1].toUpperCase() : null;
+};
+const hexLum = (h) => {
+  const s = String(h).replace('#', '');
+  const n = s.length === 3 ? s.split('').map((c) => c + c).join('') : s;
+  const f = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  return 0.2126 * f(parseInt(n.slice(0, 2), 16) / 255) + 0.7152 * f(parseInt(n.slice(2, 4), 16) / 255) + 0.0722 * f(parseInt(n.slice(4, 6), 16) / 255);
+};
+const groupRule = ruleBodyOf('.group');
+ok('卡片配色 | .group 规则能解析出来（下面几条不是空转）', !!groupRule, JSON.stringify(groupRule));
+const groupBgVar = /background\s*:\s*var\(\s*--([\w-]+)\s*\)/.exec(groupRule || '');
+const groupBorderVar = /border\s*:\s*1px\s+solid\s+var\(\s*--([\w-]+)\s*\)/.exec(groupRule || '');
+const groupBg = groupBgVar ? cssVarLit(groupBgVar[1]) : null;
+const groupBorder = groupBorderVar ? cssVarLit(groupBorderVar[1]) : null;
+const panel2Lit = cssVarLit('panel2');
+const lineLit = cssVarLit('line');
+eq('卡片配色 | --panel2 的字面量未被改动（仍是 #1F232B）', panel2Lit, '#1F232B');
+eq('卡片配色 | --line 的字面量未被改动（仍是 #2A2F39）', lineLit, '#2A2F39');
+eq('卡片配色 | .group 的底色字面量 === #272D37（写死的期望值）', groupBg, '#272D37');
+eq('卡片配色 | .group 的边框字面量 === #3A4250（写死的期望值）', groupBorder, '#3A4250');
+ok('卡片配色 | .group 不再复用 --panel2（自有变量，不是同一份颜色）',
+  !!groupBgVar && groupBgVar[1] !== 'panel2' && groupBg !== panel2Lit, JSON.stringify(groupBgVar && groupBgVar[1]));
+ok('卡片配色 | .group 的底色比 --panel2 更浅（相对亮度更高）',
+  !!groupBg && hexLum(groupBg) > hexLum(panel2Lit),
+  groupBg + ' lum=' + (groupBg ? hexLum(groupBg).toFixed(4) : '?') + ' vs ' + panel2Lit + ' lum=' + hexLum(panel2Lit).toFixed(4));
+ok('卡片配色 | .group 的边框比 --line 更亮一档',
+  !!groupBorder && hexLum(groupBorder) > hexLum(lineLit),
+  groupBorder + ' lum=' + (groupBorder ? hexLum(groupBorder).toFixed(4) : '?') + ' vs ' + lineLit + ' lum=' + hexLum(lineLit).toFixed(4));
+for (const sel of ['.legend-row', '.sw-grid-wrap', '.progress']) {
+  const body = ruleBodyOf(sel);
+  ok('卡片配色 | ' + sel + ' 仍用 var(--panel2)（没被一起改亮）', !!body && /background\s*:\s*var\(--panel2\)/.test(body), JSON.stringify(body));
+}
+const inputRule = ruleBodyOf('input[type="number"],input[type="text"],select');
+ok('卡片配色 | 输入框 / 下拉仍用 var(--panel2)（没被一起改亮）', !!inputRule && /background\s*:\s*var\(--panel2\)/.test(inputRule), JSON.stringify(inputRule));
+ok('卡片配色 | --panel2 的 4 个其它使用者都还在引用它（一个都没被摘掉）',
+  ['.legend-row', '.sw-grid-wrap', '.progress'].every((s) => new RegExp(s.replace(/\./g, '\\.') + '\\{[^}]*var\\(--panel2\\)').test(UI_HTML)) && /input\[type="text"\],select\{[^}]*var\(--panel2\)/.test(UI_HTML));
 
 /* ══════════════════════════════════════════ 第 7 组 · 原图编辑（srcedit.js） */
 startGroup('第 7 组 · 原图编辑（SourceEdit）');

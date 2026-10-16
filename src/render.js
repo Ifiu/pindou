@@ -3,18 +3,17 @@
  *
  * 职责：
  *   1) drawPattern  把 Pattern 画成可打印的白底图纸（网格 + 29 格板边界 + 刻度 + 色号标签 + 可选用量表）
- *   2) drawCompare  原图 / 图纸 等高并排对照
- *   3) exportPNG    canvas -> PNG 下载
- *   4) exportCSV    Pattern -> CSV 字符串（UTF-8 BOM，由调用方负责下载）
- *   5) legendHTML   Pattern -> 图例 HTML 片段
+ *   2) exportPNG    canvas -> PNG 下载
+ *   3) exportCSV    Pattern -> CSV 字符串（UTF-8 BOM，由调用方负责下载）
+ *   4) legendHTML   Pattern -> 图例 HTML 片段
  *
  * viewOpts（全部可选）：
  *   cellPx          每格像素（4..256，默认 12）—— 导出放大由调用方给
- *   cellLabel       'code'(默认) 画真色号 A1/A10/M15 | 'index' 画图纸编号 | 'none' 不画
- *   showCodes       旧键：false 等价于 cellLabel:'none'；true 且未给 cellLabel 时视为 'index'
+ *   cellLabel       'code' 画真色号 A1/A10/M15 | 其余值（'none' 与历史值 'index'）一律不画
+ *   showCodes       旧键：只在未给 cellLabel 时生效，true → 'code'，否则 → 'none'
  *   padMode         'tight'(默认) 白边约 4%，受刻度文字下限约束 | 'normal' 旧的 max(40, cellPx*3+20)
  *   annotate        true 时在网格下方追加用量块：每个色号一个「圆角色块 + 色号 + 颗数」的
- *                   行内块，横向排布、超出容器宽度自动换行、每行居中
+ *                   行内块，按色号自然序（A1,A2..B1,B2..）排列，横向排布、自动换行、每行居中
  *   showRuler       默认 true，每 5 格一个刻度（29 格板边界额外补标）
  *   highlightLocked 默认 false，锁定的格子画一个角标
  *
@@ -50,7 +49,7 @@
   var LABEL_FONT_RATIO = 0.42;
   var LABEL_FONT_MIN = 7;              // 字号落在这个区间之外就不画
   var LABEL_FONT_MAX = 40;
-  var LABEL_MIN_READABLE = { code: 8, index: 7 };
+  var LABEL_MIN_READABLE_CODE = 8;     // 色号的最小可读字号（数字编号模式已删除，不再有第二档阈值）
   var LABEL_CHAR_W = 0.62;             // 等宽字体单字符宽度估算（相对字号）
   var LABEL_FIT = 0.9;                 // 文本宽度上限 = cellPx * 0.9（留 10% 余量）
 
@@ -79,8 +78,6 @@
     // 同族中性灰、与旧值(rulerText)几乎不可分辨，不引入新色相。
     caption: '#616B7A',
     title: '#2B3240',
-    placeholder: '#EEF1F5',
-    placeholderText: '#8A94A6',
     chipBg: '#F5F7FA',       // 用量块底
     chipLine: '#DCE0E6',     // 用量块描边
     chipCount: '#5A6472',    // 用量块里的颗数文字
@@ -104,13 +101,15 @@
 
   function safeHex(v) { return isValidHex(v) ? v : '#000000'; }
 
-  // 旧键 showCodes 与新键 cellLabel 的兼容规则：cellLabel 优先
+  // cellLabel 归一化为二值（只剩「画色号」与「不画」两种语义）：
+  //   'code'                               → 'code'
+  //   'none' / 历史值 'index' / 其它未知值  → 'none'（数字编号功能已删除，不再有第三种模式）
+  //   缺省（未给 / null / 空串）            → 沿用旧键 showCodes：true → 'code'，否则 'none'
   function normCellLabel(o) {
     var v = o.cellLabel;
-    if (v === 'code' || v === 'index' || v === 'none') return v;
-    if (o.showCodes === false) return 'none';
-    if (o.showCodes === true) return 'index';
-    return 'code';                                  // 新默认
+    if (v === 'code') return 'code';
+    if (v !== undefined && v !== null && v !== '') return 'none';
+    return o.showCodes === true ? 'code' : 'none';
   }
 
   // 角标标题：只认字符串，去首尾空白；非字符串 / 全空白 = 没有标题（整段省略）
@@ -156,7 +155,7 @@
     return null;
   }
 
-  // 编号文字颜色按色块亮度取反，保证任何色号上都看得见
+  // 色号文字颜色按色块亮度取反，保证任何色号上都看得见
   function textColorFor(hex) {
     var rgb = hexToRgb(hex);
     if (!rgb) return '#111827';
@@ -193,7 +192,7 @@
 
   /* ------------------------------------------------- 标签：长度 / 可读性 */
 
-  // 本图实际用到的色号扫描：最长色号长度（code）与最大色号下标（index）都从这里取，不写死
+  // 本图实际用到的色号扫描：最长色号长度从这里取，不写死
   function usedScan(pattern) {
     var colors = (pattern && pattern.colors) || [];
     var cells = (pattern && pattern.cells) || [];
@@ -201,59 +200,50 @@
     var w = Math.max(0, Math.floor((pattern && pattern.w) || 0));
     var h = Math.max(0, Math.floor((pattern && pattern.h) || 0));
     var total = Math.min(cells.length, w * h);
-    var maxIdx = -1, maxCodeLen = 0, used = 0, i, idx, code;
+    var maxCodeLen = 0, used = 0, i, idx, code;
     for (i = 0; i < total; i++) {
       idx = cells[i];
       if (idx === EMPTY) continue;
       if (!isNum(idx) || idx < 0 || idx >= n) continue;
       used++;
-      if (idx > maxIdx) maxIdx = idx;
       code = colors[idx] ? colors[idx].code : null;
       if (typeof code === 'string' || typeof code === 'number') {
         if (String(code).length > maxCodeLen) maxCodeLen = String(code).length;
       }
     }
-    return { used: used, maxIdx: maxIdx, maxCodeLen: maxCodeLen };
+    return { used: used, maxCodeLen: maxCodeLen };
   }
 
-  // 某模式下文本最长的长度：'code' = 实际用到的色号里最长的；'index' = String(最大下标+1).length
-  function labelTextLen(mode, scan) {
-    if (mode === 'index') return scan.maxIdx < 0 ? 1 : String(scan.maxIdx + 1).length;
-    return scan.maxCodeLen > 0 ? scan.maxCodeLen : 1;
-  }
-
-  // 该 cellPx 下能否画标签：约束 A（最小可读字号）+ 约束 B（装得下，留 10% 余量）
+  // 该 cellPx 下能否画色号：约束 A（最小可读字号）+ 约束 B（装得下，留 10% 余量）
   // 注意顺序：B 判定必须在「夹到宽度上限」之前 —— 否则夹到上限后判定恒为等号，B 等于失效，
   // 长色号会被缩成蚂蚁字硬塞进格子（正是「画了等于没画」）。装不下就干脆不画。
-  function labelFit(cellPx, mode, len) {
-    var minReadable = mode === 'index' ? LABEL_MIN_READABLE.index : LABEL_MIN_READABLE.code;
+  function labelFit(cellPx, len) {
     var exact = cellPx * LABEL_FONT_RATIO;
-    if (exact < LABEL_FONT_MIN || exact > LABEL_FONT_MAX) return { draw: false, fontPx: 0, mode: mode };
-    if (exact < minReadable) return { draw: false, fontPx: 0, mode: mode };
+    if (exact < LABEL_FONT_MIN || exact > LABEL_FONT_MAX) return { draw: false, fontPx: 0 };
+    if (exact < LABEL_MIN_READABLE_CODE) return { draw: false, fontPx: 0 };
     var fontPx = clamp(Math.round(exact), LABEL_FONT_MIN, LABEL_FONT_MAX);
-    if (fontPx * LABEL_CHAR_W * len > cellPx * LABEL_FIT) return { draw: false, fontPx: 0, mode: mode };
+    if (fontPx * LABEL_CHAR_W * len > cellPx * LABEL_FIT) return { draw: false, fontPx: 0 };
     var widthLimit = cellPx * LABEL_FIT / (LABEL_CHAR_W * len);   // 装得下所允许的最大字号
     if (fontPx > widthLimit) fontPx = widthLimit;                 // 兜底夹紧，绝不越出格子
-    return { draw: true, fontPx: fontPx, mode: mode };
+    return { draw: true, fontPx: fontPx };
   }
 
-  // 想画标签所需的最小 cellPx（供 UI 提示）：扫描出第一个真正画得出的格子尺寸
-  function labelMinCellPx(mode, len) {
+  // 想画色号所需的最小 cellPx（供 UI 提示）：扫描出第一个真正画得出的格子尺寸
+  function labelMinCellPx(len) {
     var c;
     for (c = MIN_CELL_PX; c <= MAX_CELL_PX; c++) {
-      if (labelFit(c, mode, len).draw) return c;
+      if (labelFit(c, len).draw) return c;
     }
     return MAX_CELL_PX + 1;    // 该文本长度下无解（例如 4 字以上色号装不进任何格子）
   }
 
   function labelStat(pattern, opts, scan) {
-    var mode = opts.cellLabel;
-    if (mode === 'none') {
-      return { mode: mode, len: 0, minPx: 0, fit: { draw: false, fontPx: 0, mode: mode }, suppressed: false };
+    if (opts.cellLabel !== 'code') {          // 已归一化为二值：这里就是 'none'
+      return { len: 0, minPx: 0, fit: { draw: false, fontPx: 0 }, suppressed: false };
     }
-    var len = labelTextLen(mode, scan);
-    var fit = labelFit(opts.cellPx, mode, len);
-    return { mode: mode, len: len, minPx: labelMinCellPx(mode, len), fit: fit, suppressed: !fit.draw };
+    var len = scan.maxCodeLen > 0 ? scan.maxCodeLen : 1;   // 本图最长色号；没有色号时按 1 字算
+    var fit = labelFit(opts.cellPx, len);
+    return { len: len, minPx: labelMinCellPx(len), fit: fit, suppressed: !fit.draw };
   }
 
   /* ------------------------------------------------------------ 版式计算 */
@@ -273,7 +263,50 @@
     return Math.max(target, minPad, needTop, needSide);
   }
 
-  // 用量清单：优先读 pattern.counts（管线已按颗数降序），缺失时才退回 tally() 现场统计
+  // 色号自然序的比较器：组序**写死**为 A,B,C,D,E,F,G,H,M（不依赖字母表），组内按**数字**升序，
+  // 所以 A9 排在 A10 之前（字符串比较恰好相反）。
+  // 为什么不直接沿用 pattern.colors 的顺序：colors 是自然序只是**管线**的产物（Pipeline 里排过），
+  // 一旦色号被 append / 重排（例如「改色」把新色号补到末尾），数组顺序就不再是自然序，
+  // 而用户要的是「不管数据怎么来的，图上都按 A1,A2..B1,B2.. 排」。所以顺序必须现算。
+  // 解析不出「组+数字」的色号（例如 T1 这类合成色号）：已知组排在前面；都不认识就按组名字符串比，
+  // 最后按原字符串兜底 —— 保证任何输入下都是全序，顺序不随 sort 实现抖动。
+  var CODE_GROUP_ORDER = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7, M: 8 };
+
+  function parseCode(code) {
+    var s = textOf(code).trim();
+    var m = /^([A-Za-z]+)\s*(\d+)$/.exec(s);
+    if (m) {
+      var g = m[1].toUpperCase();
+      var known = Object.prototype.hasOwnProperty.call(CODE_GROUP_ORDER, g);
+      return {
+        known: known,
+        rank: known ? CODE_GROUP_ORDER[g] : 0,
+        group: g,
+        num: parseInt(m[2], 10),
+        text: s
+      };
+    }
+    return { known: false, rank: 0, group: s.toUpperCase(), num: -1, text: s };
+  }
+
+  function compareCodes(a, b) {
+    var pa = parseCode(a), pb = parseCode(b);
+    if (pa.known && pb.known) {
+      if (pa.rank !== pb.rank) return pa.rank - pb.rank;      // 组序
+    } else if (pa.known !== pb.known) {
+      return pa.known ? -1 : 1;                               // 已知组一律排在不认识的组之前
+    } else if (pa.group !== pb.group) {
+      return pa.group < pb.group ? -1 : 1;
+    }
+    if (pa.num !== pb.num) return pa.num - pb.num;            // 组内数字升序（A9 < A10）
+    if (pa.group !== pb.group) return pa.group < pb.group ? -1 : 1;
+    return pa.text < pb.text ? -1 : (pa.text > pb.text ? 1 : 0);
+  }
+
+  // 图上用量块（网格下方那排 chips）的顺序：**按色号自然序**（见上面的比较器）。
+  // 颗数一律取自 pattern.counts（冻结契约：它按颗数降序，只当数据源、不当顺序来源）；
+  // 0 颗 / 坏数据不进 chips（与 paintCells / tally 同一口径，不凭空造 0 颗的块）。
+  // 右侧图例 legendHTML 与 exportCSV 不走这里，各自的顺序不变。
   function usageRows(pattern) {
     var counts = (pattern && pattern.counts) || null;
     var colors = (pattern && pattern.colors) || [];
@@ -282,17 +315,21 @@
       for (i = 0; i < counts.length; i++) {
         c = counts[i] || {};
         n = Number(c.count);
-        if (!isNum(n) || n <= 0) continue;
+        if (!isNum(n) || n <= 0) continue;                     // 0 颗 / 坏数据不进用量块
         rows.push({ code: c.code, hex: c.hex, count: n });
       }
-      if (rows.length) return rows;
+      if (rows.length) {
+        rows.sort(function (a, b) { return compareCodes(a.code, b.code); });
+        return rows;
+      }
     }
+    // counts 缺失 / 全不可用时的兜底：现场统计，同样按自然序输出
     var t = tally(pattern);
     for (i = 0; i < colors.length; i++) {
       if (!t.perIndex[i]) continue;
       rows.push({ code: colors[i] && colors[i].code, hex: colors[i] && colors[i].hex, count: t.perIndex[i] });
     }
-    rows.sort(function (a, b) { return b.count - a.count; });
+    rows.sort(function (a, b) { return compareCodes(a.code, b.code); });
     return rows;
   }
 
@@ -651,7 +688,7 @@
     return { v: vb.length, h: hb.length };
   }
 
-  // 逐格标签：'code' 写真色号（A1/A10/M15），'index' 写图纸编号（cells[i]+1）
+  // 逐格标签：只写真色号（A1/A10/M15）。数字编号模式已删除，本函数只服务 'code' 一种模式。
   function paintCodes(ctx, pattern, lay, ox, oy, fit, pal) {
     var colors = (pattern && pattern.colors) || [];
     var cells = (pattern && pattern.cells) || [];
@@ -662,12 +699,8 @@
     var texts = [], i, idx, p, code, drawn = 0;
 
     for (i = 0; i < colors.length; i++) {
-      if (fit.mode === 'index') {
-        texts.push(String(i + 1));
-      } else {
-        code = colors[i] ? colors[i].code : null;
-        texts.push((typeof code === 'string' || typeof code === 'number') && String(code) !== '' ? String(code) : null);
-      }
+      code = colors[i] ? colors[i].code : null;
+      texts.push((typeof code === 'string' || typeof code === 'number') && String(code) !== '' ? String(code) : null);
     }
 
     ctx.font = '600 ' + fit.fontPx + 'px ' + FONT_MONO;
@@ -907,118 +940,6 @@
     return makeResult(base);
   }
 
-  function sourceSize(src) {
-    if (!src || typeof src !== 'object') return null;
-    var w = Number(src.naturalWidth || src.videoWidth || src.width) || 0;
-    var h = Number(src.naturalHeight || src.videoHeight || src.height) || 0;
-    if (!(w > 0) || !(h > 0)) return null;
-    return { w: w, h: h };
-  }
-
-  function drawCompare(pattern, sourceImage, canvas, viewOpts) {
-    var opts = normalizeOpts(viewOpts);
-    var stat = labelStat(pattern, opts, usedScan(pattern));
-    var base = {
-      cellsDrawn: 0, labelsDrawn: false, labelMinPx: stat.minPx,
-      labelsSuppressed: stat.suppressed, width: 0, height: 0
-    };
-    if (!pattern || !canvas || typeof canvas.getContext !== 'function') {
-      base.ok = false; base.reason = 'invalid-input';
-      return makeResult(base);
-    }
-
-    var lay = layoutOf(pattern, opts);
-
-    var titleH = 28;
-    var gap = Math.max(24, Math.round(opts.cellPx * 2));
-    var padX = 16, padY = 12;
-    var maxLeftW = Math.max(240, lay.height);       // 防止超宽原图撑出巨大画布
-
-    var size = sourceSize(sourceImage);
-    var leftW = maxLeftW, imgW = 0, imgH = 0, imgX = padX, imgY = padY + titleH;
-    if (size) {
-      var sc = Math.min(maxLeftW / size.w, lay.height / size.h);
-      imgW = Math.max(1, Math.round(size.w * sc));
-      imgH = Math.max(1, Math.round(size.h * sc));
-      imgX = padX + Math.round((leftW - imgW) / 2);
-      imgY = padY + titleH + Math.round((lay.height - imgH) / 2);   // 面板等高，图内居中（contain 不变形）
-    }
-
-    var gridX = padX + leftW + gap;
-    var gridY = padY + titleH;
-    var W = gridX + lay.width + padX;
-    var H = padY * 2 + titleH + lay.height;
-
-    var need = W * H;
-    base.width = W;
-    base.height = H;
-    if (!(need <= MAX_CANVAS_PIXELS)) {           // 同一道面积守卫
-      base.ok = false;
-      base.reason = 'too-large';
-      base.needPixels = need;
-      base.maxPixels = MAX_CANVAS_PIXELS;
-      return makeResult(base);
-    }
-
-    canvas.width = W;
-    canvas.height = H;
-    var ctx = canvas.getContext('2d');
-    if (!ctx) {
-      base.ok = false; base.reason = 'invalid-input';
-      base.width = 0; base.height = 0;
-      return makeResult(base);
-    }
-
-    ctx.save();
-    fillPaper(ctx, W, H);
-
-    // 小标题
-    ctx.fillStyle = C.title;
-    ctx.font = '600 15px ' + FONT_SANS;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('原图', padX + leftW / 2, padY + 14);
-    ctx.fillText('拼豆图纸', gridX + lay.width / 2, padY + 14);
-
-    // 左：原图（contain 缩放，不拉伸变形）
-    if (size && typeof ctx.drawImage === 'function') {
-      try {
-        ctx.drawImage(sourceImage, imgX, imgY, imgW, imgH);
-      } catch (e) {
-        drawImagePlaceholder(ctx, imgX, imgY, imgW, imgH);
-      }
-      ctx.strokeStyle = C.grid;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(imgX + GRID_HALF, imgY + GRID_HALF, imgW, imgH);
-    } else {
-      drawImagePlaceholder(ctx, imgX, imgY, leftW, lay.height);
-    }
-
-    // 右：图纸（复用同一套绘制逻辑，不复制粘贴）
-    var res = paintPatternAt(ctx, pattern, opts, lay, gridX + lay.pad + lay.gridDX, gridY + lay.pad, stat);
-    ctx.restore();
-
-    base.ok = true;
-    base.cellsDrawn = res.cellsDrawn;
-    base.labelsDrawn = res.labelsDrawn > 0;
-    base.labelsSuppressed = stat.suppressed && res.cellsDrawn > 0;
-    base.labelMinPx = stat.minPx;
-    return makeResult(base);
-  }
-
-  function drawImagePlaceholder(ctx, x, y, w, h) {
-    ctx.fillStyle = C.placeholder;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = C.grid;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x + GRID_HALF, y + GRID_HALF, w, h);
-    ctx.fillStyle = C.placeholderText;
-    ctx.font = '13px ' + FONT_SANS;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('（原图不可用）', x + w / 2, y + h / 2);
-  }
-
   function exportPNG(canvas, filename) {
     return new Promise(function (resolve, reject) {
       if (!canvas || typeof canvas.toBlob !== 'function') {
@@ -1142,7 +1063,6 @@
 
   window.Render = {
     drawPattern: drawPattern,
-    drawCompare: drawCompare,
     exportPNG: exportPNG,
     exportCSV: exportCSV,
     legendHTML: legendHTML

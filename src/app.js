@@ -24,9 +24,10 @@
   var MAX_CELL_PX = 48;      /* 格子像素滑杆上限（render.js 已放宽到 256，48 是「看一眼」的舒适上限） */
   var DEFAULT_CELL_PX = 24;
   var LABEL_MIN_PX = 9;      /* 内置降级渲染器写字的最小格子像素 */
-  /* render.js 实测阈值（code 模式 20px、index 模式 17px）。它会在 drawPattern 的返回值里
-     自报 labelMinPx，这里只是「还没渲染过」时的兜底：提示文案绝不能和真实渲染层错开。 */
-  var LABEL_MIN_FALLBACK = { code: 20, index: 17 };
+  /* render.js 实测阈值（code 模式 20px）。它会在 drawPattern 的返回值里
+     自报 labelMinPx，这里只是「还没渲染过」时的兜底：提示文案绝不能和真实渲染层错开。
+     只剩 code 一档：用户点名要删掉的第三档标签模式已从界面与代码里彻底移除。 */
+  var LABEL_MIN_FALLBACK = { code: 20 };
 
   var ZOOM_MIN = 0.25;
   var ZOOM_MAX = 4;
@@ -92,7 +93,7 @@
     patternQuantize: null,
     renderFallback: false,
     renderTooLarge: false,
-    labelMinPx: {},      /* 渲染层自报的格内文字阈值：{ code: 20, index: 17 } */
+    labelMinPx: {},      /* 渲染层自报的格内文字阈值：{ code: 20 } */
     viewOpts: { cellPx: DEFAULT_CELL_PX, cellLabel: 'code', showCodes: true, showRuler: true, showGrid: true, annotate: false },
     /* 预览缩放：只影响 canvas 的 CSS 尺寸，不影响 canvas.width（== 导出与命中判定用的真实像素） */
     viewZoom: ZOOM_DEFAULT,
@@ -372,17 +373,10 @@
     return Math.round(clamp(num(ui.cellSize, DEFAULT_CELL_PX), MIN_CELL_PX, MAX_CELL_PX));
   }
 
-  /* 格内显示三选：code（色号 A1）/ index（编号 1,2,3…）/ none */
+  /* 格内显示二选：code（色号 A1，勾选「显示色号」）/ none（不勾，格内不写字）。
+     只有这一个来源：用户点名要删掉的第三档标签模式已彻底删除，不留死分支。 */
   function cellLabelOf() {
-    var v = ui.cellLabelMode ? String(ui.cellLabelMode.value) : 'code';
-    if (v !== 'index' && v !== 'none') v = 'code';
-    return v;
-  }
-
-  function labelKindName(label) {
-    if (label === 'index') return '编号（如 1、2、3）';
-    if (label === 'none') return '不显示';
-    return '色号（如 A1）';
+    return (ui.showCodes && ui.showCodes.checked) ? 'code' : 'none';
   }
 
   /* 格内文字阈值：优先用渲染层自报的值（按模式分别缓存），没有就用实测兜底值 */
@@ -394,18 +388,20 @@
     return LABEL_MIN_FALLBACK[label] || 20;
   }
 
+  /* 说的只有一件事：色号需要格子 ≥ min px 才会画（min 取渲染层自报的真实阈值） */
   function syncCellLabelHint() {
     if (!ui.cellLabelHint) return;
     var cell = cellSizeValue();
     var label = cellLabelOf();
     var min = labelMinPx();
+    var need = '色号需要格子 ≥ ' + min + 'px 才会画出。';
     var text;
     if (label === 'none') {
-      text = '当前不显示格内文字（格子 ' + cell + 'px）。';
+      text = '当前不显示色号（格子 ' + cell + 'px）。' + need;
     } else if (cell < min) {
-      text = '格子太小（' + cell + 'px），' + labelKindName(label) + '已隐藏：调到 ' + min + 'px 以上可见。';
+      text = '格子太小（' + cell + 'px），色号已隐藏：' + need;
     } else {
-      text = '当前 ' + cell + 'px，格内显示' + labelKindName(label) + '。';
+      text = '当前 ' + cell + 'px，格内显示色号（如 A1）。' + need;
     }
     setText(ui.cellLabelHint, text);
   }
@@ -415,7 +411,8 @@
     setText(ui.contrastVal, signed(effSlider(ui.contrast, 0)));
     setText(ui.saturationVal, signed(effSlider(ui.saturation, 0)));
     setText(ui.ditherStrengthVal, Math.round(clamp(num(ui.ditherStrength, 30), 0, 100)) + '%');
-    setText(ui.maxColorsVal, maxColorsSliderValue());
+    /* 色数上限的「读数」就是那个数字框本身（没有第三个数字）：这里顺手把它对齐到滑杆值 */
+    if (ui.maxColorsNum) setVal(ui.maxColorsNum, String(maxColorsSliderValue()));
     setText(ui.cellSizeVal, cellSizeValue() + 'px');
     setText(ui.viewZoomVal, Math.round(state.viewZoom * 100) + '%');
     syncCellLabelHint();
@@ -452,9 +449,38 @@
 
   function signed(v) { return (v > 0 ? '+' : '') + v; }
 
-  /* 色数上限滑杆的当前值（读数与送进 pipeline 的值同源，见 quantizeOpts） */
+  /* 色数上限：range 与数字框是同一份值的两个视图（id: maxColors / maxColorsNum）。
+     越界一律「夹取」而不是拒绝：< 2 → 2，> 221 → 221。 */
+  function clampMaxColors(v) {
+    var n = Number(v);
+    if (!isFinite(n)) n = DEFAULTS.maxColors;
+    return Math.round(clamp(n, 2, 221));
+  }
+
+  /* 滑杆当前值（夹取后落在 2..221）—— 它永远是「上一次有效值」 */
   function maxColorsSliderValue() {
-    return Math.round(clamp(num(ui.maxColors, 24), 2, 221));
+    return clampMaxColors(ui.maxColors ? ui.maxColors.value : DEFAULTS.maxColors);
+  }
+
+  /* 数字框 → 夹取后的有效值；空串 / 非法文本返回 null =「不改变，保留上一次有效值」。
+     返回 null 而不是 0 是刻意的：把空框当成 0 再夹到 2，会让「清空后重新键入」打不成字。 */
+  function maxColorsNumValue() {
+    if (!ui.maxColorsNum) return null;
+    var v = ui.maxColorsNum.value;
+    var raw = String(v === null || v === undefined ? '' : v).replace(/\s+/g, '');
+    if (!raw) return null;
+    var n = Number(raw);
+    if (!isFinite(n)) return null;
+    return clampMaxColors(n);
+  }
+
+  /* 色数上限的唯一写入口：一次写两个控件。
+     ⇒「夹取后两个控件必须一致」是结构性保证，而不是靠两处各自小心地同步。 */
+  function setMaxColors(v) {
+    var n = clampMaxColors(v);
+    if (ui.maxColors) setVal(ui.maxColors, String(n));
+    if (ui.maxColorsNum) setVal(ui.maxColorsNum, String(n));
+    return n;
   }
 
   function syncEnabledState() {
@@ -462,12 +488,9 @@
     if (ui.bayerN) ui.bayerN.disabled = (method !== 'bayer');
     if (ui.ditherStrength) ui.ditherStrength.disabled = (method === 'nearest');
     var qOn = !!(ui.quantizeEnabled && ui.quantizeEnabled.checked);
+    /* 减色未启用时滑杆与数字框一起置灰：一个灰着一个亮着会让人以为上限还在生效 */
     if (ui.maxColors) ui.maxColors.disabled = !qOn;
-    /* 减色未启用时读数一起置灰：滑杆灰着而数字亮着会让人以为上限还在生效 */
-    if (ui.maxColorsVal) {
-      ui.maxColorsVal.disabled = !qOn;
-      if (hasClassList(ui.maxColorsVal)) toggleCls(ui.maxColorsVal, 'is-off', !qOn);
-    }
+    if (ui.maxColorsNum) ui.maxColorsNum.disabled = !qOn;
     if (ui.eraserSize) ui.eraserSize.disabled = (state.tool !== TOOL_ERASER);
     syncMaxColorsHint();
   }
@@ -482,7 +505,7 @@
     if (!q.enabled) {
       text = '未启用减色：不使用色数上限，实际用色由算法与色卡决定。';
     } else {
-      text = '色数上限 ' + q.maxColors + ' 色，是「最多用几色」而不是精确色数；'
+      text = '这是「最多用几色」而不是精确色数；'
         + '实际用色受色卡与原图色彩分布限制，可能少于上限（生成后见右侧「用量汇总」）。';
     }
     setText(ui.maxColorsHint, text);
@@ -507,8 +530,8 @@
       showCodes: codes,
       showRuler: ruler,
       highlightLocked: true,
-      /* 冻结契约里的新增键名。cellLabel 必须显式给出：render.js 的兼容规则是
-         「只给 showCodes 不给 cellLabel」→ 退回画数字编号，那样用户要的 A1 就永远不出现。 */
+      /* 冻结契约里的新增键名。cellLabel 必须显式给出，只有 'code' / 'none' 两种取值：
+         用户点名要删掉的第三档标签模式已彻底删除，不给它留任何分支。 */
       cellLabel: label,
       padMode: 'normal',
       /* 角标新格式：【标题】 · 实际 a×b 格 · 共 N 颗 · 预计 X 小时。
@@ -531,7 +554,7 @@
     };
   }
 
-  /* 导出的 viewOpts：与预览完全解耦——格子像素 = 24 × 倍数，白边收紧，坐标刻度跟随第 7 组开关 */
+  /* 导出的 viewOpts：与预览完全解耦——格子像素 = 24 × 倍数，白边收紧，坐标刻度跟随「显示坐标刻度」 */
   function exportScaleValue() {
     var v = Math.round(num(ui.exportScale, 2));
     for (var i = 0; i < EXPORT_SCALES.length; i++) { if (EXPORT_SCALES[i] === v) return v; }
@@ -540,19 +563,22 @@
 
   function exportViewOpts(scale) {
     var cell = EXPORT_BASE_CELL * scale;
-    var label = cellLabelOf();
     return {
       cellPx: cell,
       cellSize: cell,
-      showCodes: (label !== 'none'),
-      cellLabel: label,
+      /* 导出永远带色号，且不给用户任何导出侧的色号开关 —— 这是刻意与预览解耦：
+         预览可以取消勾选「显示色号」看没有字的效果（#showCodes 只管预览），
+         但交付出去的图纸必须带色号，否则拿到手的人没法按色号配豆。
+         因此这里恒 'code'，绝不读 #showCodes。 */
+      cellLabel: 'code',
+      showCodes: true,
+      showNumbers: true,
       showRuler: !!(ui.showRuler && ui.showRuler.checked),
       highlightLocked: true,
       padMode: 'tight',
       annotate: !!(ui.exportAnnotate && ui.exportAnnotate.checked),
       captionName: chartTitleValue(),
       beadRate: BEAD_RATE,
-      showNumbers: (label !== 'none'),
       showGrid: true,
       paletteId: state.pattern ? state.pattern.paletteId : paletteIdForOpts()
     };
@@ -562,7 +588,8 @@
     if (!ui.exportHint) return;
     var scale = exportScaleValue();
     var cell = EXPORT_BASE_CELL * scale;
-    var tail = '导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随「图纸显示」组的「显示坐标刻度」。';
+    var tail = '导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。'
+      + '坐标刻度跟随「图纸显示」组的「显示坐标刻度」；色号永远画出（与预览的「显示色号」开关无关）。';
     var p = state.pattern;
     if (!p) { setText(ui.exportHint, tail); return; }
     setText(ui.exportHint, '当前设置：格子 ' + cell + 'px（24 × ' + scale + '），网格区约 '
@@ -675,18 +702,18 @@
     var d = pipelineQuantizeDefault();
     if (!d) return;
     if (typeof d.enabled === 'boolean') setChecked(ui.quantizeEnabled, d.enabled);
-    if (typeof d.maxColors === 'number') setVal(ui.maxColors, Math.round(clamp(d.maxColors, 2, 221)));
+    if (typeof d.maxColors === 'number') setMaxColors(d.maxColors);
     syncEnabledState();
   }
 
   /* 没动过控件时跟随 pipeline 默认值；动过则完全按 UI 走。 */
   function quantizeOpts() {
     var enabled = !!(ui.quantizeEnabled && ui.quantizeEnabled.checked);
-    var maxColors = Math.round(clamp(num(ui.maxColors, 24), 2, 221));
+    var maxColors = maxColorsSliderValue();
     var d = pipelineQuantizeDefault();
     if (d) {
       if (!state.touched.quantizeEnabled && typeof d.enabled === 'boolean') enabled = !!d.enabled;
-      if (!state.touched.maxColors && typeof d.maxColors === 'number') maxColors = Math.round(clamp(d.maxColors, 2, 221));
+      if (!state.touched.maxColors && typeof d.maxColors === 'number') maxColors = clampMaxColors(d.maxColors);
     }
     return { enabled: enabled, maxColors: maxColors };
   }
@@ -817,7 +844,7 @@
     var opts = buildOpts();
     /* 锁定格的恢复只由 Pipeline 负责（它会按色号并入、自然序重排、全量重映射下标）。
        app.js 不再自带一份恢复实现：两份实现必然错开，且本地恢复会打乱 colors 的自然序，
-       而图纸上的编号 = colors 下标 + 1（见 render.js），一旦乱序就会改动整张图纸的编号。
+       而 colors 的顺序同时决定图例、CSV 与改色状态提示的呈现，一旦乱序整张图纸的颜色顺序就变了。
        尺寸不一致时 Pipeline 会忽略锁定并在 warnings 里说明，这里照原样展示。 */
     if (state.pattern) opts.prevPattern = state.pattern;
     var pattern = null;
@@ -987,8 +1014,8 @@
 
   /* ------------------------------------------------------------- 改色模式 */
 
-  /* 改色必须让 Pattern.colors 始终维持 Pipeline 的「自然序」：图纸上的编号 = colors 下标 + 1
-     （render.js 画的是 String(idx+1)），下标一乱，整张图纸的编号就变了。
+  /* 改色必须让 Pattern.colors 始终维持 Pipeline 的「自然序」：colors 的顺序就是图例、CSV
+     与状态提示呈现颜色时的顺序，下标一乱，整张图纸的颜色顺序就变了。
      排序键用色表（palette.js）里的数组顺序 —— 集成回归证明它与 Pipeline 内部 compareCodes
      的顺序一致，所以不必在 app.js 里再复制一份比较器（一份语义只留一处实现）。 */
   function paletteOrderKeyMap(paletteId) {
@@ -1065,7 +1092,7 @@
     updateLockInfo();
     var doneCode = p.colors[finalCi] ? p.colors[finalCi].code : '?';
     setStatus('已改色：第 ' + (Math.floor(idx / p.w) + 1) + ' 行 第 ' + (idx % p.w + 1) + ' 列 → 色号 '
-      + doneCode + '（图纸编号 ' + (finalCi + 1) + '）' + (lock ? '［已锁定，重新生成时保留］' : '［未锁定］'), 'ok');
+      + doneCode + (lock ? '［已锁定，重新生成时保留］' : '［未锁定］'), 'ok');
   }
 
   /* 点击坐标 → 格子下标。
@@ -1737,13 +1764,13 @@
           ctx.strokeRect(dx + 0.5, dy + 0.5, cell - 1, cell - 1);
         }
         if (label !== 'none' && cell >= LABEL_MIN_PX) {
-          /* 与 render.js 一致：'code' 画色号字符串，'index' 画 colors 下标 + 1，
-             阈值沿用它的 MIN_CODE_PX；墨色按其底色明暗取反以保证可读 */
+          /* 与 render.js 一致：格内只画色号字符串，阈值沿用它的 MIN_CODE_PX；
+             墨色按其底色明暗取反以保证可读 */
           ctx.fillStyle = contrastText(col.rgb);
           ctx.font = Math.max(7, Math.floor(cell * 0.42)) + 'px sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(label === 'index' ? String(ci + 1) : String(col.code), dx + cell / 2, dy + cell / 2 + 0.5);
+          ctx.fillText(String(col.code), dx + cell / 2, dy + cell / 2 + 0.5);
         }
       }
     }
@@ -2069,23 +2096,6 @@
     exportPngOf(off, '拼豆图纸.png', msg);
   }
 
-  function exportCompare() {
-    var p = state.pattern;
-    var R = win.Render;
-    if (!p) { setStatus('请先生成图纸', 'warn'); return; }
-    if (!R || typeof R.exportPNG !== 'function') { setStatus('核心模块未加载：无法导出对照图', 'err'); return; }
-    if (!ui.sourceCanvas) { setStatus('导出失败：原图尚未载入', 'err'); return; }
-    if (typeof R.drawCompare !== 'function') { setStatus('核心模块未加载：无法合成对照图', 'err'); return; }
-    if (!doc || typeof doc.createElement !== 'function') { setStatus('当前环境不支持导出', 'err'); return; }
-    try {
-      var tmp = doc.createElement('canvas');
-      R.drawCompare(p, ui.sourceCanvas, tmp, state.viewOpts);
-      exportPngOf(tmp, '拼豆对照图.png', '已导出对照图 PNG');
-    } catch (e) {
-      setStatus('导出对照图失败：' + errText(e), 'err');
-    }
-  }
-
   /* ----------------------------------------------------------- 原图调整（SourceEdit 对接） */
 
   function sourceEditApi() {
@@ -2403,11 +2413,24 @@
     scheduleRender();
   }
 
-  function onControlInput(id) {
+  function onControlInput(id, isCommit) {
     if (id === 'viewZoom') { setViewZoom(num(ui.viewZoom, ZOOM_DEFAULT)); return; }
     /* touched 标记必须在 syncLabels() 之前：syncLabels → syncMaxColorsHint → quantizeOpts()
        读的就是它，晚一步的话「第一次改色数上限时小字还显示 pipeline 默认值」。 */
-    if (id === 'maxColors') state.touched.maxColors = true;
+    if (id === 'maxColors') {
+      state.touched.maxColors = true;
+      setMaxColors(maxColorsSliderValue());                 /* 拖滑块 → 数字框跟着变 */
+    } else if (id === 'maxColorsNum') {
+      var typed = maxColorsNumValue();
+      if (typed === null) {
+        /* 空串 / 非法文本：不夹取、不重算，保留上一次有效值；
+           只在失焦(change) 时把文本回写成那个值 —— 边输边改写会让「先清空再键入」打不成字。 */
+        if (isCommit) { setMaxColors(maxColorsSliderValue()); syncLabels(); }
+        return;
+      }
+      state.touched.maxColors = true;
+      setMaxColors(typed);                                  /* 键入 → 滑块跟着动；越界夹取后两者一致 */
+    }
     syncLabels();
     if (id === 'cellSize') { scheduleRender(); return; }
     if (id === 'gridW' || id === 'gridH') normalizeDims(id);
@@ -2417,7 +2440,8 @@
   function onToggleChange(id) {
     if (id === 'quantizeEnabled') state.touched.quantizeEnabled = true;
     if (id === 'showRuler') { scheduleRender(); syncExportHint(); return; }
-    if (id === 'cellLabelMode') { syncCellLabelHint(); scheduleRender(); return; }
+    /* 显示色号只改「预览怎么画」（格内文字），不重算 */
+    if (id === 'showCodes') { syncCellLabelHint(); scheduleRender(); return; }
     if (id === 'recolorMode') {
       setTool(ui.recolorMode && ui.recolorMode.checked ? TOOL_RECOLOR : TOOL_NONE);
       renderPattern();
@@ -2448,7 +2472,6 @@
     if (id === 'bayerN') { syncEnabledState(); scheduleRegenerate(0); return; }
     if (id === 'boardsSelect') { applyBoardsPreset(); scheduleRegenerate(0); return; }
     if (id === 'sizePreset') { applySizePreset(); syncSizePresetValue(); return; }
-    if (id === 'cellLabelMode') { onToggleChange('cellLabelMode'); return; }
     if (id === 'recolorScope') {
       state.recolor.scope = (ui.recolorScope && String(ui.recolorScope.value) === PICKER_SCOPE_ALL)
         ? PICKER_SCOPE_ALL : PICKER_SCOPE_USED;
@@ -2481,13 +2504,14 @@
     setVal(ui.contrast, DEFAULTS.contrast);
     setVal(ui.saturation, DEFAULTS.saturation);
     setVal(ui.ditherStrength, DEFAULTS.ditherStrength);
-    setVal(ui.maxColors, DEFAULTS.maxColors);
+    setMaxColors(DEFAULTS.maxColors);
     setVal(ui.cellSize, DEFAULTS.cellSize);
     setChecked(ui.autoWB, DEFAULTS.autoWB);
     setChecked(ui.autoLevels, DEFAULTS.autoLevels);
     setChecked(ui.quantizeEnabled, DEFAULTS.quantizeEnabled);
     setChecked(ui.lockAspect, DEFAULTS.lockAspect);
-    setVal(ui.cellLabelMode, DEFAULTS.cellLabel);
+    /* DEFAULTS.cellLabel 是 'code' / 'none'，这里映射到「显示色号」勾选框；标题刻意不在这里复位 */
+    setChecked(ui.showCodes, DEFAULTS.cellLabel === 'code');
     setChecked(ui.showRuler, DEFAULTS.showRuler);
     setChecked(ui.lockToggle, DEFAULTS.lockToggle);
     setChecked(ui.recolorMode, DEFAULTS.recolorMode);
@@ -2527,10 +2551,12 @@
   }
 
   function bindEvents() {
-    var continuous = ['brightness', 'contrast', 'saturation', 'ditherStrength', 'cellSize', 'viewZoom', 'maxColors', 'gridW', 'gridH'];
-    var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showRuler', 'lockToggle', 'recolorMode',
-      'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
-    var selects = ['boardsSelect', 'paletteSelect', 'bayerN', 'cellLabelMode', 'sizePreset', 'recolorScope', 'exportScale'];
+    /* 连续输入：input 边走「实时」、change 边走「提交」（目前只有 maxColorsNum 需要区分） */
+    var continuous = ['brightness', 'contrast', 'saturation', 'ditherStrength', 'cellSize', 'viewZoom', 'maxColors',
+      'maxColorsNum', 'gridW', 'gridH'];
+    var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showCodes', 'showRuler', 'lockToggle',
+      'recolorMode', 'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
+    var selects = ['boardsSelect', 'paletteSelect', 'bayerN', 'sizePreset', 'recolorScope', 'exportScale'];
     var methods = ['methodNearest', 'methodFS', 'methodBayer'];
     var i;
 
@@ -2538,8 +2564,8 @@
       (function (id) {
         var el = ui[id];
         if (!el) return;
-        on(el, 'input', function () { onControlInput(id); });
-        on(el, 'change', function () { onControlInput(id); });
+        on(el, 'input', function () { onControlInput(id, false); });
+        on(el, 'change', function () { onControlInput(id, true); });
       }(continuous[i]));
     }
     for (i = 0; i < toggles.length; i++) {
@@ -2590,12 +2616,18 @@
     on(ui.btnRegenerate, 'click', function () { scheduleRegenerate(0); });
     on(ui.btnResetAdjust, 'click', function () { applyDefaults(true); });
     on(ui.btnExportPng, 'click', exportPng);
-    on(ui.btnExportCompare, 'click', exportCompare);
     on(ui.btnExportCsv, 'click', exportCsv);
     on(ui.btnUnlockAll, 'click', unlockAll);
     on(ui.btnPickFile, 'click', pickFile);
     on(ui.emptyState, 'click', pickFile);
-    on(ui.dropZone, 'click', function () { if (!state.source) pickFile(); });
+    /* 预览区里也有可键入的控件（预览区顶部的图纸标题栏）：点它的输入框、或点它那段
+       <label>（会转发焦点到输入框），都不该顺手弹出文件选择器。
+       dropZone 里除标题栏外没有别的 label，所以这个判断不会误伤「点预览区即选图」。 */
+    on(ui.dropZone, 'click', function (e) {
+      var t = e && e.target;
+      var tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
+      if (!state.source && tag !== 'label' && !isTypingTarget(t)) pickFile();
+    });
     on(ui.sourceCanvas, 'click', function () { if (!state.source) pickFile(); });
 
     on(ui.viewZoomIn, 'click', function () { zoomBy(ZOOM_STEP_FACTOR); });
@@ -2665,7 +2697,7 @@
       ditherStrengthVal: byId('ditherStrengthVal'),
       quantizeEnabled: byId('quantizeEnabled'),
       maxColors: byId('maxColors'),
-      maxColorsVal: byId('maxColorsVal'),
+      maxColorsNum: byId('maxColorsNum'),
       maxColorsHint: byId('maxColorsHint'),
       preprocessHint: byId('preprocessHint'),
       boardsSelect: byId('boardsSelect'),
@@ -2675,9 +2707,9 @@
       lockAspect: byId('lockAspect'),
       paletteSelect: byId('paletteSelect'),
       paletteMeta: byId('paletteMeta'),
-      cellLabelMode: byId('cellLabelMode'),
       cellLabelHint: byId('cellLabelHint'),
       chartTitle: byId('chartTitle'),
+      showCodes: byId('showCodes'),
       showRuler: byId('showRuler'),
       cellSize: byId('cellSize'),
       cellSizeVal: byId('cellSizeVal'),
@@ -2708,7 +2740,6 @@
       exportAnnotate: byId('exportAnnotate'),
       exportHint: byId('exportHint'),
       btnExportPng: byId('btnExportPng'),
-      btnExportCompare: byId('btnExportCompare'),
       btnExportCsv: byId('btnExportCsv'),
       dropZone: byId('dropZone'),
       statusText: byId('statusText'),

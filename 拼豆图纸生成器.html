@@ -12,6 +12,10 @@
     --bg:#101216; --bg2:#15181e; --panel:#181b22; --panel2:#1f232b; --line:#2a2f39;
     --text:#e8eaf0; --muted:#98a1b0; --muted2:#8a92a0; --accent:#5b9bf3; --accent-soft:rgba(91,155,243,.14);
     --ok:#4ec38a; --warn:#d9a441; --err:#e8695f; --radius:10px;
+    /* 分组卡片自己的底色 / 边框。刻意不复用 --panel2：它还被图例行(.legend-row)、
+       输入框(input/select)、色板 wrap(.sw-grid-wrap)、进度条底(.progress)共用，
+       改它会把那些一起提亮 —— 而用户要的只是「左边每个模块的圆角矩形更明显」。 */
+    --card:#272d37; --card-line:#3a4250;
   }
   [hidden]{display:none!important}
   *{box-sizing:border-box}
@@ -51,12 +55,22 @@
   .tab.on{background:var(--accent-soft);color:var(--text);border-color:var(--accent)}
   .tabpanel{display:flex;flex-direction:column;gap:10px}
 
-  /* ── 每个分组一张圆角卡片：靠底色 + 边框 + 间距切出分组边界 ── */
+  /* ── 每个分组一张圆角卡片：靠底色 + 边框 + 间距切出分组边界 ──
+     底色/边框走卡片专属的 --card / --card-line（比 --panel2 / --line 各自更亮一档），
+     在 #181b22 左栏与 #101216 页面上都能一眼看出分组边界，但不会抢正文。 */
   .group{
-    background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+    background:var(--card);border:1px solid var(--card-line);border-radius:12px;
     padding:11px 12px 12px;margin:0
   }
   .group h2{margin:0 0 8px;color:var(--accent);font-size:12.6px;font-weight:600;letter-spacing:.3px}
+
+  /* 并列勾选框（显示色号 / 显示坐标刻度）：左右并排，不上下堆叠 */
+  .check-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;margin:7px 0 2px}
+  .check-row .check{margin:0}
+
+  /* 滑杆 + 数字框：同一份值的两个视图，并排放在一行里 */
+  .range-num{display:grid;grid-template-columns:minmax(0,1fr) 74px;gap:8px;align-items:center;margin:2px 0 0}
+  .range-num input[type="number"]{text-align:right;font-variant-numeric:tabular-nums}
 
   .row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:12.6px;color:var(--muted);margin:8px 0 3px}
   .row output{color:var(--accent);font-variant-numeric:tabular-nums}
@@ -97,6 +111,16 @@
 
   .canvas-panel{position:relative;min-width:0}
   .canvas-panel.drag-active{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-soft),0 0 0 3px var(--accent-soft)}
+  /* 预览区标题栏：这张图纸的标题，属于预览区而不是左栏参数 —— 所以做成一条横条，
+     与左栏那些「label + 控件」的竖排参数在视觉上分开。 */
+  .preview-title{display:flex;align-items:center;gap:8px;margin:0 0 8px;padding:7px 10px;background:var(--card);border:1px solid var(--card-line);border-radius:9px}
+  .preview-title-label{flex:none;font-size:12.3px;font-weight:600;color:var(--muted);letter-spacing:.3px;cursor:text}
+  .preview-title .preview-title-input{
+    flex:1 1 auto;width:auto;min-width:0;padding:4px 7px;font-size:13.4px;font-weight:600;
+    color:var(--text);background:transparent;border:1px solid transparent;border-radius:6px
+  }
+  .preview-title .preview-title-input:hover{border-color:var(--line)}
+  .preview-title .preview-title-input:focus{background:var(--panel);border-color:var(--accent);outline:none}
   .panel-head{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
   .status-line{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-size:12.4px}
   .status{color:var(--muted)}
@@ -239,18 +263,13 @@
 
         <section class="group">
           <h2>图纸显示</h2>
-          <label class="row" for="chartTitle"><span>图纸标题</span></label>
-          <input id="chartTitle" type="text" value="" placeholder="图纸标题（会写进图纸左下角）" autocomplete="off" spellcheck="false" />
-          <label class="row" for="cellLabelMode"><span>格内显示</span></label>
-          <select id="cellLabelMode">
-            <option value="code" selected>色号（A1）</option>
-            <option value="index">编号（1,2,3…）</option>
-            <option value="none">不显示</option>
-          </select>
-          <label class="check"><input id="showRuler" type="checkbox" checked /> 显示坐标刻度</label>
+          <div class="check-row">
+            <label class="check"><input id="showCodes" type="checkbox" checked /> 显示色号</label>
+            <label class="check"><input id="showRuler" type="checkbox" checked /> 显示坐标刻度</label>
+          </div>
           <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">24px</output></label>
           <input id="cellSize" type="range" min="8" max="48" step="1" value="24" />
-          <p id="cellLabelHint" class="hint">当前 24px，格内显示色号（如 A1）。</p>
+          <p id="cellLabelHint" class="hint">当前 24px，格内显示色号（如 A1）。色号需要格子 ≥ 20px 才会画出。</p>
         </section>
 
         <section class="group">
@@ -279,9 +298,8 @@
             <option value="8">8×（格子 192px）</option>
           </select>
           <label class="check"><input id="exportAnnotate" type="checkbox" checked /> 附色号用量清单（画进图里）</label>
-          <p id="exportHint" class="hint">导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随「图纸显示」组的「显示坐标刻度」。</p>
+          <p id="exportHint" class="hint">导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随「图纸显示」组的「显示坐标刻度」；色号永远画出（与预览的「显示色号」开关无关，见 app.js 注释）。</p>
           <button id="btnExportPng" class="btn" type="button">导出图纸 PNG</button>
-          <button id="btnExportCompare" class="btn" type="button">导出对照图 PNG</button>
           <button id="btnExportCsv" class="btn" type="button">导出用量清单 CSV</button>
         </section>
       </div>
@@ -303,9 +321,12 @@
         <section class="group">
           <h2>减色</h2>
           <label class="check"><input id="quantizeEnabled" type="checkbox" checked /> 启用减色（限制色数上限）</label>
-          <label class="row" for="maxColors"><span>色数上限</span><output id="maxColorsVal">24</output></label>
-          <input id="maxColors" type="range" min="2" max="221" step="1" value="24" />
-          <p id="maxColorsHint" class="hint">色数上限 24 色，是「最多用几色」而不是精确色数；实际用色受色卡与原图色彩分布限制，可能少于上限（生成后见右侧「用量汇总」）。</p>
+          <label class="row" for="maxColors"><span>色数上限</span></label>
+          <div class="range-num">
+            <input id="maxColors" type="range" min="2" max="221" step="1" value="24" />
+            <input id="maxColorsNum" type="number" min="2" max="221" step="1" value="24" aria-label="色数上限（可直接键入数字）" />
+          </div>
+          <p id="maxColorsHint" class="hint">这是「最多用几色」而不是精确色数；实际用色受色卡与原图色彩分布限制，可能少于上限（生成后见右侧「用量汇总」）。</p>
         </section>
 
         <section class="group">
@@ -366,6 +387,10 @@
           <span id="elapsedText" class="elapsed"></span>
         </div>
         <div id="progressWrap" class="progress" hidden><div id="progressBar" class="progress-bar"></div></div>
+      </div>
+      <div class="preview-title">
+        <label class="preview-title-label" for="chartTitle">图纸标题</label>
+        <input id="chartTitle" class="preview-title-input" type="text" value="未命名图纸" placeholder="图纸标题（写进图纸左下角角标；留空则不显示标题段）" autocomplete="off" spellcheck="false" />
       </div>
       <div id="canvasScroll" class="canvas-scroll">
         <canvas id="patternCanvas" class="pattern-canvas" width="640" height="420"></canvas>
@@ -1492,10 +1517,10 @@ window.PINDOU_PALETTES = {
  *   ① 锁定为空 > ② 锁定色号 > ③ 新图算出空格 > ④ 新图算出色号（命中即停，前者覆盖后者）。
  * 实现位置：扫描见 buildPattern「锁定格」段，落格见其「全量重映射」段的注释。
  *
- * 【核心决策 2】编号与排序规则（冻结，最易崩的地方）
+ * 【核心决策 2】色号下标与排序规则（冻结，最易崩的地方）
  * Pattern.colors 恒按「色号自然序」排列：组序固定 A,B,C,D,E,F,G,H,M，组内按数字升序
  *   （A9 在 A10 之前）。不是按颗数排、不是按首次出现顺序排。
- * cells[i] 是 colors 的下标；图纸上的编号 = cells[i] + 1。编号因此与「参数怎么调」无关，
+ * cells[i] 是 colors 的下标（图纸上印的是色号本身 A1/A10，不再有数字编号）。这个对应因此与「参数怎么调」无关，
  * 用户微调参数后重新生成的图纸可以逐格对照。
  * counts 是另一个数组，按颗数降序，colors.length === counts.length（保证每个色号都有用量）。
  *
@@ -2190,18 +2215,17 @@ window.PINDOU_PALETTES = {
  *
  * 职责：
  *   1) drawPattern  把 Pattern 画成可打印的白底图纸（网格 + 29 格板边界 + 刻度 + 色号标签 + 可选用量表）
- *   2) drawCompare  原图 / 图纸 等高并排对照
- *   3) exportPNG    canvas -> PNG 下载
- *   4) exportCSV    Pattern -> CSV 字符串（UTF-8 BOM，由调用方负责下载）
- *   5) legendHTML   Pattern -> 图例 HTML 片段
+ *   2) exportPNG    canvas -> PNG 下载
+ *   3) exportCSV    Pattern -> CSV 字符串（UTF-8 BOM，由调用方负责下载）
+ *   4) legendHTML   Pattern -> 图例 HTML 片段
  *
  * viewOpts（全部可选）：
  *   cellPx          每格像素（4..256，默认 12）—— 导出放大由调用方给
- *   cellLabel       'code'(默认) 画真色号 A1/A10/M15 | 'index' 画图纸编号 | 'none' 不画
- *   showCodes       旧键：false 等价于 cellLabel:'none'；true 且未给 cellLabel 时视为 'index'
+ *   cellLabel       'code' 画真色号 A1/A10/M15 | 其余值（'none' 与历史值 'index'）一律不画
+ *   showCodes       旧键：只在未给 cellLabel 时生效，true → 'code'，否则 → 'none'
  *   padMode         'tight'(默认) 白边约 4%，受刻度文字下限约束 | 'normal' 旧的 max(40, cellPx*3+20)
  *   annotate        true 时在网格下方追加用量块：每个色号一个「圆角色块 + 色号 + 颗数」的
- *                   行内块，横向排布、超出容器宽度自动换行、每行居中
+ *                   行内块，按色号自然序（A1,A2..B1,B2..）排列，横向排布、自动换行、每行居中
  *   showRuler       默认 true，每 5 格一个刻度（29 格板边界额外补标）
  *   highlightLocked 默认 false，锁定的格子画一个角标
  *
@@ -2237,7 +2261,7 @@ window.PINDOU_PALETTES = {
   var LABEL_FONT_RATIO = 0.42;
   var LABEL_FONT_MIN = 7;              // 字号落在这个区间之外就不画
   var LABEL_FONT_MAX = 40;
-  var LABEL_MIN_READABLE = { code: 8, index: 7 };
+  var LABEL_MIN_READABLE_CODE = 8;     // 色号的最小可读字号（数字编号模式已删除，不再有第二档阈值）
   var LABEL_CHAR_W = 0.62;             // 等宽字体单字符宽度估算（相对字号）
   var LABEL_FIT = 0.9;                 // 文本宽度上限 = cellPx * 0.9（留 10% 余量）
 
@@ -2266,8 +2290,6 @@ window.PINDOU_PALETTES = {
     // 同族中性灰、与旧值(rulerText)几乎不可分辨，不引入新色相。
     caption: '#616B7A',
     title: '#2B3240',
-    placeholder: '#EEF1F5',
-    placeholderText: '#8A94A6',
     chipBg: '#F5F7FA',       // 用量块底
     chipLine: '#DCE0E6',     // 用量块描边
     chipCount: '#5A6472',    // 用量块里的颗数文字
@@ -2291,13 +2313,15 @@ window.PINDOU_PALETTES = {
 
   function safeHex(v) { return isValidHex(v) ? v : '#000000'; }
 
-  // 旧键 showCodes 与新键 cellLabel 的兼容规则：cellLabel 优先
+  // cellLabel 归一化为二值（只剩「画色号」与「不画」两种语义）：
+  //   'code'                               → 'code'
+  //   'none' / 历史值 'index' / 其它未知值  → 'none'（数字编号功能已删除，不再有第三种模式）
+  //   缺省（未给 / null / 空串）            → 沿用旧键 showCodes：true → 'code'，否则 'none'
   function normCellLabel(o) {
     var v = o.cellLabel;
-    if (v === 'code' || v === 'index' || v === 'none') return v;
-    if (o.showCodes === false) return 'none';
-    if (o.showCodes === true) return 'index';
-    return 'code';                                  // 新默认
+    if (v === 'code') return 'code';
+    if (v !== undefined && v !== null && v !== '') return 'none';
+    return o.showCodes === true ? 'code' : 'none';
   }
 
   // 角标标题：只认字符串，去首尾空白；非字符串 / 全空白 = 没有标题（整段省略）
@@ -2343,7 +2367,7 @@ window.PINDOU_PALETTES = {
     return null;
   }
 
-  // 编号文字颜色按色块亮度取反，保证任何色号上都看得见
+  // 色号文字颜色按色块亮度取反，保证任何色号上都看得见
   function textColorFor(hex) {
     var rgb = hexToRgb(hex);
     if (!rgb) return '#111827';
@@ -2380,7 +2404,7 @@ window.PINDOU_PALETTES = {
 
   /* ------------------------------------------------- 标签：长度 / 可读性 */
 
-  // 本图实际用到的色号扫描：最长色号长度（code）与最大色号下标（index）都从这里取，不写死
+  // 本图实际用到的色号扫描：最长色号长度从这里取，不写死
   function usedScan(pattern) {
     var colors = (pattern && pattern.colors) || [];
     var cells = (pattern && pattern.cells) || [];
@@ -2388,59 +2412,50 @@ window.PINDOU_PALETTES = {
     var w = Math.max(0, Math.floor((pattern && pattern.w) || 0));
     var h = Math.max(0, Math.floor((pattern && pattern.h) || 0));
     var total = Math.min(cells.length, w * h);
-    var maxIdx = -1, maxCodeLen = 0, used = 0, i, idx, code;
+    var maxCodeLen = 0, used = 0, i, idx, code;
     for (i = 0; i < total; i++) {
       idx = cells[i];
       if (idx === EMPTY) continue;
       if (!isNum(idx) || idx < 0 || idx >= n) continue;
       used++;
-      if (idx > maxIdx) maxIdx = idx;
       code = colors[idx] ? colors[idx].code : null;
       if (typeof code === 'string' || typeof code === 'number') {
         if (String(code).length > maxCodeLen) maxCodeLen = String(code).length;
       }
     }
-    return { used: used, maxIdx: maxIdx, maxCodeLen: maxCodeLen };
+    return { used: used, maxCodeLen: maxCodeLen };
   }
 
-  // 某模式下文本最长的长度：'code' = 实际用到的色号里最长的；'index' = String(最大下标+1).length
-  function labelTextLen(mode, scan) {
-    if (mode === 'index') return scan.maxIdx < 0 ? 1 : String(scan.maxIdx + 1).length;
-    return scan.maxCodeLen > 0 ? scan.maxCodeLen : 1;
-  }
-
-  // 该 cellPx 下能否画标签：约束 A（最小可读字号）+ 约束 B（装得下，留 10% 余量）
+  // 该 cellPx 下能否画色号：约束 A（最小可读字号）+ 约束 B（装得下，留 10% 余量）
   // 注意顺序：B 判定必须在「夹到宽度上限」之前 —— 否则夹到上限后判定恒为等号，B 等于失效，
   // 长色号会被缩成蚂蚁字硬塞进格子（正是「画了等于没画」）。装不下就干脆不画。
-  function labelFit(cellPx, mode, len) {
-    var minReadable = mode === 'index' ? LABEL_MIN_READABLE.index : LABEL_MIN_READABLE.code;
+  function labelFit(cellPx, len) {
     var exact = cellPx * LABEL_FONT_RATIO;
-    if (exact < LABEL_FONT_MIN || exact > LABEL_FONT_MAX) return { draw: false, fontPx: 0, mode: mode };
-    if (exact < minReadable) return { draw: false, fontPx: 0, mode: mode };
+    if (exact < LABEL_FONT_MIN || exact > LABEL_FONT_MAX) return { draw: false, fontPx: 0 };
+    if (exact < LABEL_MIN_READABLE_CODE) return { draw: false, fontPx: 0 };
     var fontPx = clamp(Math.round(exact), LABEL_FONT_MIN, LABEL_FONT_MAX);
-    if (fontPx * LABEL_CHAR_W * len > cellPx * LABEL_FIT) return { draw: false, fontPx: 0, mode: mode };
+    if (fontPx * LABEL_CHAR_W * len > cellPx * LABEL_FIT) return { draw: false, fontPx: 0 };
     var widthLimit = cellPx * LABEL_FIT / (LABEL_CHAR_W * len);   // 装得下所允许的最大字号
     if (fontPx > widthLimit) fontPx = widthLimit;                 // 兜底夹紧，绝不越出格子
-    return { draw: true, fontPx: fontPx, mode: mode };
+    return { draw: true, fontPx: fontPx };
   }
 
-  // 想画标签所需的最小 cellPx（供 UI 提示）：扫描出第一个真正画得出的格子尺寸
-  function labelMinCellPx(mode, len) {
+  // 想画色号所需的最小 cellPx（供 UI 提示）：扫描出第一个真正画得出的格子尺寸
+  function labelMinCellPx(len) {
     var c;
     for (c = MIN_CELL_PX; c <= MAX_CELL_PX; c++) {
-      if (labelFit(c, mode, len).draw) return c;
+      if (labelFit(c, len).draw) return c;
     }
     return MAX_CELL_PX + 1;    // 该文本长度下无解（例如 4 字以上色号装不进任何格子）
   }
 
   function labelStat(pattern, opts, scan) {
-    var mode = opts.cellLabel;
-    if (mode === 'none') {
-      return { mode: mode, len: 0, minPx: 0, fit: { draw: false, fontPx: 0, mode: mode }, suppressed: false };
+    if (opts.cellLabel !== 'code') {          // 已归一化为二值：这里就是 'none'
+      return { len: 0, minPx: 0, fit: { draw: false, fontPx: 0 }, suppressed: false };
     }
-    var len = labelTextLen(mode, scan);
-    var fit = labelFit(opts.cellPx, mode, len);
-    return { mode: mode, len: len, minPx: labelMinCellPx(mode, len), fit: fit, suppressed: !fit.draw };
+    var len = scan.maxCodeLen > 0 ? scan.maxCodeLen : 1;   // 本图最长色号；没有色号时按 1 字算
+    var fit = labelFit(opts.cellPx, len);
+    return { len: len, minPx: labelMinCellPx(len), fit: fit, suppressed: !fit.draw };
   }
 
   /* ------------------------------------------------------------ 版式计算 */
@@ -2460,7 +2475,50 @@ window.PINDOU_PALETTES = {
     return Math.max(target, minPad, needTop, needSide);
   }
 
-  // 用量清单：优先读 pattern.counts（管线已按颗数降序），缺失时才退回 tally() 现场统计
+  // 色号自然序的比较器：组序**写死**为 A,B,C,D,E,F,G,H,M（不依赖字母表），组内按**数字**升序，
+  // 所以 A9 排在 A10 之前（字符串比较恰好相反）。
+  // 为什么不直接沿用 pattern.colors 的顺序：colors 是自然序只是**管线**的产物（Pipeline 里排过），
+  // 一旦色号被 append / 重排（例如「改色」把新色号补到末尾），数组顺序就不再是自然序，
+  // 而用户要的是「不管数据怎么来的，图上都按 A1,A2..B1,B2.. 排」。所以顺序必须现算。
+  // 解析不出「组+数字」的色号（例如 T1 这类合成色号）：已知组排在前面；都不认识就按组名字符串比，
+  // 最后按原字符串兜底 —— 保证任何输入下都是全序，顺序不随 sort 实现抖动。
+  var CODE_GROUP_ORDER = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7, M: 8 };
+
+  function parseCode(code) {
+    var s = textOf(code).trim();
+    var m = /^([A-Za-z]+)\s*(\d+)$/.exec(s);
+    if (m) {
+      var g = m[1].toUpperCase();
+      var known = Object.prototype.hasOwnProperty.call(CODE_GROUP_ORDER, g);
+      return {
+        known: known,
+        rank: known ? CODE_GROUP_ORDER[g] : 0,
+        group: g,
+        num: parseInt(m[2], 10),
+        text: s
+      };
+    }
+    return { known: false, rank: 0, group: s.toUpperCase(), num: -1, text: s };
+  }
+
+  function compareCodes(a, b) {
+    var pa = parseCode(a), pb = parseCode(b);
+    if (pa.known && pb.known) {
+      if (pa.rank !== pb.rank) return pa.rank - pb.rank;      // 组序
+    } else if (pa.known !== pb.known) {
+      return pa.known ? -1 : 1;                               // 已知组一律排在不认识的组之前
+    } else if (pa.group !== pb.group) {
+      return pa.group < pb.group ? -1 : 1;
+    }
+    if (pa.num !== pb.num) return pa.num - pb.num;            // 组内数字升序（A9 < A10）
+    if (pa.group !== pb.group) return pa.group < pb.group ? -1 : 1;
+    return pa.text < pb.text ? -1 : (pa.text > pb.text ? 1 : 0);
+  }
+
+  // 图上用量块（网格下方那排 chips）的顺序：**按色号自然序**（见上面的比较器）。
+  // 颗数一律取自 pattern.counts（冻结契约：它按颗数降序，只当数据源、不当顺序来源）；
+  // 0 颗 / 坏数据不进 chips（与 paintCells / tally 同一口径，不凭空造 0 颗的块）。
+  // 右侧图例 legendHTML 与 exportCSV 不走这里，各自的顺序不变。
   function usageRows(pattern) {
     var counts = (pattern && pattern.counts) || null;
     var colors = (pattern && pattern.colors) || [];
@@ -2469,17 +2527,21 @@ window.PINDOU_PALETTES = {
       for (i = 0; i < counts.length; i++) {
         c = counts[i] || {};
         n = Number(c.count);
-        if (!isNum(n) || n <= 0) continue;
+        if (!isNum(n) || n <= 0) continue;                     // 0 颗 / 坏数据不进用量块
         rows.push({ code: c.code, hex: c.hex, count: n });
       }
-      if (rows.length) return rows;
+      if (rows.length) {
+        rows.sort(function (a, b) { return compareCodes(a.code, b.code); });
+        return rows;
+      }
     }
+    // counts 缺失 / 全不可用时的兜底：现场统计，同样按自然序输出
     var t = tally(pattern);
     for (i = 0; i < colors.length; i++) {
       if (!t.perIndex[i]) continue;
       rows.push({ code: colors[i] && colors[i].code, hex: colors[i] && colors[i].hex, count: t.perIndex[i] });
     }
-    rows.sort(function (a, b) { return b.count - a.count; });
+    rows.sort(function (a, b) { return compareCodes(a.code, b.code); });
     return rows;
   }
 
@@ -2838,7 +2900,7 @@ window.PINDOU_PALETTES = {
     return { v: vb.length, h: hb.length };
   }
 
-  // 逐格标签：'code' 写真色号（A1/A10/M15），'index' 写图纸编号（cells[i]+1）
+  // 逐格标签：只写真色号（A1/A10/M15）。数字编号模式已删除，本函数只服务 'code' 一种模式。
   function paintCodes(ctx, pattern, lay, ox, oy, fit, pal) {
     var colors = (pattern && pattern.colors) || [];
     var cells = (pattern && pattern.cells) || [];
@@ -2849,12 +2911,8 @@ window.PINDOU_PALETTES = {
     var texts = [], i, idx, p, code, drawn = 0;
 
     for (i = 0; i < colors.length; i++) {
-      if (fit.mode === 'index') {
-        texts.push(String(i + 1));
-      } else {
-        code = colors[i] ? colors[i].code : null;
-        texts.push((typeof code === 'string' || typeof code === 'number') && String(code) !== '' ? String(code) : null);
-      }
+      code = colors[i] ? colors[i].code : null;
+      texts.push((typeof code === 'string' || typeof code === 'number') && String(code) !== '' ? String(code) : null);
     }
 
     ctx.font = '600 ' + fit.fontPx + 'px ' + FONT_MONO;
@@ -3094,118 +3152,6 @@ window.PINDOU_PALETTES = {
     return makeResult(base);
   }
 
-  function sourceSize(src) {
-    if (!src || typeof src !== 'object') return null;
-    var w = Number(src.naturalWidth || src.videoWidth || src.width) || 0;
-    var h = Number(src.naturalHeight || src.videoHeight || src.height) || 0;
-    if (!(w > 0) || !(h > 0)) return null;
-    return { w: w, h: h };
-  }
-
-  function drawCompare(pattern, sourceImage, canvas, viewOpts) {
-    var opts = normalizeOpts(viewOpts);
-    var stat = labelStat(pattern, opts, usedScan(pattern));
-    var base = {
-      cellsDrawn: 0, labelsDrawn: false, labelMinPx: stat.minPx,
-      labelsSuppressed: stat.suppressed, width: 0, height: 0
-    };
-    if (!pattern || !canvas || typeof canvas.getContext !== 'function') {
-      base.ok = false; base.reason = 'invalid-input';
-      return makeResult(base);
-    }
-
-    var lay = layoutOf(pattern, opts);
-
-    var titleH = 28;
-    var gap = Math.max(24, Math.round(opts.cellPx * 2));
-    var padX = 16, padY = 12;
-    var maxLeftW = Math.max(240, lay.height);       // 防止超宽原图撑出巨大画布
-
-    var size = sourceSize(sourceImage);
-    var leftW = maxLeftW, imgW = 0, imgH = 0, imgX = padX, imgY = padY + titleH;
-    if (size) {
-      var sc = Math.min(maxLeftW / size.w, lay.height / size.h);
-      imgW = Math.max(1, Math.round(size.w * sc));
-      imgH = Math.max(1, Math.round(size.h * sc));
-      imgX = padX + Math.round((leftW - imgW) / 2);
-      imgY = padY + titleH + Math.round((lay.height - imgH) / 2);   // 面板等高，图内居中（contain 不变形）
-    }
-
-    var gridX = padX + leftW + gap;
-    var gridY = padY + titleH;
-    var W = gridX + lay.width + padX;
-    var H = padY * 2 + titleH + lay.height;
-
-    var need = W * H;
-    base.width = W;
-    base.height = H;
-    if (!(need <= MAX_CANVAS_PIXELS)) {           // 同一道面积守卫
-      base.ok = false;
-      base.reason = 'too-large';
-      base.needPixels = need;
-      base.maxPixels = MAX_CANVAS_PIXELS;
-      return makeResult(base);
-    }
-
-    canvas.width = W;
-    canvas.height = H;
-    var ctx = canvas.getContext('2d');
-    if (!ctx) {
-      base.ok = false; base.reason = 'invalid-input';
-      base.width = 0; base.height = 0;
-      return makeResult(base);
-    }
-
-    ctx.save();
-    fillPaper(ctx, W, H);
-
-    // 小标题
-    ctx.fillStyle = C.title;
-    ctx.font = '600 15px ' + FONT_SANS;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('原图', padX + leftW / 2, padY + 14);
-    ctx.fillText('拼豆图纸', gridX + lay.width / 2, padY + 14);
-
-    // 左：原图（contain 缩放，不拉伸变形）
-    if (size && typeof ctx.drawImage === 'function') {
-      try {
-        ctx.drawImage(sourceImage, imgX, imgY, imgW, imgH);
-      } catch (e) {
-        drawImagePlaceholder(ctx, imgX, imgY, imgW, imgH);
-      }
-      ctx.strokeStyle = C.grid;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(imgX + GRID_HALF, imgY + GRID_HALF, imgW, imgH);
-    } else {
-      drawImagePlaceholder(ctx, imgX, imgY, leftW, lay.height);
-    }
-
-    // 右：图纸（复用同一套绘制逻辑，不复制粘贴）
-    var res = paintPatternAt(ctx, pattern, opts, lay, gridX + lay.pad + lay.gridDX, gridY + lay.pad, stat);
-    ctx.restore();
-
-    base.ok = true;
-    base.cellsDrawn = res.cellsDrawn;
-    base.labelsDrawn = res.labelsDrawn > 0;
-    base.labelsSuppressed = stat.suppressed && res.cellsDrawn > 0;
-    base.labelMinPx = stat.minPx;
-    return makeResult(base);
-  }
-
-  function drawImagePlaceholder(ctx, x, y, w, h) {
-    ctx.fillStyle = C.placeholder;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = C.grid;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x + GRID_HALF, y + GRID_HALF, w, h);
-    ctx.fillStyle = C.placeholderText;
-    ctx.font = '13px ' + FONT_SANS;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('（原图不可用）', x + w / 2, y + h / 2);
-  }
-
   function exportPNG(canvas, filename) {
     return new Promise(function (resolve, reject) {
       if (!canvas || typeof canvas.toBlob !== 'function') {
@@ -3329,7 +3275,6 @@ window.PINDOU_PALETTES = {
 
   window.Render = {
     drawPattern: drawPattern,
-    drawCompare: drawCompare,
     exportPNG: exportPNG,
     exportCSV: exportCSV,
     legendHTML: legendHTML
@@ -4270,9 +4215,10 @@ window.PINDOU_PALETTES = {
   var MAX_CELL_PX = 48;      /* 格子像素滑杆上限（render.js 已放宽到 256，48 是「看一眼」的舒适上限） */
   var DEFAULT_CELL_PX = 24;
   var LABEL_MIN_PX = 9;      /* 内置降级渲染器写字的最小格子像素 */
-  /* render.js 实测阈值（code 模式 20px、index 模式 17px）。它会在 drawPattern 的返回值里
-     自报 labelMinPx，这里只是「还没渲染过」时的兜底：提示文案绝不能和真实渲染层错开。 */
-  var LABEL_MIN_FALLBACK = { code: 20, index: 17 };
+  /* render.js 实测阈值（code 模式 20px）。它会在 drawPattern 的返回值里
+     自报 labelMinPx，这里只是「还没渲染过」时的兜底：提示文案绝不能和真实渲染层错开。
+     只剩 code 一档：用户点名要删掉的第三档标签模式已从界面与代码里彻底移除。 */
+  var LABEL_MIN_FALLBACK = { code: 20 };
 
   var ZOOM_MIN = 0.25;
   var ZOOM_MAX = 4;
@@ -4338,7 +4284,7 @@ window.PINDOU_PALETTES = {
     patternQuantize: null,
     renderFallback: false,
     renderTooLarge: false,
-    labelMinPx: {},      /* 渲染层自报的格内文字阈值：{ code: 20, index: 17 } */
+    labelMinPx: {},      /* 渲染层自报的格内文字阈值：{ code: 20 } */
     viewOpts: { cellPx: DEFAULT_CELL_PX, cellLabel: 'code', showCodes: true, showRuler: true, showGrid: true, annotate: false },
     /* 预览缩放：只影响 canvas 的 CSS 尺寸，不影响 canvas.width（== 导出与命中判定用的真实像素） */
     viewZoom: ZOOM_DEFAULT,
@@ -4618,17 +4564,10 @@ window.PINDOU_PALETTES = {
     return Math.round(clamp(num(ui.cellSize, DEFAULT_CELL_PX), MIN_CELL_PX, MAX_CELL_PX));
   }
 
-  /* 格内显示三选：code（色号 A1）/ index（编号 1,2,3…）/ none */
+  /* 格内显示二选：code（色号 A1，勾选「显示色号」）/ none（不勾，格内不写字）。
+     只有这一个来源：用户点名要删掉的第三档标签模式已彻底删除，不留死分支。 */
   function cellLabelOf() {
-    var v = ui.cellLabelMode ? String(ui.cellLabelMode.value) : 'code';
-    if (v !== 'index' && v !== 'none') v = 'code';
-    return v;
-  }
-
-  function labelKindName(label) {
-    if (label === 'index') return '编号（如 1、2、3）';
-    if (label === 'none') return '不显示';
-    return '色号（如 A1）';
+    return (ui.showCodes && ui.showCodes.checked) ? 'code' : 'none';
   }
 
   /* 格内文字阈值：优先用渲染层自报的值（按模式分别缓存），没有就用实测兜底值 */
@@ -4640,18 +4579,20 @@ window.PINDOU_PALETTES = {
     return LABEL_MIN_FALLBACK[label] || 20;
   }
 
+  /* 说的只有一件事：色号需要格子 ≥ min px 才会画（min 取渲染层自报的真实阈值） */
   function syncCellLabelHint() {
     if (!ui.cellLabelHint) return;
     var cell = cellSizeValue();
     var label = cellLabelOf();
     var min = labelMinPx();
+    var need = '色号需要格子 ≥ ' + min + 'px 才会画出。';
     var text;
     if (label === 'none') {
-      text = '当前不显示格内文字（格子 ' + cell + 'px）。';
+      text = '当前不显示色号（格子 ' + cell + 'px）。' + need;
     } else if (cell < min) {
-      text = '格子太小（' + cell + 'px），' + labelKindName(label) + '已隐藏：调到 ' + min + 'px 以上可见。';
+      text = '格子太小（' + cell + 'px），色号已隐藏：' + need;
     } else {
-      text = '当前 ' + cell + 'px，格内显示' + labelKindName(label) + '。';
+      text = '当前 ' + cell + 'px，格内显示色号（如 A1）。' + need;
     }
     setText(ui.cellLabelHint, text);
   }
@@ -4661,7 +4602,8 @@ window.PINDOU_PALETTES = {
     setText(ui.contrastVal, signed(effSlider(ui.contrast, 0)));
     setText(ui.saturationVal, signed(effSlider(ui.saturation, 0)));
     setText(ui.ditherStrengthVal, Math.round(clamp(num(ui.ditherStrength, 30), 0, 100)) + '%');
-    setText(ui.maxColorsVal, maxColorsSliderValue());
+    /* 色数上限的「读数」就是那个数字框本身（没有第三个数字）：这里顺手把它对齐到滑杆值 */
+    if (ui.maxColorsNum) setVal(ui.maxColorsNum, String(maxColorsSliderValue()));
     setText(ui.cellSizeVal, cellSizeValue() + 'px');
     setText(ui.viewZoomVal, Math.round(state.viewZoom * 100) + '%');
     syncCellLabelHint();
@@ -4698,9 +4640,38 @@ window.PINDOU_PALETTES = {
 
   function signed(v) { return (v > 0 ? '+' : '') + v; }
 
-  /* 色数上限滑杆的当前值（读数与送进 pipeline 的值同源，见 quantizeOpts） */
+  /* 色数上限：range 与数字框是同一份值的两个视图（id: maxColors / maxColorsNum）。
+     越界一律「夹取」而不是拒绝：< 2 → 2，> 221 → 221。 */
+  function clampMaxColors(v) {
+    var n = Number(v);
+    if (!isFinite(n)) n = DEFAULTS.maxColors;
+    return Math.round(clamp(n, 2, 221));
+  }
+
+  /* 滑杆当前值（夹取后落在 2..221）—— 它永远是「上一次有效值」 */
   function maxColorsSliderValue() {
-    return Math.round(clamp(num(ui.maxColors, 24), 2, 221));
+    return clampMaxColors(ui.maxColors ? ui.maxColors.value : DEFAULTS.maxColors);
+  }
+
+  /* 数字框 → 夹取后的有效值；空串 / 非法文本返回 null =「不改变，保留上一次有效值」。
+     返回 null 而不是 0 是刻意的：把空框当成 0 再夹到 2，会让「清空后重新键入」打不成字。 */
+  function maxColorsNumValue() {
+    if (!ui.maxColorsNum) return null;
+    var v = ui.maxColorsNum.value;
+    var raw = String(v === null || v === undefined ? '' : v).replace(/\s+/g, '');
+    if (!raw) return null;
+    var n = Number(raw);
+    if (!isFinite(n)) return null;
+    return clampMaxColors(n);
+  }
+
+  /* 色数上限的唯一写入口：一次写两个控件。
+     ⇒「夹取后两个控件必须一致」是结构性保证，而不是靠两处各自小心地同步。 */
+  function setMaxColors(v) {
+    var n = clampMaxColors(v);
+    if (ui.maxColors) setVal(ui.maxColors, String(n));
+    if (ui.maxColorsNum) setVal(ui.maxColorsNum, String(n));
+    return n;
   }
 
   function syncEnabledState() {
@@ -4708,12 +4679,9 @@ window.PINDOU_PALETTES = {
     if (ui.bayerN) ui.bayerN.disabled = (method !== 'bayer');
     if (ui.ditherStrength) ui.ditherStrength.disabled = (method === 'nearest');
     var qOn = !!(ui.quantizeEnabled && ui.quantizeEnabled.checked);
+    /* 减色未启用时滑杆与数字框一起置灰：一个灰着一个亮着会让人以为上限还在生效 */
     if (ui.maxColors) ui.maxColors.disabled = !qOn;
-    /* 减色未启用时读数一起置灰：滑杆灰着而数字亮着会让人以为上限还在生效 */
-    if (ui.maxColorsVal) {
-      ui.maxColorsVal.disabled = !qOn;
-      if (hasClassList(ui.maxColorsVal)) toggleCls(ui.maxColorsVal, 'is-off', !qOn);
-    }
+    if (ui.maxColorsNum) ui.maxColorsNum.disabled = !qOn;
     if (ui.eraserSize) ui.eraserSize.disabled = (state.tool !== TOOL_ERASER);
     syncMaxColorsHint();
   }
@@ -4728,7 +4696,7 @@ window.PINDOU_PALETTES = {
     if (!q.enabled) {
       text = '未启用减色：不使用色数上限，实际用色由算法与色卡决定。';
     } else {
-      text = '色数上限 ' + q.maxColors + ' 色，是「最多用几色」而不是精确色数；'
+      text = '这是「最多用几色」而不是精确色数；'
         + '实际用色受色卡与原图色彩分布限制，可能少于上限（生成后见右侧「用量汇总」）。';
     }
     setText(ui.maxColorsHint, text);
@@ -4753,8 +4721,8 @@ window.PINDOU_PALETTES = {
       showCodes: codes,
       showRuler: ruler,
       highlightLocked: true,
-      /* 冻结契约里的新增键名。cellLabel 必须显式给出：render.js 的兼容规则是
-         「只给 showCodes 不给 cellLabel」→ 退回画数字编号，那样用户要的 A1 就永远不出现。 */
+      /* 冻结契约里的新增键名。cellLabel 必须显式给出，只有 'code' / 'none' 两种取值：
+         用户点名要删掉的第三档标签模式已彻底删除，不给它留任何分支。 */
       cellLabel: label,
       padMode: 'normal',
       /* 角标新格式：【标题】 · 实际 a×b 格 · 共 N 颗 · 预计 X 小时。
@@ -4777,7 +4745,7 @@ window.PINDOU_PALETTES = {
     };
   }
 
-  /* 导出的 viewOpts：与预览完全解耦——格子像素 = 24 × 倍数，白边收紧，坐标刻度跟随第 7 组开关 */
+  /* 导出的 viewOpts：与预览完全解耦——格子像素 = 24 × 倍数，白边收紧，坐标刻度跟随「显示坐标刻度」 */
   function exportScaleValue() {
     var v = Math.round(num(ui.exportScale, 2));
     for (var i = 0; i < EXPORT_SCALES.length; i++) { if (EXPORT_SCALES[i] === v) return v; }
@@ -4786,19 +4754,22 @@ window.PINDOU_PALETTES = {
 
   function exportViewOpts(scale) {
     var cell = EXPORT_BASE_CELL * scale;
-    var label = cellLabelOf();
     return {
       cellPx: cell,
       cellSize: cell,
-      showCodes: (label !== 'none'),
-      cellLabel: label,
+      /* 导出永远带色号，且不给用户任何导出侧的色号开关 —— 这是刻意与预览解耦：
+         预览可以取消勾选「显示色号」看没有字的效果（#showCodes 只管预览），
+         但交付出去的图纸必须带色号，否则拿到手的人没法按色号配豆。
+         因此这里恒 'code'，绝不读 #showCodes。 */
+      cellLabel: 'code',
+      showCodes: true,
+      showNumbers: true,
       showRuler: !!(ui.showRuler && ui.showRuler.checked),
       highlightLocked: true,
       padMode: 'tight',
       annotate: !!(ui.exportAnnotate && ui.exportAnnotate.checked),
       captionName: chartTitleValue(),
       beadRate: BEAD_RATE,
-      showNumbers: (label !== 'none'),
       showGrid: true,
       paletteId: state.pattern ? state.pattern.paletteId : paletteIdForOpts()
     };
@@ -4808,7 +4779,8 @@ window.PINDOU_PALETTES = {
     if (!ui.exportHint) return;
     var scale = exportScaleValue();
     var cell = EXPORT_BASE_CELL * scale;
-    var tail = '导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随「图纸显示」组的「显示坐标刻度」。';
+    var tail = '导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。'
+      + '坐标刻度跟随「图纸显示」组的「显示坐标刻度」；色号永远画出（与预览的「显示色号」开关无关）。';
     var p = state.pattern;
     if (!p) { setText(ui.exportHint, tail); return; }
     setText(ui.exportHint, '当前设置：格子 ' + cell + 'px（24 × ' + scale + '），网格区约 '
@@ -4921,18 +4893,18 @@ window.PINDOU_PALETTES = {
     var d = pipelineQuantizeDefault();
     if (!d) return;
     if (typeof d.enabled === 'boolean') setChecked(ui.quantizeEnabled, d.enabled);
-    if (typeof d.maxColors === 'number') setVal(ui.maxColors, Math.round(clamp(d.maxColors, 2, 221)));
+    if (typeof d.maxColors === 'number') setMaxColors(d.maxColors);
     syncEnabledState();
   }
 
   /* 没动过控件时跟随 pipeline 默认值；动过则完全按 UI 走。 */
   function quantizeOpts() {
     var enabled = !!(ui.quantizeEnabled && ui.quantizeEnabled.checked);
-    var maxColors = Math.round(clamp(num(ui.maxColors, 24), 2, 221));
+    var maxColors = maxColorsSliderValue();
     var d = pipelineQuantizeDefault();
     if (d) {
       if (!state.touched.quantizeEnabled && typeof d.enabled === 'boolean') enabled = !!d.enabled;
-      if (!state.touched.maxColors && typeof d.maxColors === 'number') maxColors = Math.round(clamp(d.maxColors, 2, 221));
+      if (!state.touched.maxColors && typeof d.maxColors === 'number') maxColors = clampMaxColors(d.maxColors);
     }
     return { enabled: enabled, maxColors: maxColors };
   }
@@ -5063,7 +5035,7 @@ window.PINDOU_PALETTES = {
     var opts = buildOpts();
     /* 锁定格的恢复只由 Pipeline 负责（它会按色号并入、自然序重排、全量重映射下标）。
        app.js 不再自带一份恢复实现：两份实现必然错开，且本地恢复会打乱 colors 的自然序，
-       而图纸上的编号 = colors 下标 + 1（见 render.js），一旦乱序就会改动整张图纸的编号。
+       而 colors 的顺序同时决定图例、CSV 与改色状态提示的呈现，一旦乱序整张图纸的颜色顺序就变了。
        尺寸不一致时 Pipeline 会忽略锁定并在 warnings 里说明，这里照原样展示。 */
     if (state.pattern) opts.prevPattern = state.pattern;
     var pattern = null;
@@ -5233,8 +5205,8 @@ window.PINDOU_PALETTES = {
 
   /* ------------------------------------------------------------- 改色模式 */
 
-  /* 改色必须让 Pattern.colors 始终维持 Pipeline 的「自然序」：图纸上的编号 = colors 下标 + 1
-     （render.js 画的是 String(idx+1)），下标一乱，整张图纸的编号就变了。
+  /* 改色必须让 Pattern.colors 始终维持 Pipeline 的「自然序」：colors 的顺序就是图例、CSV
+     与状态提示呈现颜色时的顺序，下标一乱，整张图纸的颜色顺序就变了。
      排序键用色表（palette.js）里的数组顺序 —— 集成回归证明它与 Pipeline 内部 compareCodes
      的顺序一致，所以不必在 app.js 里再复制一份比较器（一份语义只留一处实现）。 */
   function paletteOrderKeyMap(paletteId) {
@@ -5311,7 +5283,7 @@ window.PINDOU_PALETTES = {
     updateLockInfo();
     var doneCode = p.colors[finalCi] ? p.colors[finalCi].code : '?';
     setStatus('已改色：第 ' + (Math.floor(idx / p.w) + 1) + ' 行 第 ' + (idx % p.w + 1) + ' 列 → 色号 '
-      + doneCode + '（图纸编号 ' + (finalCi + 1) + '）' + (lock ? '［已锁定，重新生成时保留］' : '［未锁定］'), 'ok');
+      + doneCode + (lock ? '［已锁定，重新生成时保留］' : '［未锁定］'), 'ok');
   }
 
   /* 点击坐标 → 格子下标。
@@ -5983,13 +5955,13 @@ window.PINDOU_PALETTES = {
           ctx.strokeRect(dx + 0.5, dy + 0.5, cell - 1, cell - 1);
         }
         if (label !== 'none' && cell >= LABEL_MIN_PX) {
-          /* 与 render.js 一致：'code' 画色号字符串，'index' 画 colors 下标 + 1，
-             阈值沿用它的 MIN_CODE_PX；墨色按其底色明暗取反以保证可读 */
+          /* 与 render.js 一致：格内只画色号字符串，阈值沿用它的 MIN_CODE_PX；
+             墨色按其底色明暗取反以保证可读 */
           ctx.fillStyle = contrastText(col.rgb);
           ctx.font = Math.max(7, Math.floor(cell * 0.42)) + 'px sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(label === 'index' ? String(ci + 1) : String(col.code), dx + cell / 2, dy + cell / 2 + 0.5);
+          ctx.fillText(String(col.code), dx + cell / 2, dy + cell / 2 + 0.5);
         }
       }
     }
@@ -6315,23 +6287,6 @@ window.PINDOU_PALETTES = {
     exportPngOf(off, '拼豆图纸.png', msg);
   }
 
-  function exportCompare() {
-    var p = state.pattern;
-    var R = win.Render;
-    if (!p) { setStatus('请先生成图纸', 'warn'); return; }
-    if (!R || typeof R.exportPNG !== 'function') { setStatus('核心模块未加载：无法导出对照图', 'err'); return; }
-    if (!ui.sourceCanvas) { setStatus('导出失败：原图尚未载入', 'err'); return; }
-    if (typeof R.drawCompare !== 'function') { setStatus('核心模块未加载：无法合成对照图', 'err'); return; }
-    if (!doc || typeof doc.createElement !== 'function') { setStatus('当前环境不支持导出', 'err'); return; }
-    try {
-      var tmp = doc.createElement('canvas');
-      R.drawCompare(p, ui.sourceCanvas, tmp, state.viewOpts);
-      exportPngOf(tmp, '拼豆对照图.png', '已导出对照图 PNG');
-    } catch (e) {
-      setStatus('导出对照图失败：' + errText(e), 'err');
-    }
-  }
-
   /* ----------------------------------------------------------- 原图调整（SourceEdit 对接） */
 
   function sourceEditApi() {
@@ -6649,11 +6604,24 @@ window.PINDOU_PALETTES = {
     scheduleRender();
   }
 
-  function onControlInput(id) {
+  function onControlInput(id, isCommit) {
     if (id === 'viewZoom') { setViewZoom(num(ui.viewZoom, ZOOM_DEFAULT)); return; }
     /* touched 标记必须在 syncLabels() 之前：syncLabels → syncMaxColorsHint → quantizeOpts()
        读的就是它，晚一步的话「第一次改色数上限时小字还显示 pipeline 默认值」。 */
-    if (id === 'maxColors') state.touched.maxColors = true;
+    if (id === 'maxColors') {
+      state.touched.maxColors = true;
+      setMaxColors(maxColorsSliderValue());                 /* 拖滑块 → 数字框跟着变 */
+    } else if (id === 'maxColorsNum') {
+      var typed = maxColorsNumValue();
+      if (typed === null) {
+        /* 空串 / 非法文本：不夹取、不重算，保留上一次有效值；
+           只在失焦(change) 时把文本回写成那个值 —— 边输边改写会让「先清空再键入」打不成字。 */
+        if (isCommit) { setMaxColors(maxColorsSliderValue()); syncLabels(); }
+        return;
+      }
+      state.touched.maxColors = true;
+      setMaxColors(typed);                                  /* 键入 → 滑块跟着动；越界夹取后两者一致 */
+    }
     syncLabels();
     if (id === 'cellSize') { scheduleRender(); return; }
     if (id === 'gridW' || id === 'gridH') normalizeDims(id);
@@ -6663,7 +6631,8 @@ window.PINDOU_PALETTES = {
   function onToggleChange(id) {
     if (id === 'quantizeEnabled') state.touched.quantizeEnabled = true;
     if (id === 'showRuler') { scheduleRender(); syncExportHint(); return; }
-    if (id === 'cellLabelMode') { syncCellLabelHint(); scheduleRender(); return; }
+    /* 显示色号只改「预览怎么画」（格内文字），不重算 */
+    if (id === 'showCodes') { syncCellLabelHint(); scheduleRender(); return; }
     if (id === 'recolorMode') {
       setTool(ui.recolorMode && ui.recolorMode.checked ? TOOL_RECOLOR : TOOL_NONE);
       renderPattern();
@@ -6694,7 +6663,6 @@ window.PINDOU_PALETTES = {
     if (id === 'bayerN') { syncEnabledState(); scheduleRegenerate(0); return; }
     if (id === 'boardsSelect') { applyBoardsPreset(); scheduleRegenerate(0); return; }
     if (id === 'sizePreset') { applySizePreset(); syncSizePresetValue(); return; }
-    if (id === 'cellLabelMode') { onToggleChange('cellLabelMode'); return; }
     if (id === 'recolorScope') {
       state.recolor.scope = (ui.recolorScope && String(ui.recolorScope.value) === PICKER_SCOPE_ALL)
         ? PICKER_SCOPE_ALL : PICKER_SCOPE_USED;
@@ -6727,13 +6695,14 @@ window.PINDOU_PALETTES = {
     setVal(ui.contrast, DEFAULTS.contrast);
     setVal(ui.saturation, DEFAULTS.saturation);
     setVal(ui.ditherStrength, DEFAULTS.ditherStrength);
-    setVal(ui.maxColors, DEFAULTS.maxColors);
+    setMaxColors(DEFAULTS.maxColors);
     setVal(ui.cellSize, DEFAULTS.cellSize);
     setChecked(ui.autoWB, DEFAULTS.autoWB);
     setChecked(ui.autoLevels, DEFAULTS.autoLevels);
     setChecked(ui.quantizeEnabled, DEFAULTS.quantizeEnabled);
     setChecked(ui.lockAspect, DEFAULTS.lockAspect);
-    setVal(ui.cellLabelMode, DEFAULTS.cellLabel);
+    /* DEFAULTS.cellLabel 是 'code' / 'none'，这里映射到「显示色号」勾选框；标题刻意不在这里复位 */
+    setChecked(ui.showCodes, DEFAULTS.cellLabel === 'code');
     setChecked(ui.showRuler, DEFAULTS.showRuler);
     setChecked(ui.lockToggle, DEFAULTS.lockToggle);
     setChecked(ui.recolorMode, DEFAULTS.recolorMode);
@@ -6773,10 +6742,12 @@ window.PINDOU_PALETTES = {
   }
 
   function bindEvents() {
-    var continuous = ['brightness', 'contrast', 'saturation', 'ditherStrength', 'cellSize', 'viewZoom', 'maxColors', 'gridW', 'gridH'];
-    var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showRuler', 'lockToggle', 'recolorMode',
-      'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
-    var selects = ['boardsSelect', 'paletteSelect', 'bayerN', 'cellLabelMode', 'sizePreset', 'recolorScope', 'exportScale'];
+    /* 连续输入：input 边走「实时」、change 边走「提交」（目前只有 maxColorsNum 需要区分） */
+    var continuous = ['brightness', 'contrast', 'saturation', 'ditherStrength', 'cellSize', 'viewZoom', 'maxColors',
+      'maxColorsNum', 'gridW', 'gridH'];
+    var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showCodes', 'showRuler', 'lockToggle',
+      'recolorMode', 'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
+    var selects = ['boardsSelect', 'paletteSelect', 'bayerN', 'sizePreset', 'recolorScope', 'exportScale'];
     var methods = ['methodNearest', 'methodFS', 'methodBayer'];
     var i;
 
@@ -6784,8 +6755,8 @@ window.PINDOU_PALETTES = {
       (function (id) {
         var el = ui[id];
         if (!el) return;
-        on(el, 'input', function () { onControlInput(id); });
-        on(el, 'change', function () { onControlInput(id); });
+        on(el, 'input', function () { onControlInput(id, false); });
+        on(el, 'change', function () { onControlInput(id, true); });
       }(continuous[i]));
     }
     for (i = 0; i < toggles.length; i++) {
@@ -6836,12 +6807,18 @@ window.PINDOU_PALETTES = {
     on(ui.btnRegenerate, 'click', function () { scheduleRegenerate(0); });
     on(ui.btnResetAdjust, 'click', function () { applyDefaults(true); });
     on(ui.btnExportPng, 'click', exportPng);
-    on(ui.btnExportCompare, 'click', exportCompare);
     on(ui.btnExportCsv, 'click', exportCsv);
     on(ui.btnUnlockAll, 'click', unlockAll);
     on(ui.btnPickFile, 'click', pickFile);
     on(ui.emptyState, 'click', pickFile);
-    on(ui.dropZone, 'click', function () { if (!state.source) pickFile(); });
+    /* 预览区里也有可键入的控件（预览区顶部的图纸标题栏）：点它的输入框、或点它那段
+       <label>（会转发焦点到输入框），都不该顺手弹出文件选择器。
+       dropZone 里除标题栏外没有别的 label，所以这个判断不会误伤「点预览区即选图」。 */
+    on(ui.dropZone, 'click', function (e) {
+      var t = e && e.target;
+      var tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
+      if (!state.source && tag !== 'label' && !isTypingTarget(t)) pickFile();
+    });
     on(ui.sourceCanvas, 'click', function () { if (!state.source) pickFile(); });
 
     on(ui.viewZoomIn, 'click', function () { zoomBy(ZOOM_STEP_FACTOR); });
@@ -6911,7 +6888,7 @@ window.PINDOU_PALETTES = {
       ditherStrengthVal: byId('ditherStrengthVal'),
       quantizeEnabled: byId('quantizeEnabled'),
       maxColors: byId('maxColors'),
-      maxColorsVal: byId('maxColorsVal'),
+      maxColorsNum: byId('maxColorsNum'),
       maxColorsHint: byId('maxColorsHint'),
       preprocessHint: byId('preprocessHint'),
       boardsSelect: byId('boardsSelect'),
@@ -6921,9 +6898,9 @@ window.PINDOU_PALETTES = {
       lockAspect: byId('lockAspect'),
       paletteSelect: byId('paletteSelect'),
       paletteMeta: byId('paletteMeta'),
-      cellLabelMode: byId('cellLabelMode'),
       cellLabelHint: byId('cellLabelHint'),
       chartTitle: byId('chartTitle'),
+      showCodes: byId('showCodes'),
       showRuler: byId('showRuler'),
       cellSize: byId('cellSize'),
       cellSizeVal: byId('cellSizeVal'),
@@ -6954,7 +6931,6 @@ window.PINDOU_PALETTES = {
       exportAnnotate: byId('exportAnnotate'),
       exportHint: byId('exportHint'),
       btnExportPng: byId('btnExportPng'),
-      btnExportCompare: byId('btnExportCompare'),
       btnExportCsv: byId('btnExportCsv'),
       dropZone: byId('dropZone'),
       statusText: byId('statusText'),

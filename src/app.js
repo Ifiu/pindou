@@ -95,6 +95,9 @@
   var DEFAULTS = {
     brightness: 0, contrast: 0, saturation: 0, autoWB: false, autoLevels: false,
     method: 'nearest', bayerN: '4', ditherStrength: 30,
+    /* 图纸风格：'bead' = 更像拼豆图纸（默认；「图纸发虚、颜色被滥用」那个问题的解法），
+       'faithful' = 更还原原图。冻结接口：options().style 只能是这两个值。 */
+    style: 'bead',
     quantizeEnabled: true, maxColors: 24,
     gridW: 100, gridH: 100,
     sizePreset: '100', lockAspect: true,
@@ -120,6 +123,9 @@
     srcCtx: null,        /* sourceCanvas 的 2d 上下文：getImageData 取像素 */
     srcEdit: null,       /* SourceEdit.mount() 返回的 api；缺失时为 null */
     srcCropMode: false,
+    /* 智能建议：{ suggested, reasons } 或 null。只由「智能建议」按钮写入、只由「应用」消费；
+       换图会清空（上一张图的建议对新图无效）。 */
+    suggestion: null,
     /* 方向如实说明：非空表示「这次读入没能自动纠正照片方向」，会被并进生成状态里（一直显示到换图为止）。
        只有「<img> 失败 + 引擎不认 createImageBitmap 的 'from-image'」才会置上，见 loadImageFromBlob。 */
     orientationNote: '',
@@ -301,12 +307,12 @@
     }
     if (ui.patternHint) {
       setText(ui.patternHint, touch
-        ? '尚未载入图片\n点上面的「选择图片…」从相册里选一张'
-        : '尚未载入图片\n点击上方「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴');
+        ? '尚未载入图片\n点「选择图片…」从相册里选一张'
+        : '尚未载入图片\n点击「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴');
     }
     if (ui.inputHint) {
       setText(ui.inputHint, (touch
-        ? '入口只有一个：点上面的「选择图片…」从相册里选一张。'
+        ? '入口只有一个：点「选择图片…」从相册里选一张。'
         : '三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。')
         + '图片在你的浏览器里处理，不会上传到任何服务器。');
     }
@@ -599,6 +605,17 @@
     return 'nearest';
   }
 
+  /* 图纸风格（冻结接口）：'bead' 更像拼豆图纸 / 'faithful' 更还原原图。
+     缺控件或两个都没勾时回落 'bead' —— 默认值只能有一处（DEFAULTS.style），这里只做兜底。 */
+  function styleOf() {
+    if (ui.styleFaithful && ui.styleFaithful.checked) return 'faithful';
+    return 'bead';
+  }
+
+  function styleName(v) {
+    return (v === 'faithful') ? '更还原原图' : '更像拼豆图纸';
+  }
+
   function cellSizeValue() {
     return Math.round(clamp(num(ui.cellSize, DEFAULT_CELL_PX), MIN_CELL_PX, MAX_CELL_PX));
   }
@@ -736,7 +753,7 @@
       text = '未启用减色：不使用色数上限，实际用色由算法与色卡决定。';
     } else {
       text = '这是「最多用几色」而不是精确色数；'
-        + '实际用色受色卡与原图色彩分布限制，可能少于上限（生成后见右侧「用量汇总」）。';
+        + '实际用色受色卡与原图色彩分布限制，可能少于上限（生成后可在「用量汇总」里看到）。';
     }
     setText(ui.maxColorsHint, text);
   }
@@ -882,14 +899,29 @@
     scheduleRegenerate(0);
   }
 
-  /* 手动输入格数：夹到 1..MAX_DIM（=100），按需同步另一边 */
+  /* 手动输入格数：夹到 1..MAX_DIM（=100），按需同步另一边。
+   *
+   * 宽高比锁定时的关键：要**等比装进 MAX_DIM × MAX_DIM 这个框**，不能只夹被推出来的那一边。
+   * 只夹一边的后果（真实 bug）：竖图 1208×1556（aspect≈0.776）在 gridW=100（= 上限）时
+   * 推出 h=129 → 被夹回 100 → 变成 100×100，比例锁等于没生效，图被横向拉宽约 29%。
+   * 正确做法：推出来顶到上限就**反过来以上限为准缩回另一边**，两边都 ≤ MAX_DIM 且尽量保比例
+   * （取整会差 ±1 格）。 */
   function normalizeDims(which) {
     var dims = gridDims();
     var w = dims.w, h = dims.h;
     if (ui.lockAspect && ui.lockAspect.checked && state.srcW > 0 && state.srcH > 0) {
       var aspect = sourceAspect();
-      if (which === 'gridW') h = clamp(Math.round(w / aspect), 1, MAX_DIM);
-      else w = clamp(Math.round(h * aspect), 1, MAX_DIM);
+      if (!(aspect > 0)) aspect = 1;                 /* 防御：比例非法时按正方形走，至少不除零 */
+      if (which === 'gridW') {
+        h = Math.round(w / aspect);
+        if (h > MAX_DIM) { h = MAX_DIM; w = clamp(Math.round(h * aspect), 1, MAX_DIM); }
+      } else {
+        w = Math.round(h * aspect);
+        if (w > MAX_DIM) { w = MAX_DIM; h = clamp(Math.round(w / aspect), 1, MAX_DIM); }
+      }
+      /* 极端细长（如 10000×10）会推出 0 格：靠这一步兜到 1，绝不留 0 */
+      w = clamp(w, 1, MAX_DIM);
+      h = clamp(h, 1, MAX_DIM);
     }
     if (String(w) !== String(ui.gridW ? ui.gridW.value : w)) setVal(ui.gridW, w);
     if (String(h) !== String(ui.gridH ? ui.gridH.value : h)) setVal(ui.gridH, h);
@@ -933,6 +965,9 @@
       gridW: dims.w,
       gridH: dims.h,
       lockAspect: !!(ui.lockAspect && ui.lockAspect.checked),
+      /* 图纸风格（冻结接口 'bead' | 'faithful'）：只管颜色怎么选/小色块怎么并，
+         与尺寸、色卡、渲染互不影响。 */
+      style: styleOf(),
       preprocess: {
         /* 送进 pipeline 的必须是生效值（effCurve 压缩后的），不是滑杆原值 */
         brightness: effSlider(ui.brightness, 0),
@@ -1466,7 +1501,7 @@
       text = '橡皮刷：在图纸上按住拖动即可擦掉划过的格子（当前 ' + brushSizeValue() + ' × ' + brushSizeValue()
         + '，越界自动裁剪）。整个一次拖动只算一步撤销。';
     } else if (t === TOOL_RECOLOR) {
-      text = '当前工具：画笔模式（在上方色板里选目标色号后点击格子，改的就是这一格）。要抠图请改选「魔术棒」或「橡皮刷」。';
+      text = '当前工具：画笔模式（在「画笔 / 批量修改」组的色板里选目标色号后点击格子，改的就是这一格）。要抠图请改选「魔术棒」或「橡皮刷」。';
     } else if (t === TOOL_BATCH) {
       text = '当前工具：批量修改（先点图纸上一格选定整片同色区域，再选颜色 → 整片一起改）。单次最多 ' + WAND_MAX
         + ' 格；再点另一格可以切换选区。';
@@ -1690,7 +1725,7 @@
       return;
     }
     var code = recolorCode();
-    if (!code) { setStatus('请先在上方色板里选一个目标色号', 'warn'); return; }
+    if (!code) { setStatus('请先在「画笔 / 批量修改」组的色板里选一个目标色号', 'warn'); return; }
     var lock = !(ui.lockToggle && !ui.lockToggle.checked);
     applyRecolor(idx, code, lock);
   }
@@ -2089,8 +2124,8 @@
     var n = res.region.length;
     setStatus('已选中 ' + n + ' 格（色号 ' + (state.batch.code || '?') + '）：'
       + (state.batch.recs && state.batch.recs.length
-        ? '点推荐色号或在上方色板里选色，整片一起改。'
-        : '在上方色板里选色即可整片改。')
+        ? '点推荐色号或在色板里选色，整片一起改。'
+        : '在色板里选色即可整片改。')
       + (res.truncated ? '（区域超过单次上限 ' + WAND_MAX + ' 格，本次只处理前 ' + WAND_MAX + ' 格）' : ''),
       res.truncated ? 'warn' : 'info');
     return n;
@@ -2489,7 +2524,29 @@
     html += summaryRow('色卡', p.paletteId || '—');
     var note = quantizeNote(q, used);
     if (note) html += '<p class="hint">' + esc(note) + '</p>';
+    var quality = qualityLine(s);
+    if (quality) html += '<p class="hint">' + esc(quality) + '</p>';
     ui.summaryBox.innerHTML = html;
+  }
+
+  /* 图纸质量四项指标（pipeline 算好放进 stats，app 只读不写）：
+       isolatedShare  孤立珠占比 0..1（≥3 颗之外的孤立珠）—— 越低越干净
+       patchCount     同色四连通块总数 —— 越少越成块
+       patchMean      非空格数 ÷ patchCount —— 越大越成块
+       boundaryPairs  四邻相接且色号不同的对数 —— 越少毛边越少
+     四个字段缺任何一个就**整行不显示**：只显示半行会让人以为「没显示的那项是 0」。
+     不是评分、不是警告，只是把这四项如实说出来。 */
+  function qualityLine(s) {
+    if (!s || typeof s !== 'object') return '';
+    function isNum(v) { return typeof v === 'number' && isFinite(v); }
+    if (!isNum(s.isolatedShare) || !isNum(s.patchCount) || !isNum(s.patchMean) || !isNum(s.boundaryPairs)) return '';
+    var iso = Math.round(s.isolatedShare * 1000) / 10;             /* 0.0623 → 6.2 */
+    var meanText = (s.patchMean >= 10) ? String(Math.round(s.patchMean)) : fmt1(s.patchMean);
+    /* 方向必须逐个数对上：块数越少越好、每块颗数越大越好。
+       旧写法把「越少越成块」直接跟在「平均每块 N 颗」后面，读起来成了「每块颗数越少越好」——方向反了。 */
+    return '图纸质量：孤立珠 ' + iso + '%（越低越干净）'
+      + ' · 色块 ' + Math.round(s.patchCount) + ' 个（平均每块 ' + meanText + ' 颗；块越少、每块越大，越好拼）'
+      + ' · 毛边 ' + Math.round(s.boundaryPairs) + ' 处（越少越干净）';
   }
 
   /* 「用色数」与「减色上限」对不上时，用一句不撒谎的话解释差额。
@@ -3242,6 +3299,167 @@
     state.pixH = ph;
   }
 
+  /* ------------------------------------------------------- 智能建议（一次性动作） */
+
+  /* 能力检测：管线没有 analyzeSource 就**不显示入口**（不抛异常、也不留一个点不动的死按钮）。 */
+  function analyzeApi() {
+    var P = win.Pipeline;
+    return (P && typeof P.analyzeSource === 'function') ? P : null;
+  }
+
+  /* 取「现在这张图」的像素：复用现有 pixelSource() 那条路径（裁剪/旋转后的结果优先），
+     不另写一套取像素逻辑。取不到就返回 null，由调用方如实说明。 */
+  function sourceRGBA() {
+    var ps = pixelSource();
+    if (!ps) return null;
+    function fromCtx(ctx, w, h) {
+      if (!ctx || typeof ctx.getImageData !== 'function') return null;
+      var W = Math.round(w), H = Math.round(h);
+      if (!(W > 0) || !(H > 0)) return null;
+      try {
+        var img = ctx.getImageData(0, 0, W, H);
+        var data = (img && img.data) ? img.data : img;
+        if (!data || typeof data.length !== 'number' || data.length !== W * H * 4) return null;
+        return { rgba: data, w: W, h: H };
+      } catch (e) { return null; }
+    }
+    if (ps.ctx) return fromCtx(ps.ctx, ps.w, ps.h);
+    if (ps.canvas && typeof ps.canvas.getContext === 'function') {
+      try { return fromCtx(ps.canvas.getContext('2d'), ps.canvas.width, ps.canvas.height); } catch (e) { return null; }
+    }
+    return null;
+  }
+
+  /* 校验 suggested：五项都得能落成合法值；缺一项就整条不采用（不「半套应用」）。 */
+  function normalizeSuggested(s) {
+    if (!s || typeof s !== 'object') return null;
+    var w = Number(s.gridW), h = Number(s.gridH), mc = Number(s.maxColors);
+    if (!isFinite(w) || !isFinite(h) || !isFinite(mc)) return null;
+    var method = (s.method === 'fs' || s.method === 'bayer' || s.method === 'nearest') ? s.method : 'nearest';
+    var style = (s.style === 'faithful') ? 'faithful' : 'bead';
+    return {
+      gridW: Math.round(clamp(w, 1, MAX_DIM)),
+      gridH: Math.round(clamp(h, 1, MAX_DIM)),
+      maxColors: clampMaxColors(mc),
+      method: method,
+      style: style
+    };
+  }
+
+  function methodName(v) {
+    if (v === 'fs') return '误差扩散';
+    if (v === 'bayer') return '有序抖动';
+    return '最近邻';
+  }
+
+  function suggestSummary(s) {
+    return s.gridW + ' × ' + s.gridH + ' · ' + s.maxColors + ' 色 · ' + styleName(s.style) + ' · ' + methodName(s.method);
+  }
+
+  function clearSuggestion() {
+    state.suggestion = null;
+    if (ui.smartSuggestArea) { ui.smartSuggestArea.hidden = true; ui.smartSuggestArea.innerHTML = ''; }
+  }
+
+  /* 失败/不可用：只显示一句如实说明，**不留「应用」按钮**（不假装成功）。 */
+  function renderSuggestionError(msg) {
+    state.suggestion = null;
+    var box = ui.smartSuggestArea;
+    if (!box) return;
+    box.hidden = false;
+    box.innerHTML = '<p class="suggest-err">' + esc(msg) + '</p>';
+  }
+
+  function renderSuggestion(res) {
+    var box = ui.smartSuggestArea;
+    var s = normalizeSuggested(res && res.suggested);
+    if (!box) { state.suggestion = null; return; }
+    if (!s) { renderSuggestionError('建议数据不完整，这次不采用（控件一个都没有改）。'); return; }
+    var reasons = isArr(res.reasons) ? res.reasons : [];
+    var items = '';
+    for (var i = 0; i < reasons.length; i++) items += '<li>' + esc(reasons[i]) + '</li>';
+    /* 「为什么」默认收起（<details>），展开能看到**全部** reasons，一条都不改写、不截断 */
+    var why = reasons.length
+      ? '<details class="suggest-why"><summary>为什么？（' + reasons.length + ' 条依据）</summary><ul>' + items + '</ul></details>'
+      : '<p class="suggest-why">这次没有给出依据说明。</p>';
+    state.suggestion = { suggested: s, reasons: reasons };
+    box.hidden = false;
+    box.innerHTML = '<div class="suggest-head"><span>建议：' + esc(suggestSummary(s)) + '</span>'
+      + '<button type="button" class="btn btn-primary" data-act="apply">应用</button></div>'
+      + why;
+  }
+
+  /* 只有点这个按钮才算（绝不自动）；算不出来就如实说，控件一个都不动。 */
+  function requestSuggestion() {
+    var api = analyzeApi();
+    if (!api) {
+      syncSuggestButton();
+      renderSuggestionError('当前环境的转换引擎没有提供「智能建议」（缺少 analyzeSource），请照常手动设置参数。');
+      return false;
+    }
+    if (!state.source) { setStatus('请先载入图片，再获取智能建议', 'warn'); return false; }
+    var px = sourceRGBA();
+    if (!px) { renderSuggestionError('当前环境取不到源图像素，给不出建议（请照常手动设置参数）。'); return false; }
+    var res = null;
+    try { res = api.analyzeSource(px.rgba, px.w, px.h, { paletteId: paletteIdForOpts() }); }
+    catch (e) { renderSuggestionError('智能建议计算失败：' + errText(e) + '（请照常手动设置参数）。'); return false; }
+    if (!res || res.ok !== true) {
+      renderSuggestionError('智能建议没有结果（' + ((res && res.detail) ? String(res.detail) : '分析未通过') + '），请照常手动设置参数。');
+      return false;
+    }
+    renderSuggestion(res);
+    var s = normalizeSuggested(res.suggested);
+    setStatus(s ? ('已给出建议：' + suggestSummary(s) + '（点「应用」才会生效）') : '建议数据不完整，未采用', s ? 'info' : 'warn');
+    return !!s;
+  }
+
+  /* 「应用」：写进现有控件 → **走现有的防抖重新生成**（不另起一条生成路径）。
+     连点两次只会重排一次重算（scheduleRegenerate 会先取消上一次排队中的任务）。 */
+  function applySuggestion() {
+    var sg = state.suggestion;
+    var s = normalizeSuggested(sg && sg.suggested);
+    if (!s) { setStatus('还没有可应用的建议：请先点「智能建议」', 'warn'); return false; }
+    setVal(ui.gridW, s.gridW);
+    setVal(ui.gridH, s.gridH);
+    /* 建议里的「N 色」必须真的生效：写上限色的同时把减色打开，并标记「用户动过」——
+       否则 quantizeOpts() 会拿 Pipeline 的默认值盖掉刚写进去的数字（那就成了假应用）。 */
+    setChecked(ui.quantizeEnabled, true);
+    state.touched.quantizeEnabled = true;
+    setMaxColors(s.maxColors);
+    state.touched.maxColors = true;
+    setChecked(ui.methodNearest, s.method === 'nearest');
+    setChecked(ui.methodFS, s.method === 'fs');
+    setChecked(ui.methodBayer, s.method === 'bayer');
+    setChecked(ui.styleBead, s.style === 'bead');
+    setChecked(ui.styleFaithful, s.style === 'faithful');
+    syncLabels();
+    syncEnabledState();
+    syncSizePresetValue();
+    scheduleRegenerate(0);
+    setStatus('已应用建议：' + suggestSummary(s), 'ok');
+    return true;
+  }
+
+  function onSuggestClick(evt) {
+    var t = evt && evt.target;
+    var root = evt && evt.currentTarget;
+    while (t && t !== root) {
+      if (t.getAttribute && t.getAttribute('data-act') === 'apply') { applySuggestion(); return; }
+      t = t.parentNode;
+    }
+  }
+
+  /* 入口可用性：缺 analyzeSource → 隐藏；没有图 → 禁用。 */
+  function syncSuggestButton() {
+    var btn = ui.btnSmartSuggest;
+    if (!btn) return;
+    var hasApi = !!analyzeApi();
+    btn.hidden = !hasApi;
+    btn.disabled = !hasApi || !state.source;
+    btn.title = !hasApi ? '当前环境的转换引擎没有提供智能建议'
+      : (!state.source ? '先载入一张图片' : '按这张图给出一组参数建议（点「应用」才生效）');
+  }
+
   function useImageSource(src, w, h) {
     if (!src || !w || !h) { setStatus('图片尺寸无效，无法处理', 'err'); return; }
     state.source = src;
@@ -3267,6 +3485,9 @@
     syncRecolorPicker(null);
     updateLockInfo();
     syncUndoButton();
+    /* 上一张图的建议对新图无效：清掉，并让「智能建议」按钮在新图下可用 */
+    clearSuggestion();
+    syncSuggestButton();
     setStatus('已载入 ' + state.srcW + ' × ' + state.srcH + ' 图片，正在生成图纸…', 'info');
     scheduleRegenerate(0);
   }
@@ -3480,6 +3701,8 @@
     setChecked(ui.methodNearest, DEFAULTS.method === 'nearest');
     setChecked(ui.methodFS, DEFAULTS.method === 'fs');
     setChecked(ui.methodBayer, DEFAULTS.method === 'bayer');
+    setChecked(ui.styleBead, DEFAULTS.style === 'bead');
+    setChecked(ui.styleFaithful, DEFAULTS.style === 'faithful');
     setVal(ui.bayerN, DEFAULTS.bayerN);
     /* 尺寸复位：默认就是 100 × 100，且预设控件同步停在 100 档（不再有「拼板规格」这一步） */
     setVal(ui.gridW, DEFAULTS.gridW);
@@ -3495,6 +3718,10 @@
     syncLabels();
     syncEnabledState();
     setTool(DEFAULTS.recolorMode ? TOOL_RECOLOR : TOOL_NONE, true);   /* 工具状态跟着一起复位（含批量修改） */
+    /* 智能建议：复位时把上一次的建议条也清掉，并刷新入口（缺 analyzeSource 就隐藏，没图就禁用）。
+       注意这只是「清 UI 状态」——参数已经写在控件里的不会被改回去。 */
+    clearSuggestion();
+    syncSuggestButton();
     state.viewOpts = viewOpts();
     renderPattern();
     updateLockInfo();
@@ -3518,6 +3745,7 @@
       'recolorMode', 'batchMode', 'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
     var selects = ['paletteSelect', 'bayerN', 'sizePreset', 'recolorScope', 'exportScale'];
     var methods = ['methodNearest', 'methodFS', 'methodBayer'];
+    var styles = ['styleBead', 'styleFaithful'];
     var i;
 
     for (i = 0; i < continuous.length; i++) {
@@ -3543,6 +3771,16 @@
         syncEnabledState();
         scheduleRegenerate(0);
       });
+    }
+    /* 图纸风格：与「取色方式」走同一条重新生成路径（同一个防抖调度，不是立即重算） */
+    for (i = 0; i < styles.length; i++) {
+      (function (id) {
+        on(ui[id], 'change', function () {
+          if (!ui[id] || !ui[id].checked) return;      /* 只认「被选中的那个」，取消勾选不触发 */
+          setStatus('图纸风格：' + styleName(styleOf()) + '（正在按新风格重新生成…）', 'info');
+          scheduleRegenerate(0);
+        });
+      }(styles[i]));
     }
 
     on(ui.recolorSearch, 'input', onRecolorSearch);
@@ -3587,6 +3825,9 @@
     on(ui.btnExportCsv, 'click', exportCsv);
     on(ui.btnUnlockAll, 'click', unlockAll);
     on(ui.btnPickFile, 'click', pickFile);
+    /* 智能建议：按钮只负责「算」，建议条里的「应用」才改参数（事件委托，条是动态重建的） */
+    on(ui.btnSmartSuggest, 'click', requestSuggestion);
+    on(ui.smartSuggestArea, 'click', onSuggestClick);
     on(ui.emptyState, 'click', pickFile);
     /* 预览区里也有可键入的控件（预览区顶部的图纸标题栏）：点它的输入框、或点它那段
        <label>（会转发焦点到输入框），都不该顺手弹出文件选择器。
@@ -3649,6 +3890,8 @@
       app: byId('app'),
       fileInput: byId('fileInput'),
       btnPickFile: byId('btnPickFile'),
+      btnSmartSuggest: byId('btnSmartSuggest'),
+      smartSuggestArea: byId('smartSuggestArea'),
       dropHint: byId('dropHint'),
       inputHint: byId('inputHint'),
       moduleNotice: byId('moduleNotice'),
@@ -3667,6 +3910,8 @@
       methodNearest: byId('methodNearest'),
       methodFS: byId('methodFS'),
       methodBayer: byId('methodBayer'),
+      styleBead: byId('styleBead'),
+      styleFaithful: byId('styleFaithful'),
       bayerN: byId('bayerN'),
       ditherStrength: byId('ditherStrength'),
       ditherStrengthVal: byId('ditherStrengthVal'),
@@ -3829,6 +4074,11 @@
     applyViewZoom: applyViewZoom,
     fitViewZoom: fitViewZoom,
     /* 预览缩放的动态下限与可容纳比例（自测 / 脚本入口） */
+    /* 智能建议（自测 / 脚本入口；与界面按钮、建议条里的「应用」走同一批函数） */
+    smartSuggest: requestSuggestion,
+    applySuggestion: applySuggestion,
+    suggestion: function () { return state.suggestion; },
+    syncSuggestButton: syncSuggestButton,
     zoomFloor: zoomFloor,
     fitScale: fitScale,
     renderRecolorGrid: renderRecolorGrid,

@@ -405,8 +405,8 @@ ok('101 夹取告警里不出现 116 / 87（旧上限文案已彻底清除）', 
 /* 未给任何尺寸 → 回落 100 长边（等价于「预设尺寸」）；方形源必须正好 100×100 */
 const patFallback = Pipeline.generateFromRGBA(srcMed, 240, 240, {});
 eq('回落 | 方形源未给尺寸 → 100×100（等于预设尺寸）', [patFallback.w, patFallback.h], [100, 100]);
-eq('回落 | stats 键恰好是 total / usedColors / cmW / cmH（不再有 boardX/boardY）',
-  Object.keys(patFallback.stats).sort(), ['cmH', 'cmW', 'total', 'usedColors']);
+eq('回落 | stats 键 = 前四个（total/usedColors/cmW/cmH）+ 追加的质量指标四个（顺序固定）',
+  Object.keys(patFallback.stats), ['total', 'usedColors', 'cmW', 'cmH', 'isolatedShare', 'patchCount', 'patchMean', 'boundaryPairs']);
 ok('回落 | stats 里没有 boards 字段残留', !('boards' in patFallback.stats) && !('boardX' in patFallback.stats) && !('boardY' in patFallback.stats));
 ok('回落 | Pattern 上也没有 boardX/boardY/boards 字段', !('boardX' in patFallback) && !('boardY' in patFallback) && !('boards' in patFallback));
 ok('回落 | Pipeline.DEFAULT_OPTS 里不再有 boards 字段', !('boards' in Pipeline.DEFAULT_OPTS), Object.keys(Pipeline.DEFAULT_OPTS).join(','));
@@ -564,6 +564,213 @@ eq('边界 | 色表里没有的锁定色号 → 沿用历史色值', ghostPat.co
 eq('边界 | 0 尺寸栅格 ditherFS 返回长度 0', CK.ditherFS(new Float32Array(0), 0, 0, mat, 0).length, 0);
 eq('边界 | 0 尺寸栅格 quantize 返回空 used', CK.quantize(new Float32Array(0), 0, 0, 8, mat).used, []);
 
+/* ═════════════ 本轮新增：图纸风格两档 + 四项质量指标 + 中性色去噪 / 小色块归并 ═════════════
+   构造手法：把「每格一块纯色」的布局放大成源图（每格 CELL_S×CELL_S 像素），
+   下采样后每格颜色就是该色号的 hex，量化最近色号 = 它自己 ⇒ 可以**手算**期望的指标。
+   结构性算例一律 quantize:false + steps:{chroma:false,merge:false}，把 ②③ 关掉只验尺子本身。 */
+const CELL_S = 8;
+const STYLE_PAL = globalThis.PINDOU_PALETTES[Object.keys(globalThis.PINDOU_PALETTES)[0]].colors;
+const styleByCode = {};
+for (const c of STYLE_PAL) styleByCode[String(c.code)] = c;
+const layoutImage = (rows) => {
+  const h = rows.length, w = rows[0].length, W = w * CELL_S, H = h * CELL_S;
+  const buf = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const r = Math.floor(y / CELL_S), c = Math.floor(x / CELL_S);
+      const code = rows[r][c];
+      const rgb = code ? styleByCode[code].rgb : [0, 0, 0];
+      const o = (y * W + x) * 4;
+      buf[o] = rgb[0]; buf[o + 1] = rgb[1]; buf[o + 2] = rgb[2]; buf[o + 3] = code ? 255 : 0;
+    }
+  }
+  return { buf: buf, W: W, H: H, w: w, h: h };
+};
+const runLayout = (rows, extra) => {
+  const im = layoutImage(rows);
+  return Pipeline.generateFromRGBA(im.buf, im.W, im.H,
+    Object.assign({ gridW: im.w, gridH: im.h, quantize: { enabled: false } }, extra || {}));
+};
+const codeAt = (p, r, c) => (p.cells[r * p.w + c] === 65535 ? '.' : String(p.colors[p.cells[r * p.w + c]].code));
+const codesOfPat = (p) => Array.from(p.cells).map((i) => (i === 65535 ? '.' : String(p.colors[i].code)));
+const uniformRows = (w, h, code) => { const rows = []; for (let r = 0; r < h; r++) { const row = []; for (let c = 0; c < w; c++) row.push(code); rows.push(row); } return rows; };
+const metricTuple = (p) => [p.stats.isolatedShare, p.stats.patchCount, p.stats.patchMean, p.stats.boundaryPairs];
+
+/* ① 四项指标语义：全部用手算可验的小算例钉住（后面所有优化都拿这四个数当目标函数） */
+eq('指标 | 3+5 连续段 → isolatedShare 0（3 颗的块不算孤立，正好压在 < 3 的下界上）', metricTuple(runLayout([['A1', 'A1', 'A1', 'B1', 'B1', 'B1', 'B1', 'B1']])), [0, 2, 4, 1]);
+eq('指标 | 2+6 → isolatedShare 0.25（2 颗的块算孤立：2/8）', metricTuple(runLayout([['A1', 'A1', 'B1', 'B1', 'B1', 'B1', 'B1', 'B1']])), [0.25, 2, 4, 1]);
+eq('指标 | 4×2 棋盘 → isolatedShare 1 / patchCount 8 / patchMean 1 / boundaryPairs 10（手算：行内 3+3、列间 4）',
+  metricTuple(runLayout([['A1', 'B1', 'A1', 'B1'], ['B1', 'A1', 'B1', 'A1']])), [1, 8, 1, 10]);
+eq('指标 | 全透明 → 四项全 0', metricTuple(runLayout([[null, null], [null, null]])), [0, 0, 0, 0]);
+ok('指标 | 全透明 → patchMean 是有限数 0（不是 NaN / Infinity）',
+  (function () { const pm = runLayout([[null, null], [null, null]]).stats.patchMean; return Number.isFinite(pm) && pm === 0; })());
+eq('指标 | 珠子↔空格不产生 boundaryPairs（A1 · A1 被空格隔开 → 0 对）',
+  runLayout([['A1', null, 'A1', null, 'B1', 'B1', null, null]]).stats.boundaryPairs, 0);
+eq('指标 | 珠子↔空格：同一算例 patchCount=3、patchMean=4/3（空格既不算珠子也不算块）',
+  [runLayout([['A1', null, 'A1', null, 'B1', 'B1', null, null]]).stats.patchCount,
+    Number(runLayout([['A1', null, 'A1', null, 'B1', 'B1', null, null]]).stats.patchMean.toFixed(4))], [3, 1.3333]);
+eq('指标 | 单珠交替 A B A B → isolatedShare 1、boundaryPairs 3（相邻且色号不同才计对）',
+  metricTuple(runLayout([['A1', 'B1', 'A1', 'B1']])), [1, 4, 1, 3]);
+const detRows = uniformRows(12, 10, 'H12');
+detRows[3][3] = 'F7'; detRows[6][7] = 'A1'; detRows[8][2] = null;
+const detA2 = runLayout(detRows, { style: 'bead' });
+const detB2 = runLayout(detRows, { style: 'bead' });
+ok('确定性（新） | 同输入两次：stats / cells / colors / counts 逐字节相同',
+  JSON.stringify(detA2.stats) === JSON.stringify(detB2.stats)
+  && Array.from(detA2.cells).join(',') === Array.from(detB2.cells).join(',')
+  && JSON.stringify(detA2.colors) === JSON.stringify(detB2.colors)
+  && JSON.stringify(detA2.counts) === JSON.stringify(detB2.counts));
+
+/* ② 风格两档：默认 bead、非法 style 回退并告警、回退是真的逐格相同 */
+eq('风格 | DEFAULT_OPTS.style 默认 "bead"', Pipeline.DEFAULT_OPTS.style, 'bead');
+const badStylePat = runLayout(uniformRows(6, 6, 'H12'), { style: 'x' });
+ok('风格 | 非法 style（"x"）→ 回退到 bead 并给出 warning（文案含 style 与 bead）',
+  badStylePat.warnings.some((w) => /style/i.test(String(w)) && String(w).indexOf('bead') >= 0), JSON.stringify(badStylePat.warnings));
+eq('风格 | 非法 style 的输出与显式 bead 逐格相同（真的回退，不是静默当成别的档）',
+  codesOfPat(badStylePat).join(','), codesOfPat(runLayout(uniformRows(6, 6, 'H12'), { style: 'bead' })).join(','));
+eq('风格 | 两档的阈值参数确实不同（bead 更狠）',
+  (function () {
+    const mk2 = (st) => Pipeline.generateFromRGBA(layoutImage(uniformRows(2, 2, 'H12')).buf, 16, 16, { gridW: 2, gridH: 2, style: st }).stats;
+    return typeof mk2('bead').patchCount === 'number' && typeof mk2('faithful').patchCount === 'number';
+  })(), true);
+
+/* ③ 两档必须真的拉得开：H12/H17 棋盘（ΔE 5.73 正好落在 4 < ΔE < 8 的夹缝里）
+   → bead（minPatch 4 / ΔE 8）把 1 颗的碎块全并掉；faithful（minPatch 2 / ΔE 4）被门控拦住。 */
+const dE1217 = CK.deltaE(CK.srgbToLab(styleByCode.H12.rgb), CK.srgbToLab(styleByCode.H17.rgb));
+ok('风格前置 | ΔE(H12,H17) = ' + dE1217.toFixed(2) + ' 落在 (4, 8) 之间（正好是两档门限的夹缝，算例才有区分度）',
+  dE1217 > 4 && dE1217 < 8, dE1217.toFixed(3));
+const checkerRows = (function () { const rows = []; for (let r = 0; r < 16; r++) { const row = []; for (let c = 0; c < 16; c++) row.push((r + c) % 2 === 0 ? 'H12' : 'H17'); rows.push(row); } return rows; })();
+const styleBead = runLayout(checkerRows, { style: 'bead' });
+const styleFaith = runLayout(checkerRows, { style: 'faithful' });
+ok('★风格 | 两档拉得开：bead 的 boundaryPairs ' + styleBead.stats.boundaryPairs + ' 远小于 faithful 的 ' + styleFaith.stats.boundaryPairs,
+  styleBead.stats.boundaryPairs * 3 < styleFaith.stats.boundaryPairs, styleBead.stats.boundaryPairs + ' vs ' + styleFaith.stats.boundaryPairs);
+ok('★风格 | 且两档输出不是逐格相同（真的两套结果）', codesOfPat(styleBead).join(',') !== codesOfPat(styleFaith).join(','));
+ok('★风格 | 方向：faithful 的 boundaryPairs 与 isolatedShare 都 ≥ bead 的（保留更多原图杂点）',
+  styleFaith.stats.boundaryPairs >= styleBead.stats.boundaryPairs && styleFaith.stats.isolatedShare >= styleBead.stats.isolatedShare,
+  JSON.stringify([styleBead.stats.isolatedShare, styleFaith.stats.isolatedShare]));
+
+/* ④ 误差门控保护：大面 + 深色单珠 + 高光单珠（与面 ΔE 都远大于 8）→ 两档必须保住同样的色号 */
+const protRows = uniformRows(16, 16, 'M3');
+protRows[8][8] = 'F7';
+protRows[8][10] = 'A1';
+const dEprotDark = CK.deltaE(CK.srgbToLab(styleByCode.M3.rgb), CK.srgbToLab(styleByCode.F7.rgb));
+const dEprotLight = CK.deltaE(CK.srgbToLab(styleByCode.M3.rgb), CK.srgbToLab(styleByCode.A1.rgb));
+ok('门控前置 | 两颗珠与面的 ΔE 都远大于门限 8（深 ' + dEprotDark.toFixed(1) + ' / 亮 ' + dEprotLight.toFixed(1) + '）',
+  dEprotDark > 8 && dEprotLight > 8);
+const protBead = runLayout(protRows, { style: 'bead' });
+const protFaith = runLayout(protRows, { style: 'faithful' });
+eq('★门控 | bead 与 faithful 的深色单珠色号完全相同', codeAt(protBead, 8, 8), codeAt(protFaith, 8, 8));
+eq('★门控 | bead 与 faithful 的高光单珠色号完全相同', codeAt(protBead, 8, 10), codeAt(protFaith, 8, 10));
+ok('★门控 | 两颗珠真的活下来（没被并成面色）',
+  codeAt(protBead, 8, 8) !== codeAt(protBead, 0, 0) && codeAt(protBead, 8, 10) !== codeAt(protBead, 0, 0),
+  JSON.stringify([codeAt(protBead, 8, 8), codeAt(protBead, 8, 10), codeAt(protBead, 0, 0)]));
+/* 反向对照：低对比碎点会被并掉、高对比不会被并 —— 否则「保护」可能只是「什么都没做」 */
+const mixedRows = uniformRows(16, 16, 'H12');
+mixedRows[8][8] = 'H17';
+mixedRows[8][10] = 'H7';
+const mixBead = runLayout(mixedRows, { style: 'bead' });
+const mixNoGate = runLayout(mixedRows, { style: 'bead', steps: { gate: false } });
+const mixFaith = runLayout(mixedRows, { style: 'faithful' });
+eq('★门控反向对照 | bead：低对比碎点被并进面色（H17 → 面色）', codeAt(mixBead, 8, 8), codeAt(mixBead, 0, 0));
+ok('★门控反向对照 | bead：高对比碎点没有被并（仍是 H7）', codeAt(mixBead, 8, 10) === 'H7', codeAt(mixBead, 8, 10));
+ok('★门控反向对照 | 关掉门控（steps.gate=false）后高对比碎点也被并掉 → 门控确实在保护它',
+  codeAt(mixNoGate, 8, 10) === codeAt(mixNoGate, 0, 0), codeAt(mixNoGate, 8, 10) + ' vs 面 ' + codeAt(mixNoGate, 0, 0));
+eq('★门控反向对照 | faithful（ΔE 门限 4）：低对比碎点 ΔE 5.7 > 4 → 反而被保住', codeAt(mixFaith, 8, 8), 'H17');
+ok('★门控反向对照 | 同一算例上 bead 与 faithful 给出不同的碎点处置（两档门限真的在起作用）',
+  codeAt(mixBead, 8, 8) !== codeAt(mixFaith, 8, 8));
+
+/* ⑤ 锁定格零改动：locked-empty 与 locked-code，其余格与基线逐格一致 */
+const lockBase = runLayout(protRows, { style: 'bead' });
+const lockPrevColors = lockBase.colors.map((c) => ({ code: c.code, hex: c.hex, rgb: c.rgb.slice() })).concat([{ code: 'H7', hex: styleByCode.H7.hex, rgb: styleByCode.H7.rgb.slice() }]);
+const lockPrev2 = { w: lockBase.w, h: lockBase.h, cells: Uint16Array.from(lockBase.cells), colors: lockPrevColors, locked: new Uint8Array(lockBase.cells.length) };
+lockPrev2.cells[0] = 65535; lockPrev2.locked[0] = 1;
+lockPrev2.cells[5] = lockPrevColors.length - 1; lockPrev2.locked[5] = 1;
+const lockIm = layoutImage(protRows);
+const lockRun = Pipeline.generateFromRGBA(lockIm.buf, lockIm.W, lockIm.H,
+  { gridW: lockIm.w, gridH: lockIm.h, style: 'bead', quantize: { enabled: false }, prevPattern: lockPrev2 });
+eq('★锁定 | locked-empty 重新生成后仍是 65535 且 locked 仍为 1', [lockRun.cells[0], lockRun.locked[0]], [65535, 1]);
+eq('★锁定 | locked-code 重新生成后仍是 H7 且 locked 仍为 1', [codeAt(lockRun, 0, 5), lockRun.locked[5]], ['H7', 1]);
+eq('★锁定 | 其余格逐格与无锁定基线一致（按**色号字符串**比对，不用会随重排平移的 colors 下标）',
+  (function () {
+    const a2 = codesOfPat(lockBase), b2 = codesOfPat(lockRun), diff = [];
+    for (let i = 0; i < a2.length; i++) { if (i === 0 || i === 5) continue; if (a2[i] !== b2[i]) diff.push(i + ':' + a2[i] + '→' + b2[i]); }
+    return diff;
+  })(), []);
+eq('★锁定 | 带 prevPattern 时没有出现「尺寸不一致 → 忽略锁定」类告警',
+  lockRun.warnings.filter((w) => String(w).indexOf('不一致') >= 0), []);
+
+/* ⑥ 减色号：bead 用到的色号数 ≤ faithful（同一输入、多色块算例） */
+ok('★风格 | bead 用到的色号数 ≤ faithful（同色块算例）', styleBead.stats.usedColors <= styleFaith.stats.usedColors,
+  styleBead.stats.usedColors + ' vs ' + styleFaith.stats.usedColors);
+const multiRows = (function () { const rows = []; for (let r = 0; r < 16; r++) { const row = []; for (let c = 0; c < 16; c++) { const q = (r < 8 ? 0 : 2) + (c < 8 ? 0 : 1); row.push(['A1', 'B1', 'C1', 'D2'][q]); } rows.push(row); } return rows; })();
+const multiBead = runLayout(multiRows, { style: 'bead' });
+const multiFaith = runLayout(multiRows, { style: 'faithful' });
+ok('★风格 | bead 用到的色号数 ≤ faithful（四块四色的算例）', multiBead.stats.usedColors <= multiFaith.stats.usedColors,
+  multiBead.stats.usedColors + ' vs ' + multiFaith.stats.usedColors);
+
+/* ⑦ analyzeSource：结构 / method 恒 nearest / reasons / flatArt / 尺寸建议不退化 / 建议可用 / 确定性 / 降级 */
+ok('analyzeSource | 存在且是函数', typeof Pipeline.analyzeSource === 'function');
+const anaPal = Object.keys(globalThis.PINDOU_PALETTES)[0];
+const anaPhoto = synth(303, 389, (x, y) => [(x * 7 + y * 3) % 256, (y * 5 + x * 11) % 256, (x * y) % 256]);
+const anaPhotoRes = Pipeline.analyzeSource(anaPhoto, 303, 389, { paletteId: anaPal });
+const anaFlat = synth(200, 200, (x, y) => { const i = (Math.floor(x / 25) + Math.floor(y / 25) * 8) % 8; return styleByCode[String(STYLE_PAL[i].code)].rgb; });
+const anaFlatRes = Pipeline.analyzeSource(anaFlat, 200, 200, { paletteId: anaPal });
+const anaIcon = synth(100, 100, (x, y) => { const i = (x < 50 ? 0 : 1) + (y < 50 ? 0 : 2); return styleByCode[String(STYLE_PAL[i].code)].rgb; });
+const anaIconRes = Pipeline.analyzeSource(anaIcon, 100, 100, { paletteId: anaPal });
+const anaGrad = synth(303, 389, (x, y) => { const t = y / 389; return [Math.round(40 + 200 * t), Math.round(30 + 180 * (x / 303)), Math.round(90 + 120 * t)]; });
+const anaGradRes = Pipeline.analyzeSource(anaGrad, 303, 389, { paletteId: anaPal });
+const anaSamples = [['照片感噪声', anaPhotoRes], ['8 色平涂', anaFlatRes], ['3 色图标', anaIconRes], ['平滑渐变', anaGradRes]];
+const anaKeys = ['ok', 'detail', 'flatArt', 'distinctColors', 'bgShare', 'suggested', 'reasons'];
+const anaStructBad = [];
+for (const [nm, r] of anaSamples) {
+  for (const k of anaKeys) if (!(k in r)) anaStructBad.push(nm + ':缺 ' + k);
+  if (typeof r.ok !== 'boolean') anaStructBad.push(nm + ':ok 类型');
+  if (typeof r.detail !== 'number' || !(r.detail >= 0 && r.detail <= 1)) anaStructBad.push(nm + ':detail 越界');
+  if (typeof r.flatArt !== 'boolean') anaStructBad.push(nm + ':flatArt 类型');
+  if (!Array.isArray(r.reasons) || r.reasons.length === 0) anaStructBad.push(nm + ':reasons 空');
+  if (!r.reasons.every((x) => typeof x === 'string' && x.length > 0)) anaStructBad.push(nm + ':reasons 含非字符串/空串');
+  const sg = r.suggested || {};
+  if (!(Number.isInteger(sg.gridW) && sg.gridW >= 1 && sg.gridW <= 100)) anaStructBad.push(nm + ':gridW ' + sg.gridW);
+  if (!(Number.isInteger(sg.gridH) && sg.gridH >= 1 && sg.gridH <= 100)) anaStructBad.push(nm + ':gridH ' + sg.gridH);
+  if (!(Number.isInteger(sg.maxColors) && sg.maxColors >= 2 && sg.maxColors <= 221)) anaStructBad.push(nm + ':maxColors ' + sg.maxColors);
+  if (['nearest', 'fs', 'bayer'].indexOf(sg.method) < 0) anaStructBad.push(nm + ':method ' + sg.method);
+  if (['bead', 'faithful'].indexOf(sg.style) < 0) anaStructBad.push(nm + ':style ' + sg.style);
+}
+eq('analyzeSource | 结构齐全 + 类型正确 + suggested 五项都在合法区间', anaStructBad, []);
+ok('★analyzeSource | method 在所有样本上恒为 "nearest"（抖动在珠面上是撒胡椒面）',
+  anaSamples.every((s2) => s2[1].suggested.method === 'nearest'), JSON.stringify(anaSamples.map((s2) => s2[1].suggested.method)));
+eq('★analyzeSource | flatArt：可区分色数 ≤ 8 的样本必须为 true（少色单独成立）',
+  anaSamples.filter((s2) => s2[1].distinctColors <= 8).map((s2) => s2[1].flatArt), anaSamples.filter((s2) => s2[1].distinctColors <= 8).map(() => true));
+ok('analyzeSource | flatArt > 0 的样本确实存在（不是空集上的空断言）', anaSamples.filter((s2) => s2[1].distinctColors <= 8).length > 0);
+ok('analyzeSource | flatArt 的反向：可区分色数远大于 8 的照片样本判为 false',
+  anaSamples.filter((s2) => s2[1].distinctColors > 8).every((s2) => s2[1].flatArt === false),
+  JSON.stringify(anaSamples.map((s2) => [s2[1].distinctColors, s2[1].flatArt])));
+/* ★尺寸建议不许退化到最小档：detail > 0.25 的输入，长边不得是 29 */
+const anaHiDetail = anaSamples.filter((s2) => s2[1].detail > 0.25);
+ok('★analyzeSource | detail > 0.25 的样本确实存在（否则下面那条没有约束力）', anaHiDetail.length > 0, JSON.stringify(anaSamples.map((s2) => s2[1].detail)));
+eq('★analyzeSource | detail > 0.25 的输入，suggested 的长边不得是 29（不许退化到最小档）',
+  anaHiDetail.filter((s2) => Math.max(s2[1].suggested.gridW, s2[1].suggested.gridH) === 29).map((s2) => s2[0]), []);
+/* reasons 的百分比扫描：同一条 reason 里 ≥2 个百分比不得全部相同 */
+const anaPctBad = [];
+for (const [nm, r] of anaSamples) {
+  for (const line of r.reasons) {
+    const pct = String(line).match(/\d+%/g) || [];
+    if (pct.length >= 2 && new Set(pct).size === 1) anaPctBad.push(nm + ': ' + line.slice(0, 60));
+  }
+}
+eq('★analyzeSource | reasons 里若出现 ≥2 个百分比，不得全部相同（机械扫描每条）', anaPctBad, []);
+/* suggested 必须真的能用 */
+const anaUse = Pipeline.generateFromRGBA(anaPhoto, 303, 389, { gridW: anaPhotoRes.suggested.gridW, gridH: anaPhotoRes.suggested.gridH, style: anaPhotoRes.suggested.style, quantize: { enabled: true, maxColors: anaPhotoRes.suggested.maxColors } });
+ok('★analyzeSource | 建议值直接喂给 generateFromRGBA：不报错、尺寸吻合、colors.length === counts.length',
+  anaUse.w === anaPhotoRes.suggested.gridW && anaUse.h === anaPhotoRes.suggested.gridH && anaUse.colors.length === anaUse.counts.length,
+  JSON.stringify([anaUse.w, anaUse.h, anaUse.colors.length, anaUse.counts.length]));
+eq('analyzeSource | 建议值可用：产物 stats 仍是那八个键（顺序也算）', Object.keys(anaUse.stats).join(','), 'total,usedColors,cmW,cmH,isolatedShare,patchCount,patchMean,boundaryPairs');
+ok('analyzeSource | 确定性：两次结果 JSON 逐字节相同',
+  JSON.stringify(Pipeline.analyzeSource(anaPhoto, 303, 389, { paletteId: anaPal })) === JSON.stringify(Pipeline.analyzeSource(anaPhoto, 303, 389, { paletteId: anaPal })));
+const anaBad = Pipeline.analyzeSource(null, 0, 0, {});
+ok('analyzeSource | 非法入参：ok:false、reasons 非空、suggested 仍是合法兜底（不抛）',
+  anaBad.ok === false && anaBad.reasons.length > 0 && anaBad.suggested.gridW >= 1 && anaBad.suggested.method === 'nearest',
+  JSON.stringify(anaBad.suggested));
 /* ═════════════════════════════════════════════════════════ 第 4 组 · 渲染 */
 startGroup('第 4 组 · 渲染（Render）');
 
@@ -2341,6 +2548,37 @@ ok('首屏 100 | 导出 8× 被面积守卫拒绝（提示同时给出原因与�
 eq('首屏 100 | 被拒绝时零下载（没有新建 <a>）', dom.created.anchors.length, anchorsBefore8x);
 els.exportScale.value = '2';
 
+/* ── ★比例锁：等比装进 MAX_DIM×MAX_DIM ────────────────────────────────
+   刚修的真 bug：normalizeDims 以前只夹一边 → 竖图 + 默认 100 会变成 100×100（图被拉伸）。
+   这里全部走**用户路径**（改输入框 → input 事件 → normalizeDims），不直接调内部函数。 */
+const setSrcDims = (sw, sh) => { st.srcW = sw; st.srcH = sh; st.source = { data: new Uint8ClampedArray(16), width: sw, height: sh }; };
+const ratioCase = (label, sw, sh, gw, gh, expect) => {
+  setSrcDims(sw, sh);
+  els.lockAspect.checked = true;
+  if (gw !== null) { els.gridW.value = String(gw); fire(els.gridW, 'input'); }
+  else { els.gridH.value = String(gh); fire(els.gridH, 'input'); }
+  eq('★比例锁 | ' + label, [ui.options().gridW, ui.options().gridH], expect);
+};
+ratioCase('竖图 1208×1556 + gridW=100 → 78×100（以前会变 100×100，图被拉伸）', 1208, 1556, 100, null, [78, 100]);
+ratioCase('横图 1600×800 + gridW=100 → 100×50', 1600, 800, 100, null, [100, 50]);
+ratioCase('横图 1600×800 + 只给 gridH=100 → 仍是 100×50（从高边反推也一样）', 1600, 800, null, 100, [100, 50]);
+ratioCase('方图 1000×1000 → 100×100', 1000, 1000, 100, null, [100, 100]);
+ratioCase('极窄竖图 100×2000 → 5×100（短边按比例缩到 5）', 100, 2000, null, 100, [5, 100]);
+ratioCase('极端 10000×10 + gridW=1 → 1×1（绝不出现 0 格）', 10000, 10, 1, null, [1, 1]);
+/* 不勾锁定：两边各自独立，只夹自己 */
+setSrcDims(1208, 1556);
+els.lockAspect.checked = false;
+const ghBeforeUnlocked = String(els.gridH.value);
+els.gridW.value = '200';
+fire(els.gridW, 'input');
+eq('★比例锁 | 不勾锁定 → gridW 只夹自己（200 → 100），另一边不被联动',
+  [ui.options().gridW, String(els.gridH.value)], [100, ghBeforeUnlocked]);
+/* 预设仍是固定正方形：applySizePreset 不经过 normalizeDims */
+setSrcDims(1208, 1556);
+els.lockAspect.checked = true;
+els.sizePreset.value = '29';
+fire(els.sizePreset, 'change');
+eq('★比例锁 | 预设 29 仍是固定正方形 29×29（预设不走等比缩放）', [ui.options().gridW, ui.options().gridH], [29, 29]);
 /* ── 预览缩放与导出解耦 ────────────────────────────────────────────── */
 ui.setViewZoom(0.25);
 eq('预览缩放 | setViewZoom(0.25) 生效', st.viewZoom, 0.25);
@@ -2534,7 +2772,10 @@ const TAB_NEW_IDS = ['tabBasic', 'tabAdvanced', 'panelBasic', 'panelAdvanced', '
 ok('控件清单 | 上一轮新增、本轮仍在的 11 个 id 全在 ui.html 里', TAB_NEW_IDS.every((id) => htmlIds.includes(id)), TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
 ok('控件清单 | 且这 11 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 /* 本轮增删后的精确计数：90（上一轮）+ 7（移动端：inputHint / saveOverlay / saveTip / saveImage / saveText / saveCopy / saveClose）= 97 */
-eq('控件清单 | ui.html 的 id 总数 = 101（102 − 本轮删除的 boardsSelect）', htmlIds.length, 101);
+eq('控件清单 | ui.html 的 id 总数 = 105（101 + 风格两枚 + 智能建议两枚）', htmlIds.length, 105);
+const STYLE_NEW_IDS = ['styleBead', 'styleFaithful', 'btnSmartSuggest', 'smartSuggestArea'];
+ok('控件清单 | 本轮新增的 2 个 id 全在 ui.html 里', STYLE_NEW_IDS.every((id) => htmlIds.includes(id)), STYLE_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 2 个 id 全部被 app.js 引用（没有一个是摆设）', STYLE_NEW_IDS.every((id) => appRefs.includes(id)), STYLE_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 ok('控件清单 | 本轮删除的 boardsSelect 已不在 id 集合里', !htmlIds.includes('boardsSelect') && !appRefs.includes('boardsSelect'));
 eq('控件清单 | 上一轮删除的 3 个 id 一个都不在产物 id 集合里',
   ['cellLabelMode', 'maxColorsVal', 'btnExportCompare'].filter((id) => htmlIds.includes(id)), []);
@@ -2590,7 +2831,7 @@ function tabPanelTitles(fromMark, toMark) {
 }
 const tabBasicTitles = tabPanelTitles('<div id="panelBasic"', '<div id="panelAdvanced"');
 const tabAdvTitles = tabPanelTitles('<div id="panelAdvanced"', '<main id="dropZone"');
-eq('标签页 | 基本页恰好 6 组，且就是这 6 个（新增「抠图」）', tabBasicTitles, ['图片输入', '取色方式', '图纸尺寸', '图纸显示', '抠图', '导出']);
+eq('标签页 | 基本页恰好 7 组，且就是这 7 个（本轮新增「图纸风格」）', tabBasicTitles, ['图片输入', '取色方式', '图纸风格', '图纸尺寸', '图纸显示', '抠图', '导出']);
 eq('标签页 | 高级页恰好 6 组，且就是这 6 个', tabAdvTitles, ['预处理', '减色', '色卡版本', '预览缩放', '画笔 / 批量修改', '操作']);
 const tabAllH2 = (UI_HTML.match(/<h2>[^<]*<\/h2>/g) || []).map((s) => s.replace(/<\/?h2>/g, ''));
 ok('标签页 | 全部 ' + tabAllH2.length + ' 个 <h2> 都不存在「数字 · 」序号前缀',
@@ -2947,8 +3188,81 @@ eq('★接缝 | 索引圈（四角 + 四边中点）点击全部「未命中 -1�
 eq('接缝 | 命中换算与画布尺寸一致（宽度反推的图纸原点 = 渲染原点）',
   (seMock.width - sePat.w * seCell) / 2, seOX);
 
+/* ── D. 智能建议的界面行为：无图禁用 / 绝不自动应用 / 点「应用」才改 / 幂等 / reasons 逐条显示 ── */
+const sugCalls = [];
+const sugGen = { n: 0 };
+const prevPipe5 = sandboxWin.Pipeline;
+sandboxWin.Pipeline = Object.assign({}, globalThis.Pipeline, {
+  analyzeSource(rgba, w, h, o) { sugCalls.push([w, h]); return globalThis.Pipeline.analyzeSource(rgba, w, h, o); },
+  generateFromRGBA(rgba, w, h, opts) { sugGen.n++; return globalThis.Pipeline.generateFromRGBA(rgba, w, h, opts); }
+});
+ok('智能建议 | ui.html 里入口默认带 disabled（首屏没有图时点不动）', /<button id="btnSmartSuggest"[^>]*disabled/.test(UI_HTML));
+els.lockAspect.checked = false;
+els.gridW.value = '40';
+els.gridH.value = '40';
+const sugImg = synth(160, 200, (x, y) => [(x * 7 + y * 3) % 256, (y * 5 + x * 11) % 256, (x * y) % 256]);
+ui.adoptImage({ data: sugImg, width: 160, height: 200 }, 160, 200);    /* 走真实载图路径：刷新入口 + 清掉旧建议 */
+erFlushAll();
+/* 载图后 drawSourceCanvas() 会把 srcCtx 清空（桩里没有真画布）；这里补一个「带 getImageData 的 ctx」——
+   这正是真实载图后 sourceRGBA() 走的那条路（ps.ctx）。 */
+st.srcCtx = { getImageData: function (x0, y0, w2, h2) { return { data: sugImg, width: w2, height: h2 }; } };
+st.pixW = 160;
+st.pixH = 200;
+eq('智能建议 | 载图后入口变为可用（disabled === false）', String(els.btnSmartSuggest.disabled), 'false');
+eq('★智能建议 | 载图**不**调用 analyzeSource（绝不自动分析）', sugCalls.length, 0);
+const sugOptsAfterLoad = JSON.stringify(ui.options());
+ui.setTab('adv');
+ui.setTab('basic');
+erFlushAll();
+eq('★智能建议 | 切标签页也不调用 analyzeSource', sugCalls.length, 0);
+eq('★智能建议 | 切标签页不改任何参数', JSON.stringify(ui.options()), sugOptsAfterLoad);
+const sugGridBefore = [ui.options().gridW, ui.options().gridH];
+fire(els.btnSmartSuggest, 'click');
+erFlushAll();
+eq('★智能建议 | 点按钮才调用 analyzeSource（恰好一次）', sugCalls.length, 1);
+ok('智能建议 | 点完建议条可见且拿到建议数据', els.smartSuggestArea.hidden === false && !!st.suggestion && !!st.suggestion.suggested,
+  JSON.stringify({ hidden: els.smartSuggestArea.hidden, hasSug: !!st.suggestion }));
+eq('★智能建议 | 出建议本身**不改参数**（必须点「应用」才生效）', [ui.options().gridW, ui.options().gridH], sugGridBefore);
+ok('智能建议 | 建议条里有「应用」按钮（data-act=apply）', /data-act="apply"/.test(String(els.smartSuggestArea.innerHTML)));
+const sugLiCount = (String(els.smartSuggestArea.innerHTML).match(/<li>/g) || []).length;
+eq('★智能建议 | reasons 逐条显示：<li> 条数 === reasons.length', sugLiCount, st.suggestion.reasons.length);
+ok('智能建议 | 建议条把 reasons 条数也写出来了（「N 条依据」）', String(els.smartSuggestArea.innerHTML).indexOf('（' + st.suggestion.reasons.length + ' 条依据）') >= 0,
+  String(els.smartSuggestArea.innerHTML).slice(0, 120));
+const applyTarget = { getAttribute: function (n) { return n === 'data-act' ? 'apply' : null; }, parentNode: null };
+const sugSuggested = JSON.parse(JSON.stringify(st.suggestion.suggested));
+const genBeforeApply = sugGen.n;
+fire(els.smartSuggestArea, 'click', { target: applyTarget });
+erFlushAll();
+eq('★智能建议 | 点「应用」后 options() 与 suggested 逐字段相等',
+  { gridW: ui.options().gridW, gridH: ui.options().gridH, maxColors: ui.options().quantize.maxColors,
+    method: ui.options().method, style: ui.options().style },
+  { gridW: sugSuggested.gridW, gridH: sugSuggested.gridH, maxColors: sugSuggested.maxColors,
+    method: sugSuggested.method, style: sugSuggested.style });
+eq('★智能建议 | 应用时把减色也打开（否则 maxColors 会被 Pipeline 默认值盖掉 = 假应用）',
+  [String(els.quantizeEnabled.checked), String(ui.options().quantize.enabled)], ['true', 'true']);
+eq('智能建议 | 应用后控件本体也同步（#gridW / #gridH 的 value）', [String(els.gridW.value), String(els.gridH.value)],
+  [String(sugSuggested.gridW), String(sugSuggested.gridH)]);
+ok('智能建议 | 应用只排一次重算', sugGen.n === genBeforeApply + 1, sugGen.n + ' vs ' + genBeforeApply);
+const genBeforeDouble = sugGen.n;
+fire(els.smartSuggestArea, 'click', { target: applyTarget });
+fire(els.smartSuggestArea, 'click', { target: applyTarget });
+erFlushAll();
+eq('★智能建议 | 幂等：连点两次「应用」只排一次重算', sugGen.n, genBeforeDouble + 1);
+sandboxWin.Pipeline = prevPipe5;
+/* 还原：srcCtx 会把后续重算改走 generateFromRGBA 路径（其它块的 spy 盯的是 generate），必须清掉 */
+st.srcCtx = null;
+st.pixW = 0;
+st.pixH = 0;
+els.gridW.value = '10';
+els.gridH.value = '10';
+st.source = { data: synth(12, 12, (x, y) => [(x * 21) % 256, (y * 17) % 256, ((x + y) * 13) % 256]), width: 12, height: 12 };
+st.srcW = 12;
+st.srcH = 12;
+ui.regenerate();
+erFlushAll();
 /* 持久化（核心）：擦掉若干格 → 改参数重新生成 → 被擦格仍是 65535 */
 const genCallCount = { n: 0 };
+const codesOfPatStyle = (p) => (p && p.cells ? Array.from(p.cells).map((i) => (i === 65535 ? '.' : String(p.colors[i].code))).join(',') : '');
 const erRealPipeline = globalThis.Pipeline;
 sandboxWin.Pipeline = Object.assign({}, erRealPipeline, {
   generate(imageLike, opts) { genCallCount.n++; return erRealPipeline.generate(imageLike, opts); }
@@ -2967,7 +3281,76 @@ const erGenBefore = genCallCount.n;
 ui.regenerate();
 erFlushAll();
 ok('持久化 | 前置 | 确实跑了一次真 Pipeline 重算（走 generateFromRGBA + prevPattern）', genCallCount.n > erGenBefore, genCallCount.n + ' vs ' + erGenBefore);
-const erPatA = st.pattern;
+
+/* ── 图纸风格开关：app 侧默认值 / 切换生效 / **真的传进 Pipeline** ───────────
+   注意：桩里**没有浏览器那种「同名单选自动互斥」**，所以这里不拿 checked 互斥当判据，
+   而是（a）验 styleOf() 的读取优先级与回落、（b）验 ui.html 里两个 radio 同属 name="style" 组（真机才互斥）、
+   （c）用 spy 验 style 真的进了 Pipeline。 */
+const styleCalls = [];
+const prevSandboxPipeline = sandboxWin.Pipeline;
+sandboxWin.Pipeline = Object.assign({}, erRealPipeline, {
+  generate(imageLike, opts) { styleCalls.push(opts && opts.style); return erRealPipeline.generate(imageLike, opts); }
+});
+const styleGroup = (UI_HTML.match(/name="style"/g) || []).length;
+eq('风格（app） | ui.html 里两个风格 radio 同属 name="style" 组（真机由浏览器保证互斥）', styleGroup, 2);
+ok('风格（app） | 默认勾选的是「更像拼豆图纸」（HTML checked 在 #styleBead 上）',
+  /<input id="styleBead"[^>]*checked/.test(UI_HTML) && !/<input id="styleFaithful"[^>]*checked/.test(UI_HTML));
+els.styleBead.checked = false;
+els.styleFaithful.checked = false;
+eq('风格（app） | 两个都没勾时回落 "bead"（默认值只有 DEFAULTS.style 一处）', ui.options().style, 'bead');
+els.styleBead.checked = true;
+fire(els.styleBead, 'change');
+erFlushAll();
+eq('风格（app） | 选中 bead → options().style === "bead"', ui.options().style, 'bead');
+const beadCallsBefore = styleCalls.length;
+ui.regenerate();
+erFlushAll();
+ok('风格（app） | 切到 bead 后重算，spy 收到 opts.style === "bead"',
+  styleCalls.length > beadCallsBefore && styleCalls[styleCalls.length - 1] === 'bead', JSON.stringify(styleCalls.slice(-3)));
+els.styleFaithful.checked = true;
+els.styleBead.checked = false;
+fire(els.styleFaithful, 'change');
+erFlushAll();
+eq('风格（app） | 选中 faithful → options().style === "faithful"', ui.options().style, 'faithful');
+const faithCallsBefore = styleCalls.length;
+ui.regenerate();
+erFlushAll();
+ok('★风格（app） | spy：generateFromRGBA 真的收到了 opts.style === "faithful"（不是只有 UI 变了）',
+  styleCalls.length > faithCallsBefore && styleCalls[styleCalls.length - 1] === 'faithful', JSON.stringify(styleCalls.slice(-3)));
+/* 两档在同一张「低对比棋盘」源图上必须给出不同图纸（用能区分两档的源图，而不是随手一张） */
+ok('★风格（app） | 两档真的产出不一样的图纸（同一源图、逐格按色号比对）',
+  (function () {
+    const HW = 16, cell = 8, srcW = HW * cell, srcH = HW * cell;
+    const buf = new Uint8ClampedArray(srcW * srcH * 4);
+    const rgbOf = (code) => styleByCode[code].rgb;
+    for (let y = 0; y < srcH; y++) for (let x = 0; x < srcW; x++) {
+      const r = Math.floor(y / cell), c = Math.floor(x / cell);
+      const p = rgbOf((r + c) % 2 === 0 ? 'H12' : 'H17');
+      const o = (y * srcW + x) * 4;
+      buf[o] = p[0]; buf[o + 1] = p[1]; buf[o + 2] = p[2]; buf[o + 3] = 255;
+    }
+    st.source = { data: buf, width: srcW, height: srcH };
+    st.srcW = srcW; st.srcH = srcH; st.history.length = 0;
+    els.gridW.value = '16'; els.gridH.value = '16'; els.lockAspect.checked = false;   /* 让图纸真的 16×16，别被上一块的 10×10 压扁 */
+    els.styleFaithful.checked = true; els.styleBead.checked = false;
+    ui.regenerate(); erFlushAll();
+    const a2 = codesOfPatStyle(st.pattern);
+    els.styleBead.checked = true; els.styleFaithful.checked = false;
+    ui.regenerate(); erFlushAll();
+    const b2 = codesOfPatStyle(st.pattern);
+    return a2.length > 0 && a2 !== b2;
+  })());
+sandboxWin.Pipeline = prevSandboxPipeline;
+/* 还原现场：后面的「持久化」块以 10×10 为前提（本块前面把它改成了 16×16） */
+els.gridW.value = '10';
+els.gridH.value = '10';
+els.lockAspect.checked = false;
+st.source = { data: synth(12, 12, (x, y) => [(x * 21) % 256, (y * 17) % 256, ((x + y) * 13) % 256]), width: 12, height: 12 };
+st.srcW = 12;
+st.srcH = 12;
+st.history.length = 0;
+ui.regenerate();
+erFlushAll();const erPatA = st.pattern;
 eq('持久化 | 前置 | 新图纸是 10×10 且一颗不缺', [erPatA.w, erPatA.h, erPatA.stats.total], [10, 10, 100]);
 st.viewOpts = ui.viewOpts();
 const erErased = ui.wandErase(0);

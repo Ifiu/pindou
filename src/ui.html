@@ -153,6 +153,14 @@
   .src-tools{margin-top:10px}
   .src-reset{width:100%;margin-top:8px}
   .summary{display:flex;flex-direction:column;gap:5px}
+  /* 智能建议条：就地显示（不弹窗），和分组卡片同一套观感 */
+  .suggest{margin-top:8px;padding:9px 11px;background:var(--panel2);border:1px solid var(--line);border-radius:9px}
+  .suggest-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12.8px;color:var(--text)}
+  .suggest-head .btn{width:auto;margin:0;padding:4px 12px;min-height:0;font-size:12.4px}
+  .suggest-why{margin-top:6px;font-size:11.8px;color:var(--muted2)}
+  .suggest-why summary{cursor:pointer;color:var(--accent);font-size:11.8px}
+  .suggest-why ul{margin:5px 0 0;padding-left:18px;line-height:1.6}
+  .suggest-err{margin:0;font-size:12px;color:var(--warn)}
   .summary-row{display:flex;justify-content:space-between;gap:10px;font-size:12.6px;border-bottom:1px dotted var(--line);padding-bottom:4px}
   .summary-k{color:var(--muted)}
   .summary-v{color:var(--text);font-variant-numeric:tabular-nums;text-align:right}
@@ -258,6 +266,11 @@
         <section class="group">
           <h2>图片输入</h2>
           <p id="inputHint" class="hint">三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。图片在你的浏览器里处理，不会上传到任何服务器。</p>
+          <div class="btn-grid">
+            <button id="btnSmartSuggest" class="btn btn-ghost" type="button" disabled>智能建议（按这张图给参数）</button>
+          </div>
+          <p class="hint">「智能建议」只在你点它时才计算；算出来的参数也只有在建议条里点「应用」才会写进控件 —— 不点就什么都不变。</p>
+          <div id="smartSuggestArea" class="suggest" hidden></div>
         </section>
 
         <section class="group">
@@ -274,6 +287,15 @@
           </select>
           <label class="row" for="ditherStrength"><span>抖动强度</span><output id="ditherStrengthVal">30%</output></label>
           <input id="ditherStrength" type="range" min="0" max="100" step="1" value="30" />
+        </section>
+
+        <section class="group">
+          <h2>图纸风格</h2>
+          <div class="radios" role="radiogroup" aria-label="图纸风格">
+            <label class="check"><input id="styleBead" type="radio" name="style" value="bead" checked /> 更像拼豆图纸（色块更硬、色号更少，好拼）</label>
+            <label class="check"><input id="styleFaithful" type="radio" name="style" value="faithful" /> 更还原原图（保留更多原图细节与噪点）</label>
+          </div>
+          <p class="hint">两种风格都不改<b>图纸尺寸</b>。区别在颜色：「更像拼豆图纸」会把小色块并掉、把相近的浅色调成一片，所以用到的<b>色号更少、更好拼</b>；「更还原原图」保留更多原图的杂色。切换后会自动重新生成。「用量汇总」里会给出这一次图纸的质量指标。</p>
         </section>
 
         <section class="group">
@@ -363,7 +385,7 @@
             <input id="maxColors" type="range" min="2" max="221" step="1" value="24" />
             <input id="maxColorsNum" type="number" min="2" max="221" step="1" value="24" aria-label="色数上限（可直接键入数字）" />
           </div>
-          <p id="maxColorsHint" class="hint">这是「最多用几色」而不是精确色数；实际用色受色卡与原图色彩分布限制，可能少于上限（生成后见右侧「用量汇总」）。</p>
+          <p id="maxColorsHint" class="hint">这是「最多用几色」而不是精确色数；实际用色受色卡与原图色彩分布限制，可能少于上限（生成后可在「用量汇总」里看到）。</p>
         </section>
 
         <section class="group">
@@ -436,7 +458,7 @@
       <div id="canvasScroll" class="canvas-scroll">
         <canvas id="patternCanvas" class="pattern-canvas" width="640" height="420"></canvas>
         <div class="canvas-overlay">
-          <p id="patternHint" class="canvas-hint">尚未载入图片<br /><span class="muted">点击上方「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴</span></p>
+          <p id="patternHint" class="canvas-hint">尚未载入图片<br /><span class="muted">点击「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴</span></p>
           <button id="emptyState" class="btn btn-primary empty-cta" type="button">选择本地图片…</button>
         </div>
       </div>

@@ -2422,6 +2422,24 @@ function makeDoc(ids) {
   return { map, doc, created };
 }
 
+/* ── 加载顺序：桩的顺序必须与产物里 6 个 <script> 段的顺序逐项一致 ──────────
+   这条守的是「桩的模块可见性/初始化顺序与真实产物一致」——上一轮 #srceditHint 那条假红
+   就是这一类不一致造成的（桩没把 SourceEdit 给到 window，app 便正确地报了降级）。 */
+const PRODUCT_SEG_ORDER = (function () {
+  const out = [];
+  const re = /<script[^>]*>([\s\S]*?)<\/script>/g;
+  let m;
+  while ((m = re.exec(readFileSync(path.join(ROOT, 'index.html'), 'utf8')))) {
+    const seg = m[1];
+    /* 只认段头标记：段正文里可能出现别的文件名（如注释里提到 src/palette.js） */
+    const hit = MODULE_FILES.find((f) => seg.indexOf('===== src/' + f + ' =====') >= 0);
+    if (hit) out.push(hit);
+  }
+  return out;
+})();
+eq('加载顺序 | 桩的 MODULE_FILES 顺序 === 产物里 <script> 段的顺序（逐项）', MODULE_FILES.slice(), PRODUCT_SEG_ORDER);
+ok('加载顺序 | 产物里确实解析出了 6 段（否则上一条是空转）', PRODUCT_SEG_ORDER.length === MODULE_FILES.length, JSON.stringify(PRODUCT_SEG_ORDER));
+
 /* ── 在 vm 沙箱里跑真的 app.js（不污染 globalThis / 不碰真 DOM） ──────── */
 const dom = makeDoc(htmlIds);
 const timers = [];
@@ -2431,6 +2449,10 @@ const sandboxWin = {
   ColorKit: globalThis.ColorKit,          /* 批量修改要用 srgbToLab / deltaE 算推荐色 */
   Pipeline: globalThis.Pipeline,
   Render: null,
+  /* 真实产物把 6 个段都求值在同一个 window 里，所以 app.js 启动时能看见 window.SourceEdit。
+     桩里必须同样给它，否则 describeModules().srcEdit 永远是 false，
+     启动状态行会（正确地）报「原图调整不可用」——那是**桩的配置与产物不一致**造成的假红。 */
+  SourceEdit: globalThis.SourceEdit,
   setTimeout(fn) { const id = ++timerSeq; timers.push({ id, fn, cancelled: false }); return id; },
   clearTimeout(id) { for (const t of timers) if (t.id === id) t.cancelled = true; },
   performance: { now: () => 0 },
@@ -2471,7 +2493,15 @@ const st = ui.state();
 eq('boot 后 ui 元素全部解析到（0 个 missing）', st.missingUI.length, 0);
 eq('boot 后 state.booted === true', st.booted, true);
 ok('模块描述符 ok（palettes/pipeline/render 均在；SourceEdit 属可选项，不进 missing）', ui.modules().ok === true, JSON.stringify(ui.modules()));
-ok('SourceEdit 缺失时给出降级提示（不阻塞其它功能）', String(els.srceditHint.textContent).includes('SourceEdit'), els.srceditHint.textContent);
+/* 降级提示本轮从 #srceditHint 迁到启动状态行（#srceditHint 仍在，但开机文案走 statusText）：
+   两向都断：SourceEdit 真的缺 → 状态行必须说「原图调整不可用」；在 → 不许说。 */
+/* 按 app 自己的信号判断（state.srcEdit 是否真的挂上），不靠猜宿主有没有 SourceEdit 模块 */
+const srcEditMounted = !!st.srcEdit;
+ok('SourceEdit 未挂载时，启动状态行如实说明「原图调整不可用」并交代影响面（挂上了则不许出现）',
+  srcEditMounted
+    ? String(els.statusText.textContent).indexOf('原图调整不可用') < 0
+    : /原图调整不可用[：:]\s*裁剪\s*\/\s*旋转\s*\/\s*翻转已关闭/.test(String(els.statusText.textContent)),
+  'srcEdit 已挂载=' + srcEditMounted + ' 状态行=' + JSON.stringify(String(els.statusText.textContent).slice(0, 90)));
 
 /* ── 尺寸：单边上限 100（不再是 116）；「拼板规格」下拉已彻底删除 ─────────── */
 els.gridW.value = '200';
@@ -2497,9 +2527,9 @@ ok('尺寸 | 预设里保留 100 × 100 且标为 selected', /<option value="100
 ok('尺寸 | 摘要面板不再有「拼板 X × Y 板」那一行（板材概念已移除）',
   (function () {
     st.pattern = Pipeline.generateFromRGBA(synth(20, 20, (x) => [x * 9 % 256, 120, 60]), 20, 20, {});
-    ui.finishErase(0);                       /* 走真实收尾路径触发 renderSummary（它未导出） */
+    ui.renderSummary();                      /* 本轮已导出，直接调（不再借 finishErase 触发） */
     const box = String((els.summaryBox || {}).innerHTML || '');
-    return box.length > 0 && !/板/.test(box) && /成品尺寸/.test(box) && /图纸格数/.test(box);
+    return box.length > 0 && !/板/.test(box) && /成品尺寸/.test(box) && /格数/.test(box);
   })(), String((els.summaryBox || {}).innerHTML).replace(/\s+/g, ' ').slice(0, 200));
 
 /* ── Render 接口：恰好 4 个键，且**不得有 hitTest**（app.js 会优先调用它，
@@ -2767,21 +2797,24 @@ eq('降级 | 无 DOM 时 state().booted === false（确实没启动）', bareWin
 
 /* ── 5.1 双标签页（基本 / 高级）───────────────────────────────────────── */
 /* 上一轮新增、且本轮仍然存在的控件（#maxColorsVal 本轮已被数字框取代，故从这里移出） */
-const TAB_NEW_IDS = ['tabBasic', 'tabAdvanced', 'panelBasic', 'panelAdvanced', 'preprocessHint',
-  'chartTitle', 'toolNone', 'toolWand', 'toolEraser', 'eraserSize', 'toolHint'];
-ok('控件清单 | 上一轮新增、本轮仍在的 11 个 id 全在 ui.html 里', TAB_NEW_IDS.every((id) => htmlIds.includes(id)), TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
-ok('控件清单 | 且这 11 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
-/* 本轮增删后的精确计数：90（上一轮）+ 7（移动端：inputHint / saveOverlay / saveTip / saveImage / saveText / saveCopy / saveClose）= 97 */
-eq('控件清单 | ui.html 的 id 总数 = 105（101 + 风格两枚 + 智能建议两枚）', htmlIds.length, 105);
+/* 本轮 UI 删掉了 preprocessHint / toolHint（连同其它 hint 元素一起压缩版面），清单随之收敛 */
+const TAB_NEW_IDS = ['tabBasic', 'tabAdvanced', 'panelBasic', 'panelAdvanced',
+  'chartTitle', 'toolNone', 'toolWand', 'toolEraser', 'eraserSize'];
+ok('控件清单 | 上一轮新增、本轮仍在的 9 个 id 全在 ui.html 里', TAB_NEW_IDS.every((id) => htmlIds.includes(id)), TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 9 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
+/* 本轮 UI 压缩版面：删掉 cellLabelHint / toolHint / preprocessHint / exportHint / inputHint / dropHint 等
+   hint 元素（以及其它重排带来的增减），id 总数随之降到 95。 */
+eq('控件清单 | ui.html 的 id 总数 = 95（本轮删掉 10 个 hint/旧元素后的实际值）', htmlIds.length, 95);
 const STYLE_NEW_IDS = ['styleBead', 'styleFaithful', 'btnSmartSuggest', 'smartSuggestArea'];
-ok('控件清单 | 本轮新增的 2 个 id 全在 ui.html 里', STYLE_NEW_IDS.every((id) => htmlIds.includes(id)), STYLE_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
-ok('控件清单 | 且这 2 个 id 全部被 app.js 引用（没有一个是摆设）', STYLE_NEW_IDS.every((id) => appRefs.includes(id)), STYLE_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
+ok('控件清单 | 风格两枚 + 智能建议两枚共 4 个 id 全在 ui.html 里', STYLE_NEW_IDS.every((id) => htmlIds.includes(id)), STYLE_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 4 个 id 全部被 app.js 引用（没有一个是摆设）', STYLE_NEW_IDS.every((id) => appRefs.includes(id)), STYLE_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 ok('控件清单 | 本轮删除的 boardsSelect 已不在 id 集合里', !htmlIds.includes('boardsSelect') && !appRefs.includes('boardsSelect'));
 eq('控件清单 | 上一轮删除的 3 个 id 一个都不在产物 id 集合里',
   ['cellLabelMode', 'maxColorsVal', 'btnExportCompare'].filter((id) => htmlIds.includes(id)), []);
-const MOBILE_NEW_IDS = ['inputHint', 'saveOverlay', 'saveTip', 'saveImage', 'saveText', 'saveCopy', 'saveClose'];
-ok('控件清单 | 上一轮移动端新增的 7 个 id 全在 ui.html 里', MOBILE_NEW_IDS.every((id) => htmlIds.includes(id)), MOBILE_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
-ok('控件清单 | 且这 7 个 id 全部被 app.js 引用（没有一个是摆设）', MOBILE_NEW_IDS.every((id) => appRefs.includes(id)), MOBILE_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
+/* inputHint 本轮已删；移动端保存覆盖层那 6 个 id 都还在 */
+const MOBILE_NEW_IDS = ['saveOverlay', 'saveTip', 'saveImage', 'saveText', 'saveCopy', 'saveClose'];
+ok('控件清单 | 上一轮移动端新增的 6 个 id 全在 ui.html 里', MOBILE_NEW_IDS.every((id) => htmlIds.includes(id)), MOBILE_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 6 个 id 全部被 app.js 引用（没有一个是摆设）', MOBILE_NEW_IDS.every((id) => appRefs.includes(id)), MOBILE_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 /* 本轮（用户实测 4 个问题 → 作者改 app.js / srcedit.js / ui.html）新增的 5 个 id */
 const THIS_ROUND_NEW_IDS = ['batchMode', 'batchRecoRow', 'batchHint', 'btnEraseUndo', 'srcCropHint'];
 ok('控件清单 | 本轮新增的 5 个 id 全在 ui.html 里', THIS_ROUND_NEW_IDS.every((id) => htmlIds.includes(id)), THIS_ROUND_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
@@ -2819,9 +2852,9 @@ ok('控件 | #chartTitle 位于 #canvasScroll 之前（用户原话：放在预�
   UI_HTML.indexOf('id="chartTitle"') >= 0 && UI_HTML.indexOf('id="canvasScroll"') > UI_HTML.indexOf('id="chartTitle"'),
   UI_HTML.indexOf('id="chartTitle"') + ' < ' + UI_HTML.indexOf('id="canvasScroll"'));
 eq('控件 | boot 后 #showCodes.checked === true（「显示色号」默认开着）', els.showCodes.checked, true);
-ok('控件 | #preprocessHint 落在「预处理」组里', UI_HTML.indexOf('id="preprocessHint"') > UI_HTML.indexOf('<h2>预处理</h2>'));
-ok('控件 | #toolHint 与 #eraserSize 落在「抠图」组里（都在 panelBasic 内、panelAdvanced 之前）',
-  UI_HTML.indexOf('id="toolHint"') > UI_HTML.indexOf('<h2>抠图</h2>') && UI_HTML.indexOf('id="toolHint"') < UI_HTML.indexOf('<div id="panelAdvanced"'));
+;
+ok('控件 | #eraserSize 落在「抠图」组里（#toolHint 本轮已删，这条位置性质只剩 #eraserSize 一处守卫）',
+  UI_HTML.indexOf('id="eraserSize"') > UI_HTML.indexOf('<h2>抠图</h2>') && UI_HTML.indexOf('id="eraserSize"') < UI_HTML.indexOf('<div id="panelAdvanced"'));
 
 /* 分组标题：11 个旧标题都去过号，另加「抠图」组 */
 function tabPanelTitles(fromMark, toMark) {
@@ -3452,8 +3485,8 @@ fire(els.showRuler, 'change');
 eq('勾选框 | 取消「显示坐标刻度」只改 showRuler，不动 cellLabel', [ui.viewOpts().showRuler, ui.viewOpts().cellLabel], [false, 'code']);
 els.showRuler.checked = true;
 fire(els.showRuler, 'change');
-ok('勾选框 | #cellLabelHint 文案里不再出现「编号」（数字编号功能已删除）',
-  String(els.cellLabelHint.textContent).length > 0 && String(els.cellLabelHint.textContent).indexOf('编号') < 0, String(els.cellLabelHint.textContent));
+/* 原本这里断言 #cellLabelHint 文案不含「编号」。该元素本轮已删；「数字编号功能已删除」这条性质
+   仍由渲染层的断言守着（viewOpts().cellLabel 只有 code/none 两态、'index' 已不存在），故删除本行。 */
 erFlushAll();
 
 /* ── 色数上限：滑杆 ↔ 数字框 双向同步 + 越界夹取 ─────────────────────── */
@@ -3504,9 +3537,8 @@ ui.exportPng();
 ok('导出 | 真导出路径（exportPng → drawPattern）拿到的 cellLabel 也是 "code"',
   drawCalls.length > 0 && drawCalls[drawCalls.length - 1].opts.cellLabel === 'code',
   JSON.stringify(drawCalls.length ? drawCalls[drawCalls.length - 1].opts.cellLabel : null));
-ok('导出 | #exportHint 文案说明了「导出永远画色号、与预览开关无关」',
-  /色号.{0,8}永远画出/.test(String(els.exportHint.textContent)) && String(els.exportHint.textContent).indexOf('显示色号') >= 0,
-  String(els.exportHint.textContent));
+/* 原本断言 #exportHint 的文案。该元素本轮已删；这条性质改由**行为**守卫：
+   exportViewOpts().cellLabel 恒为 'code'、且真导出路径（exportPng → drawPattern）拿到的也是 'code'（见上两条）。 */
 els.showCodes.checked = true;
 fire(els.showCodes, 'change');
 erFlushAll();
@@ -3551,6 +3583,14 @@ const hexLum = (h) => {
   const f = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
   return 0.2126 * f(parseInt(n.slice(0, 2), 16) / 255) + 0.7152 * f(parseInt(n.slice(2, 4), 16) / 255) + 0.0722 * f(parseInt(n.slice(4, 6), 16) / 255);
 };
+const rulesOf = (sel) => {
+  const out = [];
+  const re = new RegExp('(^|[},\\s])' + sel.replace(/\./g, '\\.') + '\\s*\\{([^}]*)\\}', 'g');
+  let m;
+  while ((m = re.exec(UI_HTML))) out.push(m[2]);
+  if (!out.length && ruleBodyOf(sel)) out.push(ruleBodyOf(sel));
+  return out;
+};
 const groupRule = ruleBodyOf('.group');
 ok('卡片配色 | .group 规则能解析出来（下面几条不是空转）', !!groupRule, JSON.stringify(groupRule));
 const groupBgVar = /background\s*:\s*var\(\s*--([\w-]+)\s*\)/.exec(groupRule || '');
@@ -3572,10 +3612,27 @@ ok('卡片配色 | .group 的边框比 --line 更亮一档',
   !!groupBorder && hexLum(groupBorder) > hexLum(lineLit),
   groupBorder + ' lum=' + (groupBorder ? hexLum(groupBorder).toFixed(4) : '?') + ' vs ' + lineLit + ' lum=' + hexLum(lineLit).toFixed(4));
 for (const sel of ['.legend-row', '.sw-grid-wrap', '.progress']) {
+  /* 本轮 .legend-row 变成「可点击」后有多条同名规则；这里要挑**声明了 background** 的那条，
+     否则会撞上只写 cursor/border-radius 的新规则而误判（性质不变：它的底仍是更暗的 --panel2）。 */
   const body = ruleBodyOf(sel);
-  ok('卡片配色 | ' + sel + ' 仍用 var(--panel2)（没被一起改亮）', !!body && /background\s*:\s*var\(--panel2\)/.test(body), JSON.stringify(body));
+  ok('卡片配色 | ' + sel + ' 仍用 var(--panel2)（没被一起改亮；按「声明 background 的那条规则」判，多条同名规则时取并集）',
+    rulesOf(sel).some((r) => /background\s*:\s*var\(--panel2\)/.test(r)), JSON.stringify(rulesOf(sel)));
 }
 const inputRule = ruleBodyOf('input[type="number"],input[type="text"],select');
+/* 更强形式：不许有**任何**一条管图例行的规则把底色改成 var(--panel2) 以外的值
+   （本轮 ui.html 里曾同时存在一条只有 cursor/圆角、和一条真正声明背景的 .legend-row，
+   只取第一条会误判——所以这里对**所有**同名规则都查一遍） */
+ok('卡片配色 | 不存在任何一条 .legend-row 规则把底色改成 var(--panel2) 以外的值',
+  (function () {
+    const bad = [];
+    for (const body of rulesOf('.legend-row')) {
+      const m = /background\s*:\s*([^;]+)/.exec(body);
+      if (!m) continue;
+      const v = String(m[1]).trim();
+      if (!/var\(--panel2\)/.test(v) && !/var\(--accent-soft\)/.test(v) && !/rgba\(/.test(v)) bad.push(v);
+    }
+    return bad;
+  })(), []);
 ok('卡片配色 | 输入框 / 下拉仍用 var(--panel2)（没被一起改亮）', !!inputRule && /background\s*:\s*var\(--panel2\)/.test(inputRule), JSON.stringify(inputRule));
 ok('卡片配色 | --panel2 的 4 个其它使用者都还在引用它（一个都没被摘掉）',
   ['.legend-row', '.sw-grid-wrap', '.progress'].every((s) => new RegExp(s.replace(/\./g, '\\.') + '\\{[^}]*var\\(--panel2\\)').test(UI_HTML)) && /input\[type="text"\],select\{[^}]*var\(--panel2\)/.test(UI_HTML));
@@ -3702,11 +3759,10 @@ erFlushAll();
 /* ── 文案诚实性（服务器 + 触摸端）──────────────────────────────────────
    实现口径（app.js applyEnvironmentText）：桌面端三条入口都真的能用，照旧写；
    触摸端只剩「从相册选」这一条走得通，必须改掉；副标题在任何端都不许再写「纯本地运行」。 */
-const dropHintHtml = (UI_HTML.match(/<span id="dropHint"[^>]*>([^<]*)</) || [null, ''])[1];
+/* #dropHint 本轮已删（拖拽区改成纯图形区），这里只剩副标题这一处静态文案 */
 const subHtml = (UI_HTML.match(/<p class="app-sub"[^>]*>([^<]*)</) || [null, ''])[1];
-info('文案原文 | #dropHint(HTML) = ' + JSON.stringify(dropHintHtml) + ' ｜ 副标题(HTML) = ' + JSON.stringify(subHtml));
-ok('文案 | #dropHint 与副标题在 HTML 里都非空（下面的否定断言才有意义，不是空转）',
-  !!dropHintHtml && !!subHtml, JSON.stringify([dropHintHtml, subHtml]));
+info('文案原文 | 副标题(HTML) = ' + JSON.stringify(subHtml));
+ok('文案 | 副标题在 HTML 里非空（下面的否定断言才有意义，不是空转）', !!subHtml, JSON.stringify(subHtml));
 ok('文案 | 顶部副标题不再宣称「纯本地运行」（发到服务器后这句不成立）',
   !!subHtml && subHtml.indexOf('纯本地运行') < 0, JSON.stringify(subHtml));
 ok('文案 | 整个 ui.html 里都不再出现「纯本地运行」', UI_HTML.indexOf('纯本地运行') < 0);
@@ -3969,7 +4025,7 @@ const missingIn = (obj, names) => names.filter((n) => !obj || !obj[n]);
 const safeFire = (el, type, extra) => { if (el && typeof el.dispatchEvent === 'function') { fire(el, type, extra); return true; } return false; };
 const stateOf = (inst) => (inst.api && typeof inst.api.state === 'function') ? inst.api.state() : null;
 const OVERLAY_ELS = ['saveOverlay', 'saveTip', 'saveImage', 'saveText', 'saveCopy'];
-const UI_REQUIRED = OVERLAY_ELS.concat(['btnExportPng', 'btnExportCsv', 'patternCanvas', 'dropHint', 'inputHint', 'statusText', 'fileInput']);
+const UI_REQUIRED = OVERLAY_ELS.concat(['btnExportPng', 'btnExportCsv', 'patternCanvas', 'statusText', 'fileInput']);
 const coarseOverlayReady = missingIn(coarseEls, OVERLAY_ELS).length === 0;
 eq('兜底前置 | coarse 实例暴露了覆盖层与导出按钮（元素缺失时下面的行为断言会一起报假）', missingIn(coarseEls, UI_REQUIRED), []);
 const coarseState = stateOf(coarse);
@@ -3978,18 +4034,9 @@ if (coarseState) coarseState.pattern = pat6;
 /* ── 文案诚实性：触摸端不得再写触摸端做不到的入口（桌面端保留真实可用的提示）──────
    A 的实现是 applyEnvironmentText() 按端改写；所以否定断言只对 coarse 实例做，
    桌面端那两个入口（拖拽 / Ctrl+V）真的能用，断它们「不含」等于要求界面对桌面用户撒谎。 */
-ok('文案 | 触摸端 #dropHint 不含「Ctrl+V」（手机上做不到）',
-  String(coarseEls.dropHint.textContent).indexOf('Ctrl+V') < 0, String(coarseEls.dropHint.textContent));
-ok('文案 | 触摸端 #dropHint 不含「拖拽」（触摸端无法拖拽）',
-  !/拖拽/.test(String(coarseEls.dropHint.textContent)), String(coarseEls.dropHint.textContent));
-ok('文案 | 触摸端 #dropHint 给出真正可行的入口（从相册选）',
-  /选择图片|相册/.test(String(coarseEls.dropHint.textContent)), String(coarseEls.dropHint.textContent));
-ok('文案 | 触摸端 #inputHint 同样不含 Ctrl+V / 拖拽',
-  !/Ctrl\+V|拖拽/.test(String(coarseEls.inputHint.textContent)), String(coarseEls.inputHint.textContent));
-ok('文案 | 桌面端 #dropHint 仍保留 Ctrl+V 与拖拽（这两个入口在桌面真的能用）',
-  /Ctrl\+V/.test(String(els.dropHint.textContent)) && /拖拽/.test(String(els.dropHint.textContent)), String(els.dropHint.textContent));
-ok('文案 | 桌面端 #inputHint 同理保留 Ctrl+V（不做否定断言）',
-  /Ctrl\+V/.test(String(els.inputHint.textContent)), String(els.inputHint.textContent));
+/* 原本这里有 6 条「触摸端 #dropHint / #inputHint 的措辞」断言。这两个元素本轮已删，
+   触摸端/桌面端的入口文案差异现在**没有任何守卫**（如实记录，不假装还守着）。
+   仍保留的文案守卫：副标题不宣称「纯本地运行」、且说明不上传（见上）。 */
 
 /* 触摸端 PNG：覆盖层 + 可长按保存的 <img>；三条路径都要断言（toBlob → toDataURL → 诚实降级） */
 safeFire(coarseEls.btnExportPng, 'click');
@@ -4436,6 +4483,149 @@ ui.batchApply(recsNow[0].code);
 safeFire(els.btnEraseUndo, 'click');
 eq('抠图撤销 | 批量改色也能被 #btnEraseUndo 回退', [0, 1, 2].map((i) => codeOfCell(st.pattern, i)), batchUndoBefore);
 ui.setTool('none');
+
+/* ═════════ 本轮 UI：图例点击高亮 / 汇总条进 bar / 读数 0 占位 / 手机必读说明 ═════════ */
+
+/* ① 图例点击高亮 */
+els.lockAspect.checked = false;
+els.gridW.value = '12';
+els.gridH.value = '12';
+st.source = { data: synth(12, 12, (x, y) => [(x * 37) % 256, (y * 53) % 256, ((x + y) * 29) % 256]), width: 12, height: 12 };
+st.srcW = 12;
+st.srcH = 12;
+ui.regenerate();
+erFlushAll();
+st.viewOpts = ui.viewOpts();
+const hlPat = st.pattern;
+ok('图例高亮 | 前置 | 图纸上至少有 2 个色号（否则「点某个色号」没法验证）', !!(hlPat && hlPat.counts.length >= 2), hlPat ? String(hlPat.counts.length) : 'null');
+const hlTarget = hlPat.counts.slice().sort((a, b) => b.count - a.count)[0];
+const hlCode = String(hlTarget.code);
+const hlFakeRow = (code) => ({ className: 'legend-row', getAttribute: (n) => (n === 'data-code' ? code : null), parentNode: null });
+const lastStrokeRects = () => {
+  const rec = dom.map.patternCanvas._ctx._rec;
+  const st2 = rec.strokes[rec.strokes.length - 1] || [];
+  return st2.filter((op) => op[0] === 'R').length;
+};
+els.legendBox.innerHTML = Render.legendHTML(hlPat);
+fire(els.legendBox, 'click', { target: hlFakeRow(hlCode) });
+eq('图例高亮 | 点某色号 → state.highlightCode === 该色号', String(ui.highlightCode()), hlCode);
+const hlOwn = Array.from(hlPat.cells).filter((idx) => String(hlPat.colors[idx] && hlPat.colors[idx].code) === hlCode).length;
+eq('★图例高亮 | 高亮的格子数 === 该色号的 counts 数（两边各自独立算）', hlOwn, hlTarget.count);
+eq('★图例高亮 | 画布上真正描边的格子数 === 该色号的颗数（画出来的，不是只改状态位）', lastStrokeRects(), hlTarget.count);
+/* 桩的 innerHTML 只是字符串、不解析成 DOM，所以 app 用 classList 打的 pd-legend-picked 标记
+   在桩里看不到。这里改为断言「样式规则存在」+「状态位正确」（选中行的高亮由 renderLegend 按 state 重算）。 */
+ok('图例高亮 | .pd-legend-picked 的样式规则存在（选中行的视觉标记有样式兜着）',
+  /\.pd-legend-picked\b[^{]*\{/.test(UI_HTML), (UI_HTML.match(/\.pd-legend-picked[^{]*\{[^}]*\}/) || [''])[0].slice(0, 90));
+fire(els.legendBox, 'click', { target: hlFakeRow(hlCode) });
+eq('图例高亮 | 再点同一行 → 清除（highlightCode 回到空）', String(ui.highlightCode()), '');
+/* 四路清除：重新生成 / 切工具 / Esc / 换图 */
+const clearPaths = [];
+fire(els.legendBox, 'click', { target: hlFakeRow(hlCode) });
+ui.regenerate();
+erFlushAll();
+clearPaths.push(['重新生成', String(ui.highlightCode())]);
+fire(els.legendBox, 'click', { target: hlFakeRow(hlCode) });
+els.toolWand.checked = true;
+fire(els.toolWand, 'change');
+erFlushAll();
+clearPaths.push(['切工具', String(ui.highlightCode())]);
+fire(els.legendBox, 'click', { target: hlFakeRow(hlCode) });
+const escEvt = { type: 'keydown', key: 'Escape', code: 'Escape', keyCode: 27, preventDefault() {}, stopPropagation() {}, target: dom.doc.body, currentTarget: dom.doc };
+if (dom.doc.body && typeof dom.doc.body.dispatchEvent === 'function') dom.doc.body.dispatchEvent(escEvt);
+else if (typeof dom.doc.dispatchEvent === 'function') dom.doc.dispatchEvent(escEvt);
+erFlushAll();
+clearPaths.push(['Esc', String(ui.highlightCode())]);
+ok('★图例高亮 | 重新生成 / 切工具 / Esc 三路都能清除高亮', clearPaths.every((r) => r[1] === ''), JSON.stringify(clearPaths));
+fire(els.legendBox, 'click', { target: hlFakeRow(hlCode) });
+const hlBeforeNewImg = String(ui.highlightCode());
+ui.adoptImage({ data: synth(10, 10, (x, y) => [(x * 11) % 256, (y * 7) % 256, 90]), width: 10, height: 10 }, 10, 10);
+erFlushAll();
+eq('★图例高亮 | 换图也能清除（新图不继承上一张的图例高亮）', [hlBeforeNewImg === hlCode, String(ui.highlightCode())], [true, '']);
+
+/* ② 高亮与批量选区高亮共存：两层同时存在、互不清除 */
+st.viewOpts = ui.viewOpts();
+if (st.pattern && st.pattern.counts.length && typeof ui.batchSelect === 'function') {
+  const c2 = String(st.pattern.counts[0].code);
+  els.legendBox.innerHTML = Render.legendHTML(st.pattern);
+  ui.batchSelect(0);
+  const batchAfterSel = (st.batch.region || []).length;
+  fire(els.legendBox, 'click', { target: hlFakeRow(c2) });
+  ok('共存 | 批量选区与图例高亮可同时存在（两个状态各自为真）',
+    batchAfterSel > 0 && String(ui.highlightCode()) === c2,
+    JSON.stringify({ batch: batchAfterSel, hl: String(ui.highlightCode()) }));
+  fire(els.legendBox, 'click', { target: hlFakeRow(c2) });
+  ok('共存 | 清除图例高亮后，批量选区**不**被一起清掉（互不清除）', (st.batch.region || []).length > 0, String((st.batch.region || []).length));
+  ok('共存 | 清批量选区也不动图例高亮（反向）',
+    (function () {
+      fire(els.legendBox, 'click', { target: hlFakeRow(c2) });
+      const before = String(ui.highlightCode());
+      ui.clearBatch();
+      return before === c2 && String(ui.highlightCode()) === c2;
+    })());
+}
+
+/* ③ 汇总条进 bar：#summaryBox 与 #statusText 同级、胶囊 16px、质量三项不带括注 */
+ok('汇总条 | #summaryBox 与 #statusText 是 .status-line 的同级子元素',
+  (function () {
+    const iStatus = UI_HTML.indexOf('id="statusText"');
+    const iSum = UI_HTML.indexOf('id="summaryBox"');
+    if (!(iStatus > 0 && iSum > 0)) return false;
+    return UI_HTML.lastIndexOf('<div class="status-line">', iSum) === UI_HTML.lastIndexOf('<div class="status-line">', iStatus);
+  })());
+const statusLineCss = (UI_HTML.match(/\.status-line\{[^}]*\}/) || [''])[0];
+ok('汇总条 | .status-line 声明了 height:22px', /height\s*:\s*22px/.test(statusLineCss), statusLineCss.slice(0, 120));
+ok('汇总条 | .status-line 声明了 nowrap（单行不换行）', /nowrap/.test(statusLineCss), statusLineCss.slice(0, 120));
+const capsuleCss = (UI_HTML.match(/\.summary-inline \.summary-row\{[^}]*\}/) || [''])[0];
+ok('汇总条 | 胶囊（.summary-inline .summary-row）高度 = 16px', /height\s*:\s*16px/.test(capsuleCss), capsuleCss.slice(0, 140));
+st.viewOpts = ui.viewOpts();
+ui.renderSummary();
+const sumItems = (els.summaryBox && els.summaryBox._items) || [];
+const qItems = sumItems.filter((it) => it && it.prio === 1);
+eq('汇总条 | 质量三项恰好 3 个（孤立珠 / 块 / 毛边）', qItems.map((it) => String(it.label)).join(','), '孤立珠,块,毛边');
+ok('汇总条 | 质量三项的文案不含任何「（…）」括注（含义进 title）',
+  qItems.every((it) => String(it.label + it.value).indexOf('（') < 0 && String(it.label + it.value).indexOf('(') < 0),
+  JSON.stringify(qItems.map((it) => it.label + '=' + it.value)));
+ok('汇总条 | 质量项：孤立珠是百分数，块与毛边是两个整数',
+  /%$/.test(String(qItems[0] && qItems[0].value)) && /^\d+$/.test(String(qItems[1] && qItems[1].value)) && /^\d+$/.test(String(qItems[2] && qItems[2].value)),
+  JSON.stringify(qItems.map((it) => it.value)));
+
+/* ④ 读数 0 占位：没有内容时三个读数位必须 hidden（不是显示「无」「尚未」占一行） */
+const freshInst = mkInstance({}, false);
+const freshEls = freshInst.win.PindouUI.elements();
+ok('读数占位 | 全新启动：#lockInfo 是 hidden（没有锁定格时不占位）', freshEls.lockInfo.hidden === true, String(freshEls.lockInfo.hidden));
+ok('读数占位 | 全新启动：#recolorCurrent 是 hidden', freshEls.recolorCurrent.hidden === true, String(freshEls.recolorCurrent.hidden));
+ok('读数占位 | 全新启动：#batchHint 是 hidden', freshEls.batchHint.hidden === true, String(freshEls.batchHint.hidden));
+ok('读数占位 | 这三处都不以「无 / 尚未」这类占位文案充数',
+  [freshEls.lockInfo, freshEls.recolorCurrent, freshEls.batchHint].every((el) => String(el.textContent || '').trim() === ''),
+  JSON.stringify([String(freshEls.lockInfo.textContent || ''), String(freshEls.recolorCurrent.textContent || ''), String(freshEls.batchHint.textContent || '')]));
+
+/* ⑤ 三条手机必读说明：存在、没有 hidden、原文含关键词 */
+const hintParas = (UI_HTML.match(/<p class="hint"[^>]*>[^<]*<\/p>/g) || []);
+const pickHint = (kw) => hintParas.filter((h) => h.indexOf(kw) >= 0)[0] || '';
+const undoHint = pickHint('共用同一条撤销栈；手机上直接点');
+const altHint = pickHint('Alt / Shift + 点格子');
+ok('手机必读 | 抠图组的撤销说明存在、无 hidden、含「撤销」',
+  !!undoHint && undoHint.indexOf('hidden') < 0 && undoHint.indexOf('撤销') >= 0, undoHint.slice(0, 100));
+ok('手机必读 | 改色组的 Alt·Shift 说明存在、无 hidden、含「Alt」',
+  !!altHint && altHint.indexOf('hidden') < 0 && altHint.indexOf('Alt') >= 0, altHint.slice(0, 100));
+const cropHintTag = (UI_HTML.match(/<p id="srcCropHint"[^>]*>[^<]*<\/p>/) || [''])[0];
+ok('手机必读 | #srcCropHint 存在、无 hidden、含「裁剪模式」',
+  !!cropHintTag && cropHintTag.indexOf('hidden') < 0 && cropHintTag.indexOf('裁剪模式') >= 0, cropHintTag.slice(0, 110));
+ok('手机必读 | 三条都落在某个面板内（panelBasic 或 panelAdvanced），没有一条被漏在面板外',
+  (function () {
+    const iBasic = UI_HTML.indexOf('<div id="panelBasic"');
+    const iAdv = UI_HTML.indexOf('<div id="panelAdvanced"');
+    return iBasic > 0 && iAdv > iBasic && [undoHint, altHint, cropHintTag].every((h) => {
+      const at = UI_HTML.indexOf(h);
+      return h && at > iBasic && at > 0;
+    });
+  })());
+ok('手机必读 | 抠图撤销说明在基本页、另外两条在高级页（如实记录位置，不假装都在一页）',
+  (function () {
+    const iAdv = UI_HTML.indexOf('<div id="panelAdvanced"');
+    return UI_HTML.indexOf(undoHint) < iAdv && UI_HTML.indexOf(altHint) > iAdv && UI_HTML.indexOf(cropHintTag) > iAdv;
+  })(),
+  JSON.stringify([UI_HTML.indexOf(undoHint), UI_HTML.indexOf(altHint), UI_HTML.indexOf(cropHintTag), UI_HTML.indexOf('<div id="panelAdvanced"')]));
 
 /* ══════════════════════════════════════════ 第 7 组 · 原图编辑（srcedit.js） */
 startGroup('第 7 组 · 原图编辑（SourceEdit）');

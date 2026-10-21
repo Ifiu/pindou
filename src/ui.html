@@ -118,13 +118,14 @@
   }
   @media (hover:hover){.preview-title .preview-title-input:hover{border-color:var(--line)}}
   .preview-title .preview-title-input:focus{background:var(--panel);border-color:var(--accent);outline:none}
-  .panel-head{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
-  .status-line{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-size:12.4px}
-  .status{color:var(--muted)}
+  /* 预览区标题栏：左列是标题 + 状态 + 进度条，右列的空位放「用量汇总」。
+     汇总原来在右栏是一整块竖排卡片（五行数字吃掉半屏），挪进这块空位后左右两栏都瘦了；
+     用 flex-wrap 而不是固定网格：窄屏时汇总自然换到标题下面，不会把标题挤成一行两个字。 */
+  .panel-head{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:flex-start;margin-bottom:8px}
+  .panel-head-main{display:flex;flex-direction:column;gap:6px;flex:1 1 260px;min-width:0}
   .status.ok{color:var(--ok)}
   .status.warn{color:var(--warn)}
   .status.err{color:var(--err)}
-  .elapsed{color:var(--muted);font-variant-numeric:tabular-nums}
   .progress{height:3px;border-radius:2px;background:var(--panel2);overflow:hidden}
   .progress-bar{height:100%;width:35%;background:var(--accent);animation:pindou-slide 1s ease-in-out infinite}
   @keyframes pindou-slide{0%{margin-left:-35%}100%{margin-left:100%}}
@@ -152,7 +153,44 @@
   .source-canvas.crop-mode{cursor:crosshair;touch-action:none}
   .src-tools{margin-top:10px}
   .src-reset{width:100%;margin-top:8px}
+  /* ── 图纸预览的那一条 bar：状态 / 耗时 / 用量汇总同处一行 ─────────────────
+     · nowrap：任何宽度都不许折行（折行 = bar 变高 = 用户嫌的「占地方」）；
+     · height 固定 22px：空态、1 色、19 色、超长指标四种情况高度完全一致；
+     · 放不下时由 app.js 的 fitSummary() 从右往左整块丢指标（丢掉的进容器 title），
+       所以这里只需 overflow:hidden 兜底，不允许出现半个胶囊。
+     · 手机没有 hover：凡是「手机上必须知道」的操作信息一律写成版面上可见的小字，
+       不许只放 title（见抠图组 / 改色组 / #srcCropHint 三处）。 */
+  .status-line{display:flex;flex-wrap:nowrap;align-items:center;gap:8px;height:22px;font-size:12.4px;min-width:0;overflow:hidden}
+  /* err / warn：这条 bar 允许增高 —— 错误必须能看全（手机没有 hover，title 等于没有）。
+     增高只发生在 `.grow`（由 app.js 的 setStatus 按 kind 挂上去）：height:auto + min-height:22px，
+     文字换行而不是省略号。info / 默认不挂 .grow，仍是上面那条 height:22px。
+     ⇒「bar 高度恒定」这条只对 info 成立，对 err/warn **故意不成立**。 */
+  .status-line.grow{height:auto;min-height:22px;align-items:flex-start;padding:3px 0}
+  .status-line.grow .status-left{flex:1 1 auto;align-items:flex-start;overflow:visible}
+  .status-line.grow .status{white-space:normal;overflow:visible;text-overflow:clip;line-height:16px}
+  /* 窄屏上错误文案要和汇总条抢宽度：错误优先占满整行（下一次 info 状态汇总条就回来） */
+  @media (max-width: 1180px){.status-line.grow .summary-inline{display:none}}
+  .status-left{display:flex;flex-wrap:nowrap;align-items:center;gap:8px;flex:0 1 auto;min-width:0;overflow:hidden}
+  .status{color:var(--muted);line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .elapsed{color:var(--muted);font-variant-numeric:tabular-nums;line-height:16px;white-space:nowrap;flex:none}
+  /* ── 文案规则（写死在这里，改文案前先读）─────────────────────────────
+     ① 纯解释「功能是什么/怎么算」的静态小字：一律不留；
+     ② 动态读数（锁定数 / 目标色号 / 批量选区 / 原图调整状态）：没内容时整行 hidden，0 高度；
+     ③ **手机上必须知道的操作信息，不许只放 title**（手机没有 hover）——
+        目前仅三处例外，必须保持版面上可见：
+          · 抠图组：撤销快捷键 + 共用撤销栈 + 手机上用「撤销这一步」
+          · 改色组：Alt / Shift 点格锁定 / 解锁、Ctrl+Z
+          · #srcCropHint：手机上要先开「裁剪模式」才能框选
+     ④ 其余操作信息可压进 `title`（不占版面）。 */
   .summary{display:flex;flex-direction:column;gap:5px}
+  .summary-inline{flex:0 1 auto;margin-left:auto;flex-direction:row;flex-wrap:nowrap;align-items:center;
+    justify-content:flex-end;gap:6px;min-width:0;max-width:100%;overflow:hidden}
+  /* 胶囊用 inset 阴影代替 border：不占盒模型，于是胶囊高度 = 状态文字高度 = 16px，
+     两者在 22px 行里垂直居中后 rect.top 完全相等（不是靠 1px 余量）。 */
+  .summary-inline .summary-row{display:inline-flex;align-items:baseline;gap:5px;flex:none;
+    line-height:16px;height:16px;padding:0 8px;font-size:12.4px;border:0;
+    box-shadow:inset 0 0 0 1px var(--card-line);background:var(--card);border-radius:999px}
+  .summary-inline .summary-v{font-weight:600}
   /* 智能建议条：就地显示（不弹窗），和分组卡片同一套观感 */
   .suggest{margin-top:8px;padding:9px 11px;background:var(--panel2);border:1px solid var(--line);border-radius:9px}
   .suggest-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12.8px;color:var(--text)}
@@ -165,12 +203,24 @@
   .summary-k{color:var(--muted)}
   .summary-v{color:var(--text);font-variant-numeric:tabular-nums;text-align:right}
   .legend{max-height:340px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+  /* 内置降级图例（app.js 的 builtinLegendHTML）用的行与外框。render.js 的行自带内联样式。 */
   .legend-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
-  .legend-row{display:flex;align-items:center;gap:7px;font-size:12.2px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:5px 7px}
+  .legend-row{display:flex;align-items:center;gap:7px;font-size:12.2px;background:var(--panel2);border:1px solid var(--line);padding:5px 7px}
   .legend-code{font-weight:600;min-width:34px;font-variant-numeric:tabular-nums}
   .legend-sw{width:18px;height:18px;border-radius:4px;border:1px solid rgba(255,255,255,.25);flex:none}
   .legend-hex{color:var(--muted);font-size:11.4px}
   .legend-count{margin-left:auto;color:var(--text);font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* ── 可点击 + 选中态：光标 / 圆角 / 选中态**各自只在这里声明一次** ─────────────
+     别再加带 `.legend` 前缀的同类规则：前缀把特异性抬到 (0,2,0)，会反过来盖掉这里的值
+     （之前就因此出现过 5px 与 7px 冲突、以及两套选中态）。 */
+  .pd-legend-row,.legend-row{cursor:pointer;border-radius:7px;transition:background .15s,box-shadow .15s}
+  @media (hover:hover){.pd-legend-row:hover,.legend-row:hover{background:var(--accent-soft)}}
+  /* 唯一的「选中态」类：app.js 的 markLegendPick() 只加 pd-legend-picked。
+     旧的 `.on` 那套选中态没有任何代码会用到，已整条删除（别再引入第二套）。 */
+  .pd-legend-picked{outline:1px solid var(--accent);outline-offset:1px;background:rgba(120,190,255,.12)}
+  .pd-legend-picked .pd-legend-code{text-decoration:underline}
+  /* 行是 div、当前不可聚焦 → 暂时不会命中；保留是为了将来若把行做成按钮时选中框已在位。 */
+  .pd-legend-row:focus-visible,.legend-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
   .sw-grid-wrap{max-height:212px;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px;margin-top:6px}
   .sw-group{margin:0 0 8px}
@@ -247,9 +297,8 @@
       <p class="app-sub">图片在你的浏览器里处理，不会上传到服务器 · 选一张图 → MARD 色卡网格图纸 + 色号用量清单</p>
     </div>
     <div class="head-actions">
-      <button id="btnPickFile" class="btn btn-primary" type="button">选择图片…</button>
+      <button id="btnPickFile" class="btn btn-primary" type="button" title="也可以把图片文件直接拖进窗口，或按 Ctrl+V 粘贴">选择图片…</button>
       <input id="fileInput" class="file-input" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.avif,.heic,.heif" />
-      <span id="dropHint" class="drop-hint">也可拖拽图片到窗口，或按 Ctrl+V 粘贴</span>
     </div>
   </header>
 
@@ -265,11 +314,9 @@
       <div id="panelBasic" class="tabpanel" role="tabpanel" aria-labelledby="tabBasic">
         <section class="group">
           <h2>图片输入</h2>
-          <p id="inputHint" class="hint">三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。图片在你的浏览器里处理，不会上传到任何服务器。</p>
           <div class="btn-grid">
             <button id="btnSmartSuggest" class="btn btn-ghost" type="button" disabled>智能建议（按这张图给参数）</button>
           </div>
-          <p class="hint">「智能建议」只在你点它时才计算；算出来的参数也只有在建议条里点「应用」才会写进控件 —— 不点就什么都不变。</p>
           <div id="smartSuggestArea" class="suggest" hidden></div>
         </section>
 
@@ -292,10 +339,9 @@
         <section class="group">
           <h2>图纸风格</h2>
           <div class="radios" role="radiogroup" aria-label="图纸风格">
-            <label class="check"><input id="styleBead" type="radio" name="style" value="bead" checked /> 更像拼豆图纸（色块更硬、色号更少，好拼）</label>
-            <label class="check"><input id="styleFaithful" type="radio" name="style" value="faithful" /> 更还原原图（保留更多原图细节与噪点）</label>
+            <label class="check"><input id="styleBead" type="radio" name="style" value="bead" checked title="把小色块并掉、把相近的浅色调成一片：色号更少、更好拼。不改图纸尺寸；切换后自动重新生成" /> 更像拼豆图纸（色块更硬、色号更少，好拼）</label>
+            <label class="check"><input id="styleFaithful" type="radio" name="style" value="faithful" title="保留更多原图细节与杂色：更接近原图，色号通常更多。不改图纸尺寸；切换后自动重新生成" /> 更还原原图（保留更多原图细节与噪点）</label>
           </div>
-          <p class="hint">两种风格都不改<b>图纸尺寸</b>。区别在颜色：「更像拼豆图纸」会把小色块并掉、把相近的浅色调成一片，所以用到的<b>色号更少、更好拼</b>；「更还原原图」保留更多原图的杂色。切换后会自动重新生成。「用量汇总」里会给出这一次图纸的质量指标。</p>
         </section>
 
         <section class="group">
@@ -313,7 +359,6 @@
             <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="100" step="1" value="100" /></label>
           </div>
           <label class="check"><input id="lockAspect" type="checkbox" checked /> 保持原图宽高比</label>
-          <p class="hint">单边上限硬限制 100 格，超出会被自动压回。尺寸预设固定为正方形（29 / 58 / 87 / 100 四档），默认 100 × 100。</p>
         </section>
 
         <section class="group">
@@ -323,41 +368,39 @@
             <label class="check"><input id="showRuler" type="checkbox" checked /> 显示坐标刻度</label>
           </div>
           <label class="row" for="cellSize"><span>格子像素大小</span><output id="cellSizeVal">24px</output></label>
-          <input id="cellSize" type="range" min="8" max="48" step="1" value="24" />
-          <p id="cellLabelHint" class="hint">当前 24px，格内显示色号（如 A1）。色号需要格子 ≥ 20px 才会画出。</p>
+          <input id="cellSize" type="range" min="8" max="48" step="1" value="24" title="格子太小时格内色号会自动隐藏（渲染层按可读性判断），放大格子即可显示" />
         </section>
 
         <section class="group">
           <h2>抠图</h2>
           <div class="radios" role="radiogroup" aria-label="抠图工具">
-            <label class="check"><input id="toolNone" type="radio" name="pindouTool" value="none" checked /> 关闭（点击图纸不改动格子）</label>
-            <label class="check"><input id="toolWand" type="radio" name="pindouTool" value="wand" /> 魔术棒（点一格，清掉同色连通的一片）</label>
-            <label class="check"><input id="toolEraser" type="radio" name="pindouTool" value="eraser" /> 橡皮刷（按住拖动，擦掉划过的格子）</label>
+            <label class="check"><input id="toolNone" type="radio" name="pindouTool" value="none" checked title="点击图纸不会改动任何格子" /> 关闭（点击图纸不改动格子）</label>
+            <label class="check"><input id="toolWand" type="radio" name="pindouTool" value="wand" title="点一格：删掉与它上下左右相连（不斜连）的同色整片；单次最多一片，超过上限只处理前一部分" /> 魔术棒（点一格，清掉同色连通的一片）</label>
+            <label class="check"><input id="toolEraser" type="radio" name="pindouTool" value="eraser" title="按住拖动：擦掉划过的格子；一次拖动只算一步撤销，擦掉的格子会锁定（重新生成时保持为空）" /> 橡皮刷（按住拖动，擦掉划过的格子）</label>
           </div>
           <label class="row" for="eraserSize"><span>橡皮刷大小</span></label>
-          <select id="eraserSize">
+          <select id="eraserSize" title="橡皮刷的笔刷尺寸；越界部分自动裁掉，不会折行">
             <option value="1" selected>1 × 1（单格）</option>
             <option value="3">3 × 3</option>
             <option value="5">5 × 5</option>
           </select>
-          <p id="toolHint" class="hint">未开启任何图纸工具：点击格子不会有任何改动。</p>
           <div class="btn-grid">
-            <button id="btnEraseUndo" class="btn btn-ghost" type="button" disabled>撤销这一步</button>
+            <button id="btnEraseUndo" class="btn btn-ghost" type="button" disabled title="撤销这一步（Ctrl+Z，Mac 为 ⌘+Z）：与「画笔 / 批量修改」共用同一条撤销栈">撤销这一步</button>
           </div>
-          <p class="hint">手机上按不出 Ctrl+Z，而「撤销」按钮在「画笔 / 批量修改」组里、离抠图操作很远 —— 所以这里就近再给一个。它与全局「撤销」、Ctrl+Z 是同一条撤销路径（同一个历史栈），历史为空时同样置灰。</p>
+          <!-- 手机没有 hover：这条必须**可见**（用户点名的两处之一），不许只放 title -->
+          <p class="hint">撤销 Ctrl+Z（Mac ⌘+Z），与「画笔 / 批量修改」共用同一条撤销栈；手机上直接点上面的「撤销这一步」。</p>
         </section>
 
         <section class="group group-actions">
           <h2>导出</h2>
           <label class="row" for="exportScale"><span>分辨率倍数</span></label>
-          <select id="exportScale">
+          <select id="exportScale" title="导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；画布白边收紧到约 4%；坐标刻度跟随「显示坐标刻度」，色号永远画出（与预览的「显示色号」开关无关）">
             <option value="1">1×（格子 24px）</option>
             <option value="2" selected>2×（格子 48px）</option>
             <option value="4">4×（格子 96px）</option>
             <option value="8">8×（格子 192px）</option>
           </select>
           <label class="check"><input id="exportAnnotate" type="checkbox" checked /> 附色号用量清单（画进图里）</label>
-          <p id="exportHint" class="hint">导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。坐标刻度跟随「图纸显示」组的「显示坐标刻度」；色号永远画出（与预览的「显示色号」开关无关，见 app.js 注释）。</p>
           <button id="btnExportPng" class="btn" type="button">导出图纸 PNG</button>
           <button id="btnExportCsv" class="btn" type="button">导出用量清单 CSV</button>
         </section>
@@ -374,7 +417,6 @@
           <input id="saturation" type="range" min="-100" max="100" step="1" value="0" title="滑杆经过非线性压缩，小幅拖动更精细" />
           <label class="check"><input id="autoWB" type="checkbox" /> 自动白平衡</label>
           <label class="check"><input id="autoLevels" type="checkbox" /> 自动色阶</label>
-          <p id="preprocessHint" class="hint">三个滑杆经过非线性压缩：靠近 0 的一小段更精细，滑到底仍是满强度。读数就是实际生效值。</p>
         </section>
 
         <section class="group">
@@ -382,16 +424,14 @@
           <label class="check"><input id="quantizeEnabled" type="checkbox" checked /> 启用减色（限制色数上限）</label>
           <label class="row" for="maxColors"><span>色数上限</span></label>
           <div class="range-num">
-            <input id="maxColors" type="range" min="2" max="221" step="1" value="24" />
-            <input id="maxColorsNum" type="number" min="2" max="221" step="1" value="24" aria-label="色数上限（可直接键入数字）" />
+            <input id="maxColors" type="range" min="2" max="221" step="1" value="24" title="最多用几色（不是精确色数）：实际用色受色卡与原图内容限制，可能少于上限；结果见用量汇总" />
+            <input id="maxColorsNum" type="number" min="2" max="221" step="1" value="24" aria-label="色数上限（可直接键入数字）" title="最多用几色（不是精确色数）：实际用色可能少于上限；结果见用量汇总" />
           </div>
-          <p id="maxColorsHint" class="hint">这是「最多用几色」而不是精确色数；实际用色受色卡与原图色彩分布限制，可能少于上限（生成后可在「用量汇总」里看到）。</p>
         </section>
 
         <section class="group">
           <h2>色卡版本</h2>
           <select id="paletteSelect"></select>
-          <p id="paletteMeta" class="hint">色卡数据未加载</p>
         </section>
 
         <section class="group">
@@ -403,12 +443,11 @@
             <button id="viewZoomIn" class="btn" type="button">+ 放大</button>
             <button id="viewZoomFit" class="btn" type="button">适应窗口</button>
           </div>
-          <p class="hint">缩放只改变屏幕显示大小，不影响画布真实像素与导出分辨率。在图纸上滚动鼠标滚轮可以以光标为锚点缩放。</p>
         </section>
 
         <section class="group">
           <h2>画笔 / 批量修改</h2>
-          <label class="check"><input id="recolorMode" type="checkbox" /> 画笔模式（先在上面选好色号，再点击图纸格子改色）</label>
+          <label class="check"><input id="recolorMode" type="checkbox" title="选好色号后点图纸格子即可改色；按住 Alt 或 Shift 点格子可锁定 / 解锁该格" /> 画笔模式（选好色号后点格子改色）</label>
           <label class="check"><input id="batchMode" type="checkbox" /> 批量修改（先点图纸上一个格子，再选颜色，整片同色区域一起改）</label>
           <label class="row" for="recolorScope"><span>色板范围</span></label>
           <select id="recolorScope">
@@ -421,17 +460,18 @@
           <p id="recolorEmpty" class="hint" hidden>无匹配</p>
           <label class="row"><span>最近用过</span></label>
           <div id="recolorRecentRow" class="sw-recent"></div>
-          <p id="recolorCurrent" class="hint">当前目标色号：未选择</p>
+          <p id="recolorCurrent" class="hint" hidden></p>
           <label class="row"><span>批量修改的推荐色号（与原色最接近的 8 个）</span></label>
           <div id="batchRecoRow" class="sw-recent"></div>
-          <p id="batchHint" class="hint">批量修改：先点图纸上的一个格子，这里会出现 8 个最接近的色号；选一个即可把该格所在的整片同色区域（上下左右相连、不含斜连）一次改掉。</p>
+          <p id="batchHint" class="hint" hidden></p>
           <label class="check"><input id="lockToggle" type="checkbox" checked /> 改色 / 批量修改后锁定这些格（重算时不被覆盖）</label>
           <div class="btn-grid">
             <button id="btnUnlockAll" class="btn btn-ghost" type="button">清除所有锁定</button>
-            <button id="btnUndo" class="btn btn-ghost" type="button" disabled>撤销</button>
+            <button id="btnUndo" class="btn btn-ghost" type="button" disabled title="撤销上一步（Ctrl+Z，Mac 为 ⌘+Z）：与「抠图 / 批量修改」共用同一条撤销栈">撤销</button>
           </div>
-          <p id="lockInfo" class="hint">已锁定 0 格</p>
-          <p class="hint">提示：在「画笔模式」下按住 Alt 或 Shift 点击格子可单独锁定 / 解锁该格（批量修改不参与这个操作）。撤销快捷键 Ctrl+Z（Mac 为 ⌘+Z）；画笔模式、批量修改、抠图共用同一撤销栈，手机上也可以用「抠图」组里的「撤销这一步」。</p>
+          <p id="lockInfo" class="hint" hidden></p>
+          <!-- 手机没有 hover：这条必须**可见**（用户点名的两处之一），不许只放 title -->
+          <p class="hint">Alt / Shift + 点格子＝锁定 / 解锁；撤销 Ctrl+Z（Mac ⌘+Z）。</p>
         </section>
 
         <section class="group group-actions">
@@ -444,12 +484,18 @@
 
     <main id="dropZone" class="panel canvas-panel">
       <div class="panel-head">
-        <h2>图纸预览</h2>
-        <div class="status-line">
-          <span id="statusText" class="status">就绪</span>
-          <span id="elapsedText" class="elapsed"></span>
+        <div class="panel-head-main">
+          <h2>图纸预览</h2>
+          <!-- 一条水平 bar：状态 + 耗时 + 用量汇总全在同一行，nowrap、高度固定 22px（不许被内容撑高） -->
+          <div class="status-line">
+            <span class="status-left">
+              <span id="statusText" class="status">就绪</span>
+              <span id="elapsedText" class="elapsed"></span>
+            </span>
+            <div id="summaryBox" class="summary summary-inline" aria-label="用量汇总"></div>
+          </div>
+          <div id="progressWrap" class="progress" hidden><div id="progressBar" class="progress-bar"></div></div>
         </div>
-        <div id="progressWrap" class="progress" hidden><div id="progressBar" class="progress-bar"></div></div>
       </div>
       <div class="preview-title">
         <label class="preview-title-label" for="chartTitle">图纸标题</label>
@@ -458,11 +504,9 @@
       <div id="canvasScroll" class="canvas-scroll">
         <canvas id="patternCanvas" class="pattern-canvas" width="640" height="420"></canvas>
         <div class="canvas-overlay">
-          <p id="patternHint" class="canvas-hint">尚未载入图片<br /><span class="muted">点击「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴</span></p>
-          <button id="emptyState" class="btn btn-primary empty-cta" type="button">选择本地图片…</button>
+          <button id="emptyState" class="btn btn-primary empty-cta" type="button" title="也可以把图片文件直接拖进窗口，或按 Ctrl+V 粘贴">选择本地图片…</button>
         </div>
       </div>
-      <p class="hint">参数调整会自动重算（防抖 200ms）。「画笔 / 批量修改」组里打开「画笔模式」后点格子改单格、打开「批量修改」后点一格再选颜色可整片改色；「抠图」组里可选魔术棒、橡皮刷，或就近用「撤销这一步」。擦掉的格子会置空并在重新生成时保持为空。</p>
     </main>
 
     <aside class="panel side">
@@ -470,12 +514,10 @@
         <h2>原图调整</h2>
         <div class="source-wrap">
           <canvas id="sourceCanvas" class="source-canvas" width="240" height="180"></canvas>
-          <p id="sourceHint" class="canvas-hint small">尚未载入图片</p>
         </div>
         <div class="src-tools">
           <label class="check"><input id="srcCropMode" type="checkbox" /> 裁剪模式（打开后在原图上拖拽框选要保留的区域）</label>
           <label class="check"><input id="srcAspectSquare" type="checkbox" /> 正方形裁剪框</label>
-          <p id="srcCropHint" class="hint">触摸屏：手机上一根手指落在原图上用来滚动页面；要框选请先打开上面的「裁剪模式」—— 打开后单指拖动才会画框，页面也不会跟着滚。鼠标 / 触控笔不受这个开关影响。</p>
           <div class="btn-grid">
             <button id="srcRotateL" class="btn" type="button">↺ 左转 90°</button>
             <button id="srcRotateR" class="btn" type="button">↻ 右转 90°</button>
@@ -483,16 +525,14 @@
             <button id="srcFlipV" class="btn" type="button">垂直翻转</button>
           </div>
           <button id="srcReset" class="btn btn-ghost src-reset" type="button">重置原图调整</button>
-          <p id="srceditHint" class="hint">原图调整模块状态未知</p>
+          <!-- 手机没有 hover、也没法「拖一下试试」：这条必须**可见**，否则手机用户会以为裁剪坏了 -->
+          <p id="srcCropHint" class="hint">手机上：先打开「裁剪模式」，再用一根手指在原图上拖出裁剪框（不打开时拖动是滚页面）。</p>
+          <p id="srceditHint" class="hint" hidden></p>
         </div>
       </section>
       <section class="block">
-        <h2>用量汇总</h2>
-        <div id="summaryBox" class="summary"></div>
-      </section>
-      <section class="block">
         <h2>色号图例</h2>
-        <div id="legendBox" class="legend"></div>
+        <div id="legendBox" class="legend" title="点任意色号可在预览里高亮该色号，再点一次取消"></div>
       </section>
     </aside>
   </div>

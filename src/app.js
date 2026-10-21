@@ -23,10 +23,6 @@
   var MAX_CELL_PX = 48;      /* 格子像素滑杆上限（render.js 已放宽到 256，48 是「看一眼」的舒适上限） */
   var DEFAULT_CELL_PX = 24;
   var LABEL_MIN_PX = 9;      /* 内置降级渲染器写字的最小格子像素 */
-  /* render.js 实测阈值（code 模式 20px）。它会在 drawPattern 的返回值里
-     自报 labelMinPx，这里只是「还没渲染过」时的兜底：提示文案绝不能和真实渲染层错开。
-     只剩 code 一档：用户点名要删掉的第三档标签模式已从界面与代码里彻底移除。 */
-  var LABEL_MIN_FALLBACK = { code: 20 };
 
   var ZOOM_MIN = 0.25;              /* 缩放下限的「默认」值：能看全的比例比它还小时，下限会被放宽到那个比例 */
   var ZOOM_MAX = 4;
@@ -64,6 +60,10 @@
      这两个字符串是自测识别高亮的锚点，别随手改。 */
   var HIGHLIGHT_FILL = 'rgba(91,155,243,0.38)';
   var HIGHLIGHT_STROKE = 'rgba(255,255,255,0.85)';
+  /* 图例高亮层：压暗其它色号（半透明黑）+ 给目标色号描一圈暖色边。与上面的批量选区颜色区分开，
+     两层同时出现时用户能分辨「我点的色号」和「批量选区」。同样别随手改。 */
+  var LEGEND_DIM_FILL = 'rgba(8,10,14,0.62)';
+  var LEGEND_MARK_STROKE = 'rgba(255,204,102,0.95)';
 
   /* 方向如实说明的文案（只有「<img> 那条路失败 + 只能走不带 options 的 createImageBitmap」才用得上）。
      界面上本来就有旋转按钮，所以这句是有出路的、可执行的。 */
@@ -135,7 +135,9 @@
     patternQuantize: null,
     renderFallback: false,
     renderTooLarge: false,
-    labelMinPx: {},      /* 渲染层自报的格内文字阈值：{ code: 20 } */
+    /* 图例里被点中的色号：非空时预览把其它格子压暗、只留这个色号（点第二下 / Esc 取消）。
+       只存色号字符串，不存下标 —— 重新生成后色表顺序会变，下标会指错色。 */
+    highlightCode: '',
     viewOpts: { cellPx: DEFAULT_CELL_PX, cellLabel: 'code', showCodes: true, showRuler: true, showGrid: true, annotate: false },
     /* 预览缩放：只影响 canvas 的 CSS 尺寸，不影响 canvas.width（== 导出与命中判定用的真实像素） */
     viewZoom: ZOOM_DEFAULT,
@@ -281,41 +283,12 @@
     } catch (e) { return false; }
   }
 
-  function narrowScreen() {
-    try {
-      if (typeof win.matchMedia !== 'function') return false;
-      var mq = win.matchMedia('(max-width: 1180px)');
-      return !!(mq && mq.matches === true);
-    } catch (e) { return false; }
-  }
-
-  /* 文案该按触摸端写还是按桌面写：任一成立就算「手指/窄屏」。
-     两件事都要换说法——「拖进窗口」和「Ctrl+V」在手机上物理上做不到。 */
-  function touchOrNarrow() { return coarsePointer() || narrowScreen(); }
-
   /* 文案只说实话：
      · 桌面端三条入口（点击 / 拖进来 / Ctrl+V）都真的能用，照旧写。
      · 触摸端只剩「点选择图片…从相册选」这一条真的走得通，就只写这一条。
      · 顶部副标题在任何端都不许再写「纯本地运行」——发到服务器后打开页面本来就需要联网；
        还能兑现的那句承诺是「图片不会上传」，所以只说这一句。 */
   function applyEnvironmentText() {
-    var touch = touchOrNarrow();
-    if (ui.dropHint) {
-      setText(ui.dropHint, touch
-        ? '点「选择图片…」从相册里选一张'
-        : '也可拖拽图片到窗口，或按 Ctrl+V 粘贴');
-    }
-    if (ui.patternHint) {
-      setText(ui.patternHint, touch
-        ? '尚未载入图片\n点「选择图片…」从相册里选一张'
-        : '尚未载入图片\n点击「选择图片…」、把图片拖到这里，或按 Ctrl+V 粘贴');
-    }
-    if (ui.inputHint) {
-      setText(ui.inputHint, (touch
-        ? '入口只有一个：点「选择图片…」从相册里选一张。'
-        : '三种入口：点击「选择图片…」、把图片拖进窗口、或按 Ctrl+V 粘贴。')
-        + '图片在你的浏览器里处理，不会上传到任何服务器。');
-    }
     /* 导出兜底层只对触摸端存在：桌面端连这条提示都不该出现。
        （覆盖层本身也由 coarsePointer() 把关，这里是第二道同源的门。） */
     if (ui.saveTip) ui.saveTip.hidden = !coarsePointer();
@@ -546,7 +519,6 @@
     }
     sel.innerHTML = html;
     if (prev && hasOptionValue(sel, prev)) sel.value = prev;
-    syncPaletteMeta();
   }
 
   function hasOptionValue(sel, v) {
@@ -554,23 +526,6 @@
     if (!opts) return false;
     for (var i = 0; i < opts.length; i++) { if (opts[i].value === v) return true; }
     return false;
-  }
-
-  function syncPaletteMeta() {
-    if (!ui.paletteMeta) return;
-    var mods = describeModules();
-    var p = currentPalette();
-    if (!mods.palettes || !p) {
-      setText(ui.paletteMeta, '色卡数据未加载，暂时无法生成图纸。' + DISCLAIMER);
-      return;
-    }
-    var parts = ['共 ' + (p.count || (p.colors || []).length) + ' 色'];
-    if (p.source) parts.push('来源：' + p.source);
-    if (p.license) parts.push('许可：' + p.license);
-    var text = parts.join(' · ');
-    if (p.disclaimer) text += '。' + p.disclaimer;
-    else text += '。' + DISCLAIMER;
-    setText(ui.paletteMeta, text);
   }
 
   function findPaletteColor(paletteId, code) {
@@ -626,33 +581,6 @@
     return (ui.showCodes && ui.showCodes.checked) ? 'code' : 'none';
   }
 
-  /* 格内文字阈值：优先用渲染层自报的值（按模式分别缓存），没有就用实测兜底值 */
-  function labelMinPx() {
-    var label = cellLabelOf();
-    if (label === 'none') return 0;
-    var cached = state.labelMinPx[label];
-    if (typeof cached === 'number' && cached > 0) return cached;
-    return LABEL_MIN_FALLBACK[label] || 20;
-  }
-
-  /* 说的只有一件事：色号需要格子 ≥ min px 才会画（min 取渲染层自报的真实阈值） */
-  function syncCellLabelHint() {
-    if (!ui.cellLabelHint) return;
-    var cell = cellSizeValue();
-    var label = cellLabelOf();
-    var min = labelMinPx();
-    var need = '色号需要格子 ≥ ' + min + 'px 才会画出。';
-    var text;
-    if (label === 'none') {
-      text = '当前不显示色号（格子 ' + cell + 'px）。' + need;
-    } else if (cell < min) {
-      text = '格子太小（' + cell + 'px），色号已隐藏：' + need;
-    } else {
-      text = '当前 ' + cell + 'px，格内显示色号（如 A1）。' + need;
-    }
-    setText(ui.cellLabelHint, text);
-  }
-
   function syncLabels() {
     setText(ui.brightnessVal, signed(effSlider(ui.brightness, 0)));
     setText(ui.contrastVal, signed(effSlider(ui.contrast, 0)));
@@ -662,9 +590,6 @@
     if (ui.maxColorsNum) setVal(ui.maxColorsNum, String(maxColorsSliderValue()));
     setText(ui.cellSizeVal, cellSizeValue() + 'px');
     setText(ui.viewZoomVal, zoomPercentText());
-    syncCellLabelHint();
-    syncMaxColorsHint();
-    syncPreprocessHint();
   }
 
   /* ------------------------------------------------------- 预处理滑杆压缩 */
@@ -684,14 +609,6 @@
   /* 滑杆 → 生效值的唯一入口：buildOpts 与读数都走它，避免「读数 50 实际 33」这种撒谎的界面 */
   function effSlider(el, fallback) {
     return effCurve(num(el, (fallback === undefined) ? 0 : fallback));
-  }
-
-  function syncPreprocessHint() {
-    if (!ui.preprocessHint) return;
-    setText(ui.preprocessHint, '滑杆经过非线性压缩（幂次 ' + EFF_POW + '）：靠近 0 的一小段更精细，滑到底仍是满强度。'
-      + '当前生效值 亮度 ' + signed(effSlider(ui.brightness, 0))
-      + ' / 对比度 ' + signed(effSlider(ui.contrast, 0))
-      + ' / 饱和度 ' + signed(effSlider(ui.saturation, 0)) + '。');
   }
 
   function signed(v) { return (v > 0 ? '+' : '') + v; }
@@ -739,23 +656,6 @@
     if (ui.maxColors) ui.maxColors.disabled = !qOn;
     if (ui.maxColorsNum) ui.maxColorsNum.disabled = !qOn;
     if (ui.eraserSize) ui.eraserSize.disabled = (state.tool !== TOOL_ERASER);
-    syncMaxColorsHint();
-  }
-
-  /* 「色数上限」控件下的小字：说的是「设置」而不是「结果」。
-     结果那一侧（实际用了几色、差额怎么解释）在用量汇总里，用生成时真正生效的值。
-     这里的 N 走 quantizeOpts()：它才是实际会送进 Pipeline 的值（没动过控件时跟随 pipeline 默认值）。 */
-  function syncMaxColorsHint() {
-    if (!ui.maxColorsHint) return;
-    var q = quantizeOpts();
-    var text;
-    if (!q.enabled) {
-      text = '未启用减色：不使用色数上限，实际用色由算法与色卡决定。';
-    } else {
-      text = '这是「最多用几色」而不是精确色数；'
-        + '实际用色受色卡与原图色彩分布限制，可能少于上限（生成后可在「用量汇总」里看到）。';
-    }
-    setText(ui.maxColorsHint, text);
   }
 
   function syncMethodState() { syncEnabledState(); }
@@ -831,18 +731,6 @@
       showGrid: true,
       paletteId: state.pattern ? state.pattern.paletteId : paletteIdForOpts()
     };
-  }
-
-  function syncExportHint() {
-    if (!ui.exportHint) return;
-    var scale = exportScaleValue();
-    var cell = EXPORT_BASE_CELL * scale;
-    var tail = '导出固定按「格子 24px × 倍数」离屏重绘，与预览缩放无关；白边收紧到约 4%。'
-      + '坐标刻度跟随「图纸显示」组的「显示坐标刻度」；色号永远画出（与预览的「显示色号」开关无关）。';
-    var p = state.pattern;
-    if (!p) { setText(ui.exportHint, tail); return; }
-    setText(ui.exportHint, '当前设置：格子 ' + cell + 'px（24 × ' + scale + '），网格区约 '
-      + (p.w * cell) + ' × ' + (p.h * cell) + ' 像素 / ' + (p.w * p.h) + ' 格。' + tail);
   }
 
   function gridDims() {
@@ -987,10 +875,42 @@
 
   /* ----------------------------------------------------------- 状态提示区 */
 
+  /* 状态条（.status-line）的惰性引用：err/warn 时要给它挂 .grow 才能增高。
+     从 #statusText 往上找（真实 DOM 里是 #statusText → .status-left → .status-line）；
+     找不到就当没有（降级 DOM / 桩），此时只是不增高，不影响文案本身。 */
+  var statusBarEl = null;
+  var statusBarResolved = false;
+  function statusBarOf() {
+    if (statusBarResolved) return statusBarEl;
+    statusBarResolved = true;
+    var n = ui.statusText;
+    var guard = 0;
+    while (n && guard++ < 5) {
+      var cls = (n.className && typeof n.className === 'string') ? n.className : '';
+      var hit = (n.classList && typeof n.classList.contains === 'function')
+        ? n.classList.contains('status-line')
+        : /(^|\s)status-line(\s|$)/.test(cls);
+      if (hit) { statusBarEl = n; return n; }
+      n = n.parentNode;
+    }
+    statusBarEl = null;
+    return null;
+  }
+
   function setStatus(text, kind) {
     state.status = { text: String(text), kind: kind || 'info' };
     if (!ui.statusText) return;
     setText(ui.statusText, state.status.text);
+    /* 完整原文永远进 title（info 下被省略号截断时鼠标可看全）；但这只是兜底 —— */
+    if (ui.statusText.setAttribute) ui.statusText.setAttribute('title', state.status.text);
+    var grow = (kind === 'err' || kind === 'warn');
+    var bar = statusBarOf();
+    /* err / warn 才允许这条 bar 增高，让错误/警告**完整换行显示**（手机没有 hover）；
+       info / ok / 默认一律收回到 22px 单行 —— 汇总条那行的恒定高度只对 info 成立。 */
+    if (bar && bar.classList && typeof bar.classList.add === 'function') {
+      if (grow) bar.classList.add('grow');
+      else bar.classList.remove('grow');
+    }
     if (hasClassList(ui.statusText)) {
       ui.statusText.classList.remove('ok');
       ui.statusText.classList.remove('warn');
@@ -1010,9 +930,7 @@
   }
 
   function setCanvasPlaceholders() {
-    if (ui.patternHint) ui.patternHint.hidden = !!state.pattern;
     if (ui.emptyState) ui.emptyState.hidden = !!state.source;
-    if (ui.sourceHint) ui.sourceHint.hidden = !!state.source;
   }
 
   /* ------------------------------------------------------- 计时 / 防抖调度 */
@@ -1128,7 +1046,8 @@
     syncRecolorPicker(pattern);
     updateLockInfo();
     syncUndoButton();
-    syncExportHint();
+    /* 重新生成：上一张图纸的图例高亮不能再留着（色表顺序与色号都会变） */
+    clearLegendHighlight();
     setElapsed(now() - t0);
 
     var stats = pattern.stats || {};
@@ -1488,29 +1407,12 @@
        魔术棒 / 画笔模式 / 批量修改都是一次点击，保留默认滚动（用户还得单指滑动看大图）。
        用加/去 class 切换，绝不把 touch-action:none 写死在 CSS 里。 */
     if (ui.patternCanvas && hasClassList(ui.patternCanvas)) toggleCls(ui.patternCanvas, TOUCH_DRAG_CLASS, v === TOOL_ERASER);
-    syncToolHint();
+    /* 切工具时清掉图例高亮：高亮是「追一个色号」的临时视图，换了工具就不该继续占着画面 */
+    clearLegendHighlight();
+    /* 批量修改的指引只在批量模式下出现（其余时候那一行 hidden，不占版面） */
+    syncBatchHint();
     updateLockInfo();
     if (changed && !silent) setStatus('图纸工具：' + toolName(v), 'info');
-  }
-
-  function syncToolHint() {
-    if (!ui.toolHint) return;
-    var t = toolOf();
-    var text;
-    if (t === TOOL_WAND) {
-      text = '魔术棒：点击图纸上的一格，会删掉与它上下左右相连（不斜连）、色号相同的整片区域。单次最多擦除 ' + WAND_MAX + ' 格。';
-    } else if (t === TOOL_ERASER) {
-      text = '橡皮刷：在图纸上按住拖动即可擦掉划过的格子（当前 ' + brushSizeValue() + ' × ' + brushSizeValue()
-        + '，越界自动裁剪）。整个一次拖动只算一步撤销。';
-    } else if (t === TOOL_RECOLOR) {
-      text = '当前工具：画笔模式（在「画笔 / 批量修改」组的色板里选目标色号后点击格子，改的就是这一格）。要抠图请改选「魔术棒」或「橡皮刷」。';
-    } else if (t === TOOL_BATCH) {
-      text = '当前工具：批量修改（先点图纸上一格选定整片同色区域，再选颜色 → 整片一起改）。单次最多 ' + WAND_MAX
-        + ' 格；再点另一格可以切换选区。';
-    } else {
-      text = '未开启任何图纸工具：点击格子不会有任何改动。擦掉的格子会置空并锁定，重新生成时保持为空。';
-    }
-    setText(ui.toolHint, text);
   }
 
   function brushSizeValue() {
@@ -1753,12 +1655,15 @@
     }
     state.lockCount = n;
     if (!ui.lockInfo) return;
+    /* 读数：0 格时整行 hidden（不留「已锁定 0 格」占位），有锁才显示 */
+    if (n === 0) { ui.lockInfo.hidden = true; setText(ui.lockInfo, ''); return; }
     var tool = toolOf();
     var lockOn = !(ui.lockToggle && !ui.lockToggle.checked);
     var text = '已锁定 ' + n + ' 格';
-    if (tool === TOOL_RECOLOR) text += '（画笔模式已开启' + (lockOn ? '，点击后自动锁定' : '，点击不锁定') + '）';
-    else if (tool === TOOL_BATCH) text += '（批量修改已开启' + (lockOn ? '，改过的格会自动锁定' : '，改过不锁定') + '）';
-    else if (tool !== TOOL_NONE) text += '（当前工具：' + toolName(tool) + '，擦掉的格子会自动锁定）';
+    if (tool === TOOL_RECOLOR) text += '（画笔模式' + (lockOn ? '：点击后自动锁定' : '：点击不锁定') + '）';
+    else if (tool === TOOL_BATCH) text += '（批量修改' + (lockOn ? '：改过的格自动锁定' : '：改过不锁定') + '）';
+    else if (tool !== TOOL_NONE) text += '（' + toolName(tool) + '：擦掉的格子自动锁定）';
+    ui.lockInfo.hidden = false;
     setText(ui.lockInfo, text);
   }
 
@@ -1932,12 +1837,14 @@
     box.innerHTML = html;
   }
 
+  /* 「当前目标色号」是读数：没选色号时直接 hidden（不占一行），选了才显示 */
   function syncRecolorCurrent() {
     if (!ui.recolorCurrent) return;
     var code = state.recolor.selected;
-    if (!code) { setText(ui.recolorCurrent, '当前目标色号：未选择'); return; }
+    if (!code) { ui.recolorCurrent.hidden = true; setText(ui.recolorCurrent, ''); return; }
     var c = findPaletteColor(paletteIdForOpts(), code);
-    setText(ui.recolorCurrent, '当前目标色号：' + code + (c && c.hex ? (' · ' + c.hex) : ''));
+    ui.recolorCurrent.hidden = false;
+    setText(ui.recolorCurrent, '目标色号 ' + code + (c && c.hex ? (' · ' + c.hex) : ''));
   }
 
   function recolorCode() {
@@ -2060,18 +1967,17 @@
     box.innerHTML = html;
   }
 
-  /* 空闲 / 已选区的文案。冷启动文案与 HTML 里的初始文案一致（首屏不空）。 */
-  var BATCH_IDLE_TEXT = '批量修改：先点图纸上的一个格子，这里会出现 8 个最接近的色号；'
-    + '选一个即可把该格所在的整片同色区域（上下左右相连、不含斜连）一次改掉。';
-
+  /* 只在「有话说」的时候显示（否则 hidden，0 高度）：空闲说明整段删掉，
+     批量修改开启后给一句操作指引，选区一旦存在就切换成读数。 */
   function syncBatchHint() {
     if (!ui.batchHint) return;
     var p = state.pattern;
     var n = (state.batch.region && state.batch.region.length) ? state.batch.region.length : 0;
     if (!n) {
-      if (toolOf() !== TOOL_BATCH) { setText(ui.batchHint, BATCH_IDLE_TEXT); return; }
-      var extra = colorKit() ? '' : '（色彩模块未加载：这里给不出相近色推荐，但上方色板仍然可用。）';
-      setText(ui.batchHint, '批量修改已开启：点图纸上的一个格子选定整片同色区域（上下左右相连）。' + extra);
+      if (toolOf() !== TOOL_BATCH) { ui.batchHint.hidden = true; setText(ui.batchHint, ''); return; }
+      var extra = colorKit() ? '' : '（色彩模块未加载：这里给不出相近色推荐，但色板仍然可用。）';
+      ui.batchHint.hidden = false;
+      setText(ui.batchHint, '点图纸上的一个格子选定整片同色区域（上下左右相连）。' + extra);
       return;
     }
     var row = (state.batch.origin >= 0 && p) ? (Math.floor(state.batch.origin / p.w) + 1) : 0;
@@ -2084,8 +1990,9 @@
     if (state.batch.recs && state.batch.recs.length) {
       text += '点下面的推荐色号，或在上方色板里选一个颜色，整片一起改。';
     } else {
-      text += '在上方色板里选一个颜色即可整片改。';
+      text += '在色板里选一个颜色即可整片改。';
     }
+    ui.batchHint.hidden = false;
     setText(ui.batchHint, text);
   }
 
@@ -2227,6 +2134,173 @@
     return true;
   }
 
+  /* --------------------------------------------------------------- 图例高亮 */
+
+  /* 图例里点一个色号 → 预览里只把该色号的格子留亮（其余压暗）；再点同一个取消。
+     为什么不用 Render：drawPattern 等 4 个键是冻结契约，高亮只能在画完网格后自己叠一层。
+     几何同样只走 cellGeometry(idx)（含索引圈的那一份反推），不另写 pad 换算。
+     与批量选区高亮的关系：**图层顺序 = 先压暗（图例）、后选区（批量）**，
+     所以两者能同时存在、互不清除；批量选区永远看得见。
+     清除时机：重新生成 / 换图 / 切工具 / 图纸被清空 / 点第二次（见 clearLegendHighlight 的调用点）。 */
+  function legendColorCodes(p) {
+    var out = {};
+    if (!p || !p.colors) return out;
+    for (var i = 0; i < p.colors.length; i++) {
+      var c = p.colors[i];
+      if (c && c.code !== null && c.code !== undefined) out[String(c.code)] = i;
+    }
+    return out;
+  }
+
+  function clearLegendHighlight(silent) {
+    var had = !!state.highlightCode;
+    state.highlightCode = '';
+    if (had) {
+      renderLegend();                 /* 去掉图例里的选中标记 */
+      renderPattern();                /* 去掉压暗层 */
+      if (!silent) setStatus('已取消色号高亮', 'info');
+    }
+    return had;
+  }
+
+  /* 在图纸画布上压暗「非该色号」的格子；该色号的格子保持原样（并描一圈，边界更清楚） */
+  function drawLegendHighlight() {
+    var cv = ui.patternCanvas;
+    var p = state.pattern;
+    var code = state.highlightCode;
+    if (!cv || !p || !p.cells || !code) return false;
+    var codes = legendColorCodes(p);
+    var idx = codes[code];
+    if (idx === undefined) return false;                 /* 色号已不在图上：不画 */
+    if (typeof cv.getContext !== 'function') return false;
+    var g = cellGeometry();
+    if (!g) return false;
+    var ctx = null;
+    try { ctx = cv.getContext('2d'); } catch (e) { ctx = null; }
+    if (!ctx || typeof ctx.fill !== 'function' || typeof ctx.rect !== 'function') return false;
+    var total = p.w * p.h;
+    try {
+      if (typeof ctx.save === 'function') ctx.save();
+      /* 第一层：其它色号一律压暗 */
+      ctx.beginPath();
+      for (var k = 0; k < total; k++) {
+        if (p.cells[k] === idx) continue;
+        var r1 = cellGeometry(k);
+        if (!r1) continue;
+        ctx.rect(r1.x, r1.y, r1.w, r1.h);
+      }
+      ctx.fillStyle = LEGEND_DIM_FILL;
+      ctx.fill();
+      /* 第二层：目标色号描边（让「留亮的那一片」有明确边界） */
+      if (typeof ctx.stroke === 'function') {
+        ctx.beginPath();
+        for (var m = 0; m < total; m++) {
+          if (p.cells[m] !== idx) continue;
+          var r2 = cellGeometry(m);
+          if (!r2) continue;
+          ctx.rect(r2.x + 0.5, r2.y + 0.5, r2.w - 1, r2.h - 1);
+        }
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = LEGEND_MARK_STROKE;
+        ctx.stroke();
+      }
+      if (typeof ctx.restore === 'function') ctx.restore();
+    } catch (e) { return false; }
+    return true;
+  }
+
+  /* 图例行：优先 data-code，其次 .pd-legend-code（render.js），最后 .legend-code（内置降级图例） */
+  function legendCodeOf(el) {
+    var node = el;
+    var guard = 0;
+    while (node && guard++ < 8) {
+      if (node.getAttribute) {
+        var dc = node.getAttribute('data-code');
+        if (dc) return String(dc);
+      }
+      if (node.querySelector) {
+        try {
+          var a = node.querySelector('[data-code]');
+          if (a && a.getAttribute) { var v1 = a.getAttribute('data-code'); if (v1) return String(v1); }
+          var b = node.querySelector('.pd-legend-code') || node.querySelector('.legend-code');
+          if (b && b.textContent) { var v2 = String(b.textContent).trim(); if (v2) return v2; }
+        } catch (e) { /* 继续往上找 */ }
+      }
+      node = node.parentNode;
+    }
+    return '';
+  }
+
+  /* 点中某一行 → 切换高亮；取不到色号就忽略这次点击（不抛） */
+  function onLegendPick(evt) {
+    var root = ui.legendBox;
+    var t = evt && evt.target;
+    var row = null;
+    while (t && t !== root) {
+      var cls = (t.className && typeof t.className === 'string') ? t.className : '';
+      if (t.classList && typeof t.classList.contains === 'function'
+        ? (t.classList.contains('pd-legend-row') || t.classList.contains('legend-row'))
+        : /(^|\s)(pd-legend-row|legend-row)(\s|$)/.test(cls)) { row = t; break; }
+      t = t.parentNode;
+    }
+    if (!row) return;
+    var code = legendCodeOf(row);
+    if (!code) return;                                   /* 兜底：取不到就当没点 */
+    toggleLegendHighlight(code);
+  }
+
+  function toggleLegendHighlight(code) {
+    var p = state.pattern;
+    if (!p || !p.colors) { setStatus('还没有图纸，无法高亮色号', 'warn'); return false; }
+    var codes = legendColorCodes(p);
+    if (codes[code] === undefined) {
+      setStatus('色号 ' + code + ' 已不在当前图纸里，无法高亮', 'warn');
+      return false;
+    }
+    state.highlightCode = (state.highlightCode === code) ? '' : code;
+    renderLegend();
+    renderPattern();
+    if (state.highlightCode) {
+      var n = 0;
+      for (var k = 0; k < p.cells.length; k++) if (p.cells[k] === codes[code]) n++;
+      setStatus('正在高亮色号 ' + code + '（' + n + ' 格）：再点一次同一个色号取消', 'info');
+    } else {
+      setStatus('已取消色号高亮', 'info');
+    }
+    return true;
+  }
+
+  /* 在图例 HTML 里给「当前高亮的那一行」打上 pd-legend-picked（纯字符串处理）。
+     为什么不用 querySelectorAll 打标记：图例是两个模块生成的字符串（render.js 的 .pd-legend-row、
+     内置降级的 .legend-row），在**渲染前**就把标记写进 HTML 只需要一处逻辑，也不会因为容器是
+     刚赋值、子节点还没被解析到而漏标。定位方式：色号一定出现在自己的单元格里（`>A1<`），
+     从它往前找最近的 `<div` 就是这一行的开始标签——色号在图例里唯一，不会认错行。 */
+  function pickMarkedHTML(html, code) {
+    var src = String(html || '');
+    if (!code) return src;
+    var needle = '>' + code + '<';
+    var at = src.indexOf(needle);
+    if (at < 0) return src;
+    var open = src.lastIndexOf('<div', at);
+    if (open < 0) return src;
+    var close = src.indexOf('>', open);
+    if (close < 0) return src;
+    var tag = src.slice(open, close + 1);
+    if (tag.indexOf('pd-legend-picked') >= 0) return src;         /* 已经标过 */
+    var patched = tag.replace(/class="([^"]*)"/, function (m, cls) {
+      return 'class="' + cls + ' pd-legend-picked"';
+    });
+    if (patched === tag) return src;                              /* 没有 class 属性：不改，保持原样 */
+    return src.slice(0, open) + patched + src.slice(close + 1);
+  }
+
+  /* 兼容旧调用点（自测 / 脚本）：重建一次图例就会带上标记，返回值 = 是否标上了 */
+  function markLegendPick() {
+    renderLegend();
+    var html = ui.legendBox ? String(ui.legendBox.innerHTML || '') : '';
+    return html.indexOf('pd-legend-picked') >= 0 ? 1 : 0;
+  }
+
   /* --------------------------------------------------------------- 渲染区 */
 
   /* ok:false 的原因文案。三类原因处置完全不同，消息不能互相冒充：
@@ -2247,15 +2321,6 @@
     if (reason === 'canvas-rejected') return '这台设备 / 这个浏览器画不出这么大的画布' + extra;
     if (reason === 'invalid-input') return '渲染模块拒绝了这个画布或图纸数据';
     return reason || '渲染模块拒绝了本次绘制';
-  }
-
-  /* 渲染层自报的格内文字阈值：按当前模式缓存，供 #cellLabelHint 用真实数字提示用户 */
-  function recordLabelMinPx(res) {
-    if (!res || typeof res.labelMinPx !== 'number' || !(res.labelMinPx > 0)) return;
-    var label = cellLabelOf();
-    if (label === 'none') return;
-    state.labelMinPx[label] = Math.round(res.labelMinPx);
-    syncCellLabelHint();
   }
 
   function renderPattern() {
@@ -2284,7 +2349,6 @@
         return;
       }
       state.renderTooLarge = false;
-      recordLabelMinPx(res);
     } else {
       fell = true;
       useFallbackRender(cv, p, v, null);
@@ -2294,7 +2358,9 @@
     if (hasClassList(cv)) {
       toggleCls(cv, 'editing', toolOf() !== TOOL_NONE);
     }
-    /* 批量修改的选区高亮：画完网格再叠一层（只画在画布上，不进 Render 的公开接口） */
+    /* 图层顺序固定：先图例压暗（背景层），再批量选区（前景层）——
+       两层互不清除，批量选区永远压在最上面看得见。 */
+    drawLegendHighlight();
     drawBatchHighlight();
     applyViewZoom();
   }
@@ -2373,7 +2439,6 @@
     if (!cv || typeof cv.getContext !== 'function' || !p || !p.cells) return;
     var cell = v.cellSize || v.cellPx || DEFAULT_CELL_PX;
     var label = v.cellLabel || (v.showNumbers === false ? 'none' : 'code');
-    if (label !== 'none') state.labelMinPx[label] = LABEL_MIN_PX;   /* 内置渲染器自己的阈值，提示文案才准 */
     var size = fallbackCanvasSize(p, v);
     cv.width = size.w;
     cv.height = size.h;
@@ -2488,67 +2553,131 @@
   function renderLegend() {
     if (!ui.legendBox) return;
     var p = state.pattern;
-    if (!p) { ui.legendBox.innerHTML = '<p class="muted">尚未生成图纸</p>'; return; }
+    if (!p) {
+      ui.legendBox.innerHTML = '<p class="muted">尚未生成图纸</p>';
+      return;
+    }
     var R = win.Render;
     if (R && typeof R.legendHTML === 'function') {
       try {
         var html = R.legendHTML(p);
-        ui.legendBox.innerHTML = html ? html : '<p class="muted">图例为空</p>';
+        /* 选中态直接在渲染前写进 HTML（见 pickMarkedHTML 的注释） */
+        ui.legendBox.innerHTML = pickMarkedHTML(html || '', state.highlightCode) || '<p class="muted">图例为空</p>';
         return;
       } catch (e) {
         /* 落到内置图例 */
       }
     }
-    ui.legendBox.innerHTML = builtinLegendHTML(p);
+    ui.legendBox.innerHTML = pickMarkedHTML(builtinLegendHTML(p), state.highlightCode);
   }
 
-  function summaryRow(k, v) {
-    return '<div class="summary-row"><span class="summary-k">' + esc(k) + '</span>'
-      + '<span class="summary-v">' + esc(v) + '</span></div>';
+  /* 一行胶囊 = 一个可独立丢弃的指标。
+     prio 0 = 必须留（成品尺寸 / 共 N 颗 / N 色）；1 = 质量三项；2 = 其余补充信息。
+     放不下时由 fitSummary() 从右往左、先丢 prio 大的，丢掉的整块进容器 title。 */
+  function summaryPill(key, label, value, prio) {
+    return { key: key, label: label, value: value, prio: prio };
   }
 
+  function pillHTML(it) {
+    return '<div class="summary-row" data-k="' + esc(it.key) + '" data-prio="' + it.prio + '">'
+      + (it.label ? '<span class="summary-k">' + esc(it.label) + '</span>' : '')
+      + '<span class="summary-v">' + esc(it.value) + '</span></div>';
+  }
+
+  /* 汇总区 = 图纸预览那条 bar 里的横向胶囊串（见 ui.html 的 .status-line 注释）。
+     硬约束：不许折行、不许长高。宽度不够就把低优先级指标整块丢掉（不截断、不留半个胶囊），
+     丢掉的项全部写进容器的 title —— 鼠标悬停仍能看到完整信息。 */
   function renderSummary() {
     if (!ui.summaryBox) return;
     var p = state.pattern;
-    if (!p) { ui.summaryBox.innerHTML = '<p class="muted">尚未生成图纸</p>'; return; }
+    /* 没图纸时整块 hidden（0 高度，不留灰字占位） */
+    if (!p) {
+      ui.summaryBox.hidden = true;
+      ui.summaryBox.innerHTML = '';
+      if (ui.summaryBox.setAttribute) ui.summaryBox.setAttribute('title', '');
+      return;
+    }
+    ui.summaryBox.hidden = false;
     var s = p.stats || {};
     var total = (s.total !== null && s.total !== undefined) ? s.total : countBeads(p);
     var used = (s.usedColors !== null && s.usedColors !== undefined) ? s.usedColors : ((p.counts || []).length);
     /* 减色设置取「生成这张图纸时真正生效的值」；极端情况下（没有记录）才回落到当前设置 */
     var q = state.patternQuantize || quantizeOpts();
-    var html = '';
-    html += summaryRow('总颗数', total + ' 颗');
-    html += summaryRow('用色数', used + ' 色');
-    /* 只有真的启用了减色才有「上限」可言；没启用就不显示这一行，也不假装有个数字 */
-    if (q && q.enabled) html += summaryRow('减色上限', q.maxColors + ' 色');
-    html += summaryRow('成品尺寸', fmt1(s.cmW) + ' × ' + fmt1(s.cmH) + ' cm');
-    html += summaryRow('图纸格数', p.w + ' × ' + p.h);
-    html += summaryRow('色卡', p.paletteId || '—');
-    var note = quantizeNote(q, used);
-    if (note) html += '<p class="hint">' + esc(note) + '</p>';
-    var quality = qualityLine(s);
-    if (quality) html += '<p class="hint">' + esc(quality) + '</p>';
-    ui.summaryBox.innerHTML = html;
+    var items = [];
+    /* prio 0：一定要留的三项 */
+    if (isFinite(Number(s.cmW)) && isFinite(Number(s.cmH))) {
+      items.push(summaryPill('cm', '成品尺寸', fmt1(s.cmW) + ' × ' + fmt1(s.cmH) + ' cm', 0));
+    }
+    items.push(summaryPill('total', '', '共 ' + total + ' 颗', 0));
+    items.push(summaryPill('used', '', used + ' 色', 0));
+    /* prio 2：补充信息（先被丢） */
+    if (q && q.enabled) items.push(summaryPill('cap', '上限', q.maxColors + ' 色', 2));
+    items.push(summaryPill('grid', '格数', p.w + ' × ' + p.h, 2));
+    if (p.paletteId) items.push(summaryPill('pal', '色卡', String(p.paletteId), 2));
+    /* prio 1：图纸质量三项（极短形态，不带任何括号解释；含义进 title） */
+    var iso = qualityValue(s, 'isolatedShare');
+    if (iso !== null) {
+      items.push(summaryPill('iso', '孤立珠', iso + '%', 1));
+      items.push(summaryPill('patch', '块', String(Math.round(s.patchCount)), 1));
+      items.push(summaryPill('edge', '毛边', String(Math.round(s.boundaryPairs)), 1));
+    }
+    ui.summaryBox._items = items;                       /* 供 fitSummary 复用 */
+    paintSummary(items, {});
   }
 
-  /* 图纸质量四项指标（pipeline 算好放进 stats，app 只读不写）：
-       isolatedShare  孤立珠占比 0..1（≥3 颗之外的孤立珠）—— 越低越干净
-       patchCount     同色四连通块总数 —— 越少越成块
-       patchMean      非空格数 ÷ patchCount —— 越大越成块
-       boundaryPairs  四邻相接且色号不同的对数 —— 越少毛边越少
-     四个字段缺任何一个就**整行不显示**：只显示半行会让人以为「没显示的那项是 0」。
-     不是评分、不是警告，只是把这四项如实说出来。 */
-  function qualityLine(s) {
-    if (!s || typeof s !== 'object') return '';
+  /* 质量三项只在**四项 stats 都齐**时出现（缺一项就整组不显示，避免半套指标误导） */
+  function qualityValue(s, which) {
     function isNum(v) { return typeof v === 'number' && isFinite(v); }
-    if (!isNum(s.isolatedShare) || !isNum(s.patchCount) || !isNum(s.patchMean) || !isNum(s.boundaryPairs)) return '';
-    var iso = Math.round(s.isolatedShare * 1000) / 10;             /* 0.0623 → 6.2 */
-    var meanText = (s.patchMean >= 10) ? String(Math.round(s.patchMean)) : fmt1(s.patchMean);
-    /* 方向必须逐个数对上：块数越少越好、每块颗数越大越好。
-       旧写法把「越少越成块」直接跟在「平均每块 N 颗」后面，读起来成了「每块颗数越少越好」——方向反了。 */
-    return '图纸质量：孤立珠 ' + iso + '%（越低越干净）'
-      + ' · 色块 ' + Math.round(s.patchCount) + ' 个（平均每块 ' + meanText + ' 颗；块越少、每块越大，越好拼）'
-      + ' · 毛边 ' + Math.round(s.boundaryPairs) + ' 处（越少越干净）';
+    if (!s || typeof s !== 'object') return null;
+    if (!isNum(s.isolatedShare) || !isNum(s.patchCount) || !isNum(s.patchMean) || !isNum(s.boundaryPairs)) return null;
+    if (which === 'isolatedShare') return String(Math.round(s.isolatedShare * 1000) / 10);   /* 0.0623 → 6.2 */
+    return null;
+  }
+
+  /* 画一遍胶囊串 + 写 title（含被丢弃的项）+ 交给 fitSummary 做宽度适配 */
+  function paintSummary(items, dropped) {
+    var html = '';
+    var titleParts = [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var text = (it.label ? it.label + ' ' : '') + it.value;
+      titleParts.push(text);                            /* title 里永远是**全部**项，含被丢的 */
+      if (dropped[it.key]) continue;
+      html += pillHTML(it);
+    }
+    ui.summaryBox.innerHTML = html;
+    /* 差额说明（上限 vs 实际）本来就只是一句话，塞不进胶囊 —— 一律进 title */
+    var note = quantizeNote(state.patternQuantize || quantizeOpts(),
+      (state.pattern && state.pattern.stats && state.pattern.stats.usedColors !== null
+        && state.pattern.stats.usedColors !== undefined) ? state.pattern.stats.usedColors
+        : ((state.pattern && state.pattern.counts) ? state.pattern.counts.length : 0));
+    if (note) titleParts.push(note);
+    if (ui.summaryBox.setAttribute) ui.summaryBox.setAttribute('title', titleParts.join(' · '));
+    fitSummary(items, dropped);
+  }
+
+  /* 宽度适配：只看「容器放不下」这一个事实，从最低优先级、同优先级里最靠右的开始整块丢。
+     不用 resize 监听 —— 每次 renderSummary 时量一次就够（窗口变窄会触发重新渲染）。
+     没有布局信息的环境（老内核 / 测试桩）里 scrollWidth/clientWidth 都是 0 → 直接返回，不丢任何项。 */
+  function fitSummary(items, dropped) {
+    var box = ui.summaryBox;
+    if (!box || box.hidden) return;
+    var guard = 0;
+    while (guard++ < 24) {
+      var cw = Number(box.clientWidth), sw = Number(box.scrollWidth);
+      if (!(cw > 0) || !(sw > cw + 1)) return;           /* 放得下 / 量不到：都不动 */
+      var pick = null;
+      for (var prio = 3; prio >= 1; prio--) {
+        for (var i = items.length - 1; i >= 0; i--) {
+          if (items[i].prio !== prio || dropped[items[i].key]) continue;
+          pick = items[i]; break;
+        }
+        if (pick) break;
+      }
+      if (!pick) return;                                 /* 只剩必留项：宁可溢出也不丢 */
+      dropped[pick.key] = true;
+      paintSummary(items, dropped);
+    }
   }
 
   /* 「用色数」与「减色上限」对不上时，用一句不撒谎的话解释差额。
@@ -2951,10 +3080,10 @@
 
   function mountSourceEdit() {
     var S = sourceEditApi();
-    var hint = '原图调整模块（window.SourceEdit）未加载：裁剪 / 旋转 / 翻转不可用，将直接使用原图生成图纸。';
-    if (!S) { setText(ui.srceditHint, hint); syncSrcEditButtons(); return; }
+    /* 模块缺失 / 画布缺失：整块提示交给 #moduleNotice 与状态行，这里 reading 行保持 hidden（不占位） */
+    if (!S) { if (ui.srceditHint) { ui.srceditHint.hidden = true; setText(ui.srceditHint, ''); } syncSrcEditButtons(); return; }
     if (!ui.sourceCanvas || typeof ui.sourceCanvas.getContext !== 'function') {
-      setText(ui.srceditHint, '缺少原图画布 #sourceCanvas：原图调整不可用，将直接使用原图。');
+      if (ui.srceditHint) { ui.srceditHint.hidden = true; setText(ui.srceditHint, ''); }
       syncSrcEditButtons();
       return;
     }
@@ -2963,7 +3092,7 @@
       if (!state.srcEdit || typeof state.srcEdit !== 'object') state.srcEdit = null;
     } catch (e) {
       state.srcEdit = null;
-      setText(ui.srceditHint, '原图调整模块初始化失败（' + errText(e) + '）：将直接使用原图。');
+      setStatus('原图调整模块初始化失败：' + errText(e) + '（将直接使用原图）', 'warn');
     }
     syncSrcEditButtons();
     syncSrcEditHint();
@@ -2972,6 +3101,9 @@
   function syncSrcEditButtons() {
     var api = state.srcEdit;
     var locked = !state.srcEdit;
+    /* 「手机上要先开裁剪模式」这条是**可见**小字（手机没有 hover，不能只靠 title），
+       只有原图调整模块能用时才有意义 —— 模块缺失就整行 hidden。 */
+    if (ui.srcCropHint) ui.srcCropHint.hidden = locked;
     toggleCls(ui.sourceCanvas, 'crop-mode', !locked && !!state.srcCropMode);
     if (locked) return;
     /* 「裁剪模式」透传给模块（可选 API，能力检测 + try/catch：没有这个方法的模块不该让 app.js 抛）。
@@ -2985,21 +3117,23 @@
     }
   }
 
+  /* 原图调整的读数：只在本模块可用且已经载图时显示（没图 / 模块缺失都 hidden，不留占位） */
   function syncSrcEditHint() {
     if (!ui.srceditHint) return;
-    if (!state.srcEdit) return;   /* 降级文案已在 mountSourceEdit 里写好，不要覆盖 */
+    if (!state.srcEdit || !state.source) { ui.srceditHint.hidden = true; setText(ui.srceditHint, ''); return; }
     var st = null;
     try { st = (typeof state.srcEdit.getState === 'function') ? state.srcEdit.getState() : null; } catch (e) { st = null; }
     var parts = [];
     if (st && typeof st === 'object') {
       parts.push('旋转 ' + (Number(st.rotation) || 0) + '°');
-      parts.push('水平翻转 ' + (st.flipH ? '开' : '关') + ' · 垂直翻转 ' + (st.flipV ? '开' : '关'));
+      parts.push('翻转 ' + ([st.flipH ? '横向' : '', st.flipV ? '纵向' : ''].filter(Boolean).join(' + ') || '无'));
       parts.push(st.hasCrop || st.crop ? '已裁剪' : '未裁剪');
       parts.push('裁剪框 ' + (st.aspect === 'square' ? '正方形' : '自由'));
     } else {
       parts.push('状态未知');
     }
-    setText(ui.srceditHint, '原图调整：' + parts.join(' · ') + '。生成图纸时使用裁剪旋转后的像素。');
+    ui.srceditHint.hidden = false;
+    setText(ui.srceditHint, '原图调整：' + parts.join(' · '));
   }
 
   function onSrcEditChange() {
@@ -3471,6 +3605,7 @@
     state.patternQuantize = null;     /* 图纸没了，减色上限的记录也一起清掉 */
     state.history.length = 0;         /* 换图 = 新图纸生命周期 */
     state.recolor.selected = '';
+    state.highlightCode = '';         /* 换了图：上一张图的图例高亮作废（下面的 renderPattern 会重画） */
     if (state.srcEdit && typeof state.srcEdit.setSource === 'function') {
       try { state.srcEdit.setSource(src); } catch (e) {
         setStatus('原图调整模块载入图片失败：' + errText(e) + '（将直接使用原图）', 'warn');
@@ -3539,7 +3674,6 @@
     if (state.dragActive === on2) return;
     state.dragActive = on2;
     toggleCls(ui.dropZone, 'drag-active', on2);
-    toggleCls(ui.dropHint, 'drag-active', on2);
   }
 
   function onDragOver(e) {
@@ -3591,8 +3725,8 @@
 
   function onControlInput(id, isCommit) {
     if (id === 'viewZoom') { setViewZoom(num(ui.viewZoom, ZOOM_DEFAULT)); return; }
-    /* touched 标记必须在 syncLabels() 之前：syncLabels → syncMaxColorsHint → quantizeOpts()
-       读的就是它，晚一步的话「第一次改色数上限时小字还显示 pipeline 默认值」。 */
+    /* touched 标记必须在 syncLabels() 之前：syncLabels 会读 quantizeOpts()，
+       晚一步就会有一次「刚改的上限没生效」的中间态。 */
     if (id === 'maxColors') {
       state.touched.maxColors = true;
       setMaxColors(maxColorsSliderValue());                 /* 拖滑块 → 数字框跟着变 */
@@ -3615,9 +3749,9 @@
 
   function onToggleChange(id) {
     if (id === 'quantizeEnabled') state.touched.quantizeEnabled = true;
-    if (id === 'showRuler') { scheduleRender(); syncExportHint(); return; }
+    if (id === 'showRuler') { scheduleRender(); return; }
     /* 显示色号只改「预览怎么画」（格内文字），不重算 */
-    if (id === 'showCodes') { syncCellLabelHint(); scheduleRender(); return; }
+    if (id === 'showCodes') { scheduleRender(); return; }
     if (id === 'recolorMode') {
       setTool(ui.recolorMode && ui.recolorMode.checked ? TOOL_RECOLOR : TOOL_NONE);
       renderPattern();
@@ -3638,7 +3772,7 @@
       setStatus((ui.srcAspectSquare && ui.srcAspectSquare.checked) ? '裁剪框已切换为正方形' : '裁剪框已切换为自由比例', 'info');
       return;
     }
-    if (id === 'exportAnnotate') { syncExportHint(); return; }
+    if (id === 'exportAnnotate') { scheduleRender(); return; }
     syncEnabledState();
     if (id === 'lockAspect' && ui.lockAspect && ui.lockAspect.checked) normalizeDims('gridW');
     scheduleRegenerate(0);
@@ -3646,7 +3780,6 @@
 
   function onSelectChange(id) {
     if (id === 'paletteSelect') {
-      syncPaletteMeta();
       syncRecolorPicker(state.pattern);
       scheduleRegenerate(0);
       return;
@@ -3659,7 +3792,7 @@
       renderRecolorGrid();
       return;
     }
-    if (id === 'exportScale') { syncExportHint(); return; }
+    if (id === 'exportScale') { scheduleRender(); return; }
   }
 
   function onRecolorSearch() {
@@ -3671,6 +3804,14 @@
   function onDocKeyDown(e) {
     if (!e) return;
     var key = e.key ? String(e.key).toLowerCase() : '';
+    /* Esc：取消图例高亮（与图例行上的提示一致：「再点一次取消」，Esc 也取消） */
+    if (key === 'escape') {
+      if (state.highlightCode) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        clearLegendHighlight();
+      }
+      return;
+    }
     if (key !== 'z') return;
     if (!(e.ctrlKey || e.metaKey)) return;
     if (e.altKey || e.shiftKey) return;         /* Shift+Ctrl+Z 是重做，本项目未实现，不做任何事 */
@@ -3727,7 +3868,6 @@
     state.viewOpts = viewOpts();
     renderPattern();
     updateLockInfo();
-    syncExportHint();
     if (regen) {
       setStatus('已重置微调参数', 'info');
       scheduleRegenerate(0);
@@ -3806,7 +3946,7 @@
     bindToolRadio('toolNone', TOOL_NONE);
     bindToolRadio('toolWand', TOOL_WAND);
     bindToolRadio('toolEraser', TOOL_ERASER);
-    on(ui.eraserSize, 'change', function () { syncToolHint(); });
+    on(ui.eraserSize, 'change', function () { updateLockInfo(); });
     /* 捏合先于橡皮刷的 pointerdown 绑定：触摸端第二根手指落下时，
        捏合要先把「用户其实是在缩放」这件事记下来，橡皮刷才来得及拒绝起手。 */
     bindPinch();
@@ -3830,6 +3970,8 @@
     /* 智能建议：按钮只负责「算」，建议条里的「应用」才改参数（事件委托，条是动态重建的） */
     on(ui.btnSmartSuggest, 'click', requestSuggestion);
     on(ui.smartSuggestArea, 'click', onSuggestClick);
+    /* 图例点击高亮：整块图例会重建，只能做事件委托 */
+    on(ui.legendBox, 'click', onLegendPick);
     on(ui.emptyState, 'click', pickFile);
     /* 预览区里也有可键入的控件（预览区顶部的图纸标题栏）：点它的输入框、或点它那段
        <label>（会转发焦点到输入框），都不该顺手弹出文件选择器。
@@ -3894,8 +4036,6 @@
       btnPickFile: byId('btnPickFile'),
       btnSmartSuggest: byId('btnSmartSuggest'),
       smartSuggestArea: byId('smartSuggestArea'),
-      dropHint: byId('dropHint'),
-      inputHint: byId('inputHint'),
       moduleNotice: byId('moduleNotice'),
       tabBasic: byId('tabBasic'),
       tabAdvanced: byId('tabAdvanced'),
@@ -3920,15 +4060,11 @@
       quantizeEnabled: byId('quantizeEnabled'),
       maxColors: byId('maxColors'),
       maxColorsNum: byId('maxColorsNum'),
-      maxColorsHint: byId('maxColorsHint'),
-      preprocessHint: byId('preprocessHint'),
       sizePreset: byId('sizePreset'),
       gridW: byId('gridW'),
       gridH: byId('gridH'),
       lockAspect: byId('lockAspect'),
       paletteSelect: byId('paletteSelect'),
-      paletteMeta: byId('paletteMeta'),
-      cellLabelHint: byId('cellLabelHint'),
       chartTitle: byId('chartTitle'),
       showCodes: byId('showCodes'),
       showRuler: byId('showRuler'),
@@ -3945,7 +4081,6 @@
       toolWand: byId('toolWand'),
       toolEraser: byId('toolEraser'),
       eraserSize: byId('eraserSize'),
-      toolHint: byId('toolHint'),
       btnEraseUndo: byId('btnEraseUndo'),
       recolorScope: byId('recolorScope'),
       recolorSearch: byId('recolorSearch'),
@@ -3963,7 +4098,6 @@
       btnResetAdjust: byId('btnResetAdjust'),
       exportScale: byId('exportScale'),
       exportAnnotate: byId('exportAnnotate'),
-      exportHint: byId('exportHint'),
       btnExportPng: byId('btnExportPng'),
       btnExportCsv: byId('btnExportCsv'),
       dropZone: byId('dropZone'),
@@ -3973,13 +4107,11 @@
       progressBar: byId('progressBar'),
       canvasScroll: byId('canvasScroll'),
       patternCanvas: byId('patternCanvas'),
-      patternHint: byId('patternHint'),
       emptyState: byId('emptyState'),
       sourceCanvas: byId('sourceCanvas'),
-      sourceHint: byId('sourceHint'),
       srcCropMode: byId('srcCropMode'),
-      srcAspectSquare: byId('srcAspectSquare'),
       srcCropHint: byId('srcCropHint'),
+      srcAspectSquare: byId('srcAspectSquare'),
       srcRotateL: byId('srcRotateL'),
       srcRotateR: byId('srcRotateR'),
       srcFlipH: byId('srcFlipH'),
@@ -4016,12 +4148,15 @@
     bindEvents();
     var mods = describeModules();
     updateModuleNotice(mods);
-    setStatus(mods.ok ? '就绪：请先选择一张图片' : '核心模块未加载：界面可用，生成 / 渲染 / 导出暂不可用', mods.ok ? 'info' : 'warn');
+    /* SourceEdit 是可选增强、不进 moduleNotice —— 它缺失的告警只能在这里说一句
+       （状态行不占版面，比常驻一行灰字更符合「没内容就不占位」）。 */
+    setStatus((mods.ok ? '就绪：请先选择一张图片' : '核心模块未加载：界面可用，生成 / 渲染 / 导出暂不可用')
+      + (mods.srcEdit ? '' : '（原图调整不可用：裁剪 / 旋转 / 翻转已关闭，将直接使用原图）'),
+      mods.ok ? (mods.srcEdit ? 'info' : 'warn') : 'warn');
     renderLegend();
     renderSummary();
     updateLockInfo();
     syncUndoButton();
-    syncExportHint();
     applyEnvironmentText();      /* 触摸/窄屏下把「拖拽 / Ctrl+V」换成真能走的入口，并按能力开门 */
     setCanvasPlaceholders();
   }
@@ -4082,8 +4217,19 @@
     suggestion: function () { return state.suggestion; },
     syncSuggestButton: syncSuggestButton,
     zoomFloor: zoomFloor,
+    /* 图例高亮（自测 / 脚本入口；与点图例走同一批函数） */
+    toggleLegendHighlight: toggleLegendHighlight,
+    clearLegendHighlight: clearLegendHighlight,
+    legendCodeOf: legendCodeOf,
+    drawLegendHighlight: drawLegendHighlight,
+    markLegendPick: markLegendPick,
+    highlightCode: function () { return state.highlightCode; },
     fitScale: fitScale,
     renderRecolorGrid: renderRecolorGrid,
+    renderSummary: renderSummary,          /* 汇总条：自测 / 脚本入口（点图例、改宽度后重排也用它） */
+    setStatus: setStatus,                  /* 状态行：自测 / 脚本入口（kind 决定 .grow，见 setStatus 注释） */
+    updateLockInfo: updateLockInfo,
+    syncRecolorCurrent: syncRecolorCurrent,
     pickerGroups: pickerGroups,
     selectRecolorCode: selectRecolorCode,
     recolorCode: recolorCode,

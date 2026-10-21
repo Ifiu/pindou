@@ -821,7 +821,9 @@
       showCodes: true,
       showNumbers: true,
       showRuler: !!(ui.showRuler && ui.showRuler.checked),
-      highlightLocked: true,
+      /* 锁定格的右上角小三角只是**给编辑时看的**提示（改过色 / 手动锁过的格子）。
+         导出的图纸是拿去照着拼的，上面不能带这种编辑态标记 —— 所以恒 false，绝不跟随预览。 */
+      highlightLocked: false,
       padMode: 'tight',
       annotate: !!(ui.exportAnnotate && ui.exportAnnotate.checked),
       captionName: chartTitleValue(),

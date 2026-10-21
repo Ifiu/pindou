@@ -22,9 +22,14 @@
   #app{max-width:1800px;margin:0 auto;padding:14px 16px 22px;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;gap:12px}
 
   .app-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:10px}
-  .app-head h1{margin:0 0 2px;font-size:18px;letter-spacing:.4px}
-  .app-sub{margin:0;color:var(--muted);font-size:12.5px}
-  .head-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  /* 标题可被压缩（min-width:0 + 省略号），但**绝不**把右侧按钮挤走：按钮在 .head-actions 里自然换行 */
+  .head-title{flex:1 1 auto;min-width:0}
+  .app-sub{margin:0;color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* 页头右侧：选择图片 + 暂存×2 + 导出×2 放在同一行、右对齐。
+     flex-wrap:wrap 是「安全阀」：宁可整排换到下一行，也不让任何一个按钮被裁掉/压成竖排。 */
+  .head-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-end;flex:0 1 auto;min-width:0}
+  .head-actions .btn{padding:6px 12px;font-size:13px;margin:0;flex:0 0 auto}
+  .app-head h1{margin:0 0 2px;font-size:18px;letter-spacing:.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .drop-hint{color:var(--muted);font-size:12.5px;padding:5px 9px;border:1px dashed var(--line);border-radius:8px;transition:color .15s,border-color .15s,background .15s}
   .drop-hint.drag-active{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
   .file-input{display:none}
@@ -333,6 +338,13 @@
     <div class="head-actions">
       <button id="btnPickFile" class="btn btn-primary" type="button" title="也可以把图片文件直接拖进窗口，或按 Ctrl+V 粘贴">选择图片…</button>
       <input id="fileInput" class="file-input" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.avif,.heic,.heif" />
+      <!-- 页头右侧这一排：暂存往返 + 导出。与「选择图片…」**同父容器、同一行**、右对齐；
+           普通 .btn（不是 ghost），主入口仍是 btn-primary。窄屏允许换行，不许被裁掉。 -->
+      <button id="btnSaveProject" class="btn" type="button" title="把当前工程（原图 + 参数 + 图纸）存成一个 .pindou.json；撤销历史不保存">保存暂存</button>
+      <button id="btnOpenProject" class="btn" type="button" title="打开之前保存的 .pindou.json，原样恢复原图 / 参数 / 图纸（不含撤销历史）">打开暂存</button>
+      <button id="btnExportPng" class="btn" type="button">导出图纸</button>
+      <button id="btnExportCsv" class="btn" type="button">导出 CSV</button>
+      <input id="projectInput" class="file-input" type="file" accept=".json,.pindou,application/json" />
     </div>
   </header>
 
@@ -437,8 +449,6 @@
             <option value="8">8×（格子 192px）</option>
           </select>
           <label class="check"><input id="exportAnnotate" type="checkbox" checked /> 附色号用量清单（画进图里）</label>
-          <button id="btnExportPng" class="btn" type="button">导出图纸 PNG</button>
-          <button id="btnExportCsv" class="btn" type="button">导出用量清单 CSV</button>
         </section>
       </div>
 

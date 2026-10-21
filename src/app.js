@@ -3121,6 +3121,345 @@
 
   /* ------------------------------------------------------------- 文件输出 */
 
+  /* ------------------------------------------------------------ 暂存（工程文件） */
+
+  /* 冻结格式：{ app:'pindou', version:1, title, source:{dataUrl,w,h}, options:{...}, pattern:{w,h,colors,cellsB64,lockedB64} }
+     设计要点：source 存的是**当前工作源图**（裁剪 / 旋转 / 魔术棒 / 橡皮之后的那张）的 PNG dataURL，
+     所以「重新导入 = 原样恢复」，不需要回放任何编辑操作；pattern 直接存成品，不走 Pipeline 重算，
+     否则用户手工改的格子就丢了。撤销历史**不保存**（这一点必须让用户知道）。 */
+  var PROJECT_APP = 'pindou';
+  var PROJECT_VERSION = 1;
+
+  /* Uint16Array / Uint8Array → base64：按 0x8000 分块喂给 String.fromCharCode，
+     绝不一次性展开整个数组（200×200 的 cells 有 8 万字节，一次展开会爆调用栈）。 */
+  function bytesToB64(u8) {
+    var CH = 0x8000;
+    var s = '';
+    for (var i = 0; i < u8.length; i += CH) {
+      s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+    }
+    var b = win.btoa;
+    if (typeof b !== 'function') return null;
+    try { return b(s); } catch (e) { return null; }
+  }
+
+  /* base64 → Uint8Array（导入侧用）。解码失败返回 null。 */
+  function b64ToBytes(b64) {
+    var at = win.atob;
+    if (typeof at !== 'function' || typeof b64 !== 'string' || !b64) return null;
+    var raw;
+    try { raw = at(b64); } catch (e) { return null; }
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i) & 0xFF;
+    return out;
+  }
+
+  function cellsToU16B64(cells) {
+    var u8 = new Uint8Array(cells.length * 2);
+    for (var i = 0; i < cells.length; i++) {
+      var v = cells[i] & 0xFFFF;
+      u8[i * 2] = v & 0xFF;
+      u8[i * 2 + 1] = (v >> 8) & 0xFF;
+    }
+    return bytesToB64(u8);
+  }
+
+  function u16B64ToCells(bytes, n) {
+    var cells = new Uint16Array(n);
+    for (var i = 0; i < n; i++) cells[i] = bytes[i * 2] | (bytes[i * 2 + 1] << 8);
+    return cells;
+  }
+
+  /* 当前工作源图画布：#sourceCanvas（含裁剪/旋转结果由 SourceEdit 自己画在上面） */
+  function workingSourceCanvas() {
+    var c = pixelSourceCanvas();
+    if (c) return c;
+    var sc = ui.sourceCanvas;
+    if (sc && typeof sc.toDataURL === 'function' && Number(sc.width) > 0 && Number(sc.height) > 0) return sc;
+    return null;
+  }
+
+  function saveProject() {
+    if (!state.source) { setStatus('还没有载入图片：先选一张图再保存暂存', 'warn'); return false; }
+    var cv = workingSourceCanvas();
+    if (!cv || typeof cv.toDataURL !== 'function') { setStatus('当前环境取不到源图画布，无法保存暂存', 'err'); return false; }
+    var dataUrl = null;
+    try { dataUrl = cv.toDataURL('image/png'); } catch (e) { dataUrl = null; }
+    if (!dataUrl) { setStatus('源图导出成 PNG 失败（浏览器拒绝了 toDataURL）', 'err'); return false; }
+    var opts = buildOpts();
+    var p = state.pattern;
+    var doc2 = {
+      app: PROJECT_APP,
+      version: PROJECT_VERSION,
+      title: chartTitleValue() || '未命名图纸',
+      source: { dataUrl: dataUrl, w: Math.round(Number(cv.width)), h: Math.round(Number(cv.height)) },
+      options: opts,
+      pattern: null
+    };
+    if (p && p.cells && p.colors) {
+      var cellsB64 = cellsToU16B64(p.cells);
+      var lockedB64 = bytesToB64(p.locked || new Uint8Array(0));
+      if (cellsB64 === null || lockedB64 === null) { setStatus('图纸数据转 base64 失败，无法保存暂存', 'err'); return false; }
+      doc2.pattern = {
+        w: p.w, h: p.h,
+        colors: (p.colors || []).map(function (c) {
+          return { code: c.code, hex: c.hex, rgb: (c.rgb || [0, 0, 0]).slice(0, 3) };
+        }),
+        cellsB64: cellsB64,
+        lockedB64: lockedB64
+      };
+    }
+    var text = null;
+    try { text = JSON.stringify(doc2); } catch (e) { text = null; }
+    if (!text) { setStatus('暂存序列化失败', 'err'); return false; }
+    var BlobCtor = win.Blob;
+    if (typeof BlobCtor !== 'function') { setStatus('当前环境不支持生成文件（缺少 Blob）', 'err'); return false; }
+    var okDl = downloadBlob(new BlobCtor([text], { type: 'application/json' }),
+      (doc2.title || '未命名图纸') + '-暂存.pindou.json');
+    if (okDl) setStatus('已保存暂存：' + (doc2.title || '未命名图纸') + '-暂存.pindou.json（撤销历史不保存）', 'ok');
+    return okDl;
+  }
+
+  /* 逐项校验（**纯函数：不碰 state**）。全部通过才返回 {ok:true, data}。
+     任何一项不合格 → 返回能定位的一句话（哪种不合格 + 期望/实际）。 */
+  function validateProject(obj) {
+    function bad(msg) { return { ok: false, msg: msg }; }
+    if (!obj || typeof obj !== 'object') return bad('文件内容不是一个 JSON 对象');
+    if (obj.app !== PROJECT_APP) return bad('不是本工具的暂存文件：app 期望 "pindou"，实际 ' + JSON.stringify(obj.app));
+    if (obj.version !== PROJECT_VERSION) return bad('暂存版本不支持：version 期望 1，实际 ' + JSON.stringify(obj.version) + '（不做「尽力加载」）');
+    var s = obj.source;
+    if (!s || typeof s !== 'object') return bad('缺少 source（原图）');
+    if (typeof s.dataUrl !== 'string' || s.dataUrl.indexOf('data:image/') !== 0) return bad('source.dataUrl 不是图片 dataURL');
+    if (!(Number(s.w) > 0) || !(Number(s.h) > 0)) return bad('source.w/h 必须是正数，实际 ' + JSON.stringify([s.w, s.h]));
+    var o = obj.options;
+    if (!o || typeof o !== 'object') return bad('缺少 options（参数）');
+    if (!(o.gridW >= 1 && o.gridW <= MAX_DIM) || !(o.gridH >= 1 && o.gridH <= MAX_DIM)) {
+      return bad('options.gridW/gridH 必须在 [1,' + MAX_DIM + ']，实际 ' + JSON.stringify([o.gridW, o.gridH]));
+    }
+    if (o.style !== 'bead' && o.style !== 'faithful') return bad('options.style 必须是 bead / faithful，实际 ' + JSON.stringify(o.style));
+    if (o.method !== 'nearest' && o.method !== 'fs' && o.method !== 'bayer') {
+      return bad('options.method 必须是 nearest / fs / bayer，实际 ' + JSON.stringify(o.method));
+    }
+    var p = obj.pattern;
+    if (p === null || p === undefined) return { ok: true, data: { source: s, options: o, pattern: null, title: obj.title } };
+    if (typeof p !== 'object') return bad('pattern 必须是对象或 null');
+    var w = Number(p.w), h = Number(p.h);
+    if (!(w >= 1 && w <= MAX_DIM) || !(h >= 1 && h <= MAX_DIM)) return bad('pattern.w/h 必须在 [1,' + MAX_DIM + ']，实际 ' + JSON.stringify([p.w, p.h]));
+    if (!isArr(p.colors) || !p.colors.length) return bad('pattern.colors 至少要有 1 项');
+    for (var i = 0; i < p.colors.length; i++) {
+      var c = p.colors[i] || {};
+      if (typeof c.code !== 'string' || !c.code) return bad('第 ' + (i + 1) + ' 个颜色缺少 code');
+      if (typeof c.hex !== 'string' || !/^#[0-9a-fA-F]{3,8}$/.test(c.hex)) return bad('第 ' + (i + 1) + ' 个颜色的 hex 不合法：' + JSON.stringify(c.hex));
+      if (!isArr(c.rgb) || c.rgb.length < 3) return bad('第 ' + (i + 1) + ' 个颜色的 rgb 不合法');
+    }
+    var cellsBytes = b64ToBytes(p.cellsB64);
+    if (!cellsBytes) return bad('pattern.cellsB64 缺失或不是合法 base64');
+    var need = w * h * 2;
+    if (cellsBytes.length !== need) return bad('cells 字节数不对：需要 ' + need + '（= ' + w + '×' + h + '×2），实际 ' + cellsBytes.length);
+    var lockedBytes = b64ToBytes(p.lockedB64);
+    if (!lockedBytes) return bad('pattern.lockedB64 缺失或不是合法 base64');
+    if (lockedBytes.length !== w * h) return bad('locked 字节数不对：需要 ' + (w * h) + '（= ' + w + '×' + h + '），实际 ' + lockedBytes.length);
+    var cells = u16B64ToCells(cellsBytes, w * h);
+    var nColors = p.colors.length;
+    for (var k = 0; k < cells.length; k++) {
+      if (cells[k] === EMPTY_CELL) continue;
+      if (cells[k] >= nColors) {
+        return bad('cells 第 ' + k + ' 格的下标越界：' + cells[k] + '，但 colors 只有 ' + nColors + ' 项（否则渲染会画出乱七八糟的东西）');
+      }
+    }
+    return {
+      ok: true,
+      data: { source: s, options: o, title: obj.title, pattern: { w: w, h: h, colors: p.colors, cells: cells, locked: lockedBytes } }
+    };
+  }
+
+  /* effCurve 是单调的：给定「生效值」反推滑杆位置，并做一次 ±3 的微调搜索保证
+     effCurve(反推值) === 目标（这样导入后 options() 才能与文件逐字段相同）。 */
+  function sliderRawForEffective(el, target, fallback) {
+    var t = Math.round(clamp(Number(target), -100, 100));
+    if (!isFinite(t)) t = fallback;
+    var sgn = t < 0 ? -1 : 1;
+    var raw = sgn * 100 * Math.pow(Math.abs(t) / 100, 1 / EFF_POW);
+    var base = Math.round(clamp(raw, -100, 100));
+    for (var d = 0; d <= 3; d++) {
+      var cands = d === 0 ? [base] : [base - d, base + d];
+      for (var i = 0; i < cands.length; i++) {
+        var c = clamp(cands[i], -100, 100);
+        if (effCurve(c) === t) { if (el) setVal(el, c); return c; }
+      }
+    }
+    if (el) setVal(el, base);
+    return base;
+  }
+
+  /* 把文件里的 options 写回所有控件（**必须在设 pattern 之前**做完，避免中途 render 用旧参数） */
+  function applyProjectOptions(o) {
+    setVal(ui.gridW, clamp(Math.round(Number(o.gridW)), 1, MAX_DIM));
+    setVal(ui.gridH, clamp(Math.round(Number(o.gridH)), 1, MAX_DIM));
+    setChecked(ui.lockAspect, o.lockAspect !== false);
+    /* 三个压缩滑杆：反推滑杆位置，保证 effCurve(raw) === 文件里的生效值 */
+    var pp = o.preprocess || {};
+    sliderRawForEffective(ui.brightness, pp.brightness, 0);
+    sliderRawForEffective(ui.contrast, pp.contrast, 0);
+    sliderRawForEffective(ui.saturation, pp.saturation, 0);
+    /* 阴影/中间调是线性如实：直接写原值 */
+    setVal(ui.shadowsRange, clamp(Math.round(Number(pp.shadows) || 0), -100, 100));
+    setChecked(ui.autoWB, !!pp.autoWB);
+    setChecked(ui.autoLevels, !!pp.autoLevels);
+    var q = o.quantize || {};
+    setChecked(ui.quantizeEnabled, q.enabled !== false);
+    setMaxColors(q.maxColors);
+    /* 参数来自文件，不是 pipeline 默认：标记「动过」，否则 quantizeOpts() 会把它盖掉 */
+    state.touched.quantizeEnabled = true;
+    state.touched.maxColors = true;
+    setVal(ui.ditherStrength, clamp(Math.round(Number(o.ditherStrength) * 100) || 0, 0, 100));
+    setVal(ui.bayerN, (Math.round(Number(o.bayerN)) === 8) ? '8' : '4');
+    setChecked(ui.methodNearest, o.method === 'nearest');
+    setChecked(ui.methodFS, o.method === 'fs');
+    setChecked(ui.methodBayer, o.method === 'bayer');
+    setChecked(ui.styleBead, o.style !== 'faithful');
+    setChecked(ui.styleFaithful, o.style === 'faithful');
+    if (o.paletteId && ui.paletteSelect) {
+      var has = false;
+      var sel = ui.paletteSelect;
+      if (sel.options) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === o.paletteId) { has = true; break; } } }
+      if (has) sel.value = o.paletteId;
+    }
+    syncLabels();
+    syncEnabledState();
+    syncSizePresetValue();
+  }
+
+  /* dataURL → 可用的图片对象（Image 元素；老环境退回 ImageBitmap） */
+  function decodeDataUrl(dataUrl) {
+    return new Promise(function (resolve) {
+      var Img = win.Image;
+      if (typeof Img !== 'function') { resolve(null); return; }
+      var img = null;
+      try { img = new Img(); } catch (e) { img = null; }
+      if (!img) { resolve(null); return; }
+      var done = false;
+      function fin(v) { if (done) return; done = true; resolve(v); }
+      img.onload = function () { fin(img); };
+      img.onerror = function () { fin(null); };
+      try { img.src = dataUrl; } catch (e) { fin(null); }
+    });
+  }
+
+  /* 打开暂存：读文件 → 解析 → **全部校验通过** → 才动状态（原子）。 */
+  function importProjectFile(file) {
+    if (!file) return Promise.resolve(false);
+    var readText = null;
+    if (typeof file.text === 'function') readText = Promise.resolve().then(function () { return file.text(); });
+    else {
+      readText = new Promise(function (resolve, reject) {
+        var FR = win.FileReader;
+        if (typeof FR !== 'function') { reject(new Error('当前环境不支持读取文件（缺少 FileReader）')); return; }
+        var fr = new FR();
+        fr.onload = function () { resolve(String(fr.result || '')); };
+        fr.onerror = function () { reject(new Error('读取文件失败')); };
+        fr.readAsText(file);
+      });
+    }
+    return readText.then(function (text) {
+      var obj = null;
+      try { obj = JSON.parse(text); } catch (e) {
+        setStatus('这个文件不是合法的 JSON：' + errText(e) + '（状态未改动）', 'err');
+        return false;
+      }
+      var v = validateProject(obj);
+      if (!v.ok) { setStatus('暂存文件校验失败：' + v.msg + '（状态未改动）', 'err'); return false; }
+      return decodeDataUrl(v.data.source.dataUrl).then(function (img) {
+        if (!img) { setStatus('暂存里的原图无法解码（dataURL 坏了）（状态未改动）', 'err'); return false; }
+        var iw = Math.round(Number(img.naturalWidth || img.width) || 0);
+        var ih = Math.round(Number(img.naturalHeight || img.height) || 0);
+        if (iw !== Math.round(Number(v.data.source.w)) || ih !== Math.round(Number(v.data.source.h))) {
+          setStatus('暂存里的原图尺寸对不上：文件写 ' + v.data.source.w + '×' + v.data.source.h
+            + '，实际解码出 ' + iw + '×' + ih + '（状态未改动）', 'err');
+          return false;
+        }
+        applyProject(v.data, img, iw, ih);
+        return true;
+      });
+    }).catch(function (e) {
+      setStatus('打开暂存失败：' + errText(e) + '（状态未改动）', 'err');
+      return false;
+    });
+  }
+
+  /* 真正落到状态上（此函数被调用时所有校验都已通过） */
+  function applyProject(data, img, iw, ih) {
+    /* 原图：喂进和载图同一条路径（SourceEdit 也拿到它），但**不**触发重新生成 */
+    state.source = img;
+    state.srcW = iw;
+    state.srcH = ih;
+    state.orientationNote = '';
+    state.suggestion = null;
+    if (state.srcEdit && typeof state.srcEdit.setSource === 'function') {
+      try { state.srcEdit.setSource(img); } catch (e) { /* 忽略：不影响下面的图纸恢复 */ }
+    }
+    drawSourceCanvas();
+    syncSrcEditHint();
+    /* 参数写回控件（在设 pattern 之前） */
+    applyProjectOptions(data.options);
+    if (typeof data.title === 'string') setVal(ui.chartTitle, data.title);
+    /* 图纸：直接用文件里的，不重算 */
+    if (data.pattern) {
+      var p = {
+        w: data.pattern.w,
+        h: data.pattern.h,
+        cells: data.pattern.cells,
+        locked: data.pattern.locked,
+        colors: data.pattern.colors.map(function (c) { return { code: c.code, hex: c.hex, rgb: c.rgb.slice(0, 3) }; }),
+        paletteId: (data.options && data.options.paletteId) || paletteIdForOpts(),
+        counts: [],
+        stats: {}
+      };
+      recount(p);
+      state.pattern = p;
+      state.patternQuantize = {
+        enabled: !!((data.options && data.options.quantize) || {}).enabled,
+        maxColors: ((data.options && data.options.quantize) || {}).maxColors || 0
+      };
+      state.history.length = 0;                       /* 撤销历史不保存：重开后栈是空的 */
+      state.recolor.selected = '';
+      state.highlightCode = '';
+      setCanvasPlaceholders();
+      renderPattern();
+      renderLegend();
+      renderSummary();
+      syncRecolorPicker(p);
+      updateLockInfo();
+      syncUndoButton();
+      /* 恢复后让用户看到全图；并记住尺寸，避免紧接着的重算又跳一次 */
+      fitViewZoom();
+      state.lastFitKey = p.w + 'x' + p.h;
+      setStatus('已打开暂存：' + (data.title || '未命名图纸') + ' · ' + p.w + ' × ' + p.h
+        + ' 格 · 撤销历史不保存（不能撤销回导入前的状态）', 'ok');
+    } else {
+      state.pattern = null;
+      state.patternQuantize = null;
+      state.history.length = 0;
+      state.highlightCode = '';
+      setCanvasPlaceholders();
+      renderPattern();
+      renderLegend();
+      renderSummary();
+      updateLockInfo();
+      syncUndoButton();
+      state.lastFitKey = '';
+      scheduleRegenerate(0);                          /* 文件里没有图纸：按参数生成一张 */
+      setStatus('已打开暂存：' + (data.title || '未命名图纸') + '（文件里没有图纸，正在按参数生成）', 'info');
+    }
+  }
+
+  function openProjectPicker() {
+    if (!ui.projectInput) { setStatus('当前环境缺少文件输入控件，无法打开暂存', 'err'); return; }
+    var el = ui.projectInput;
+    try { el.value = ''; } catch (e) { /* 允许重复选同一个文件 */ }
+    if (typeof el.click === 'function') el.click();
+  }
+
   function downloadBlob(blob, filename) {
     if (!blob) { setStatus('导出失败：文件内容为空', 'err'); return false; }
     if (!doc || typeof doc.createElement !== 'function') { setStatus('当前环境不支持下载', 'err'); return false; }
@@ -4177,6 +4516,14 @@
     on(ui.btnResetAdjust, 'click', function () { applyDefaults(true); });
     on(ui.btnExportPng, 'click', exportPng);
     on(ui.btnExportCsv, 'click', exportCsv);
+    /* 暂存：保存 = 生成 .pindou.json 下载；打开 = 走隐藏的 #projectInput */
+    on(ui.btnSaveProject, 'click', saveProject);
+    on(ui.btnOpenProject, 'click', openProjectPicker);
+    on(ui.projectInput, 'change', function () {
+      var f = (ui.projectInput.files && ui.projectInput.files.length) ? ui.projectInput.files[0] : null;
+      if (!f) return;
+      importProjectFile(f);
+    });
     on(ui.btnUnlockAll, 'click', unlockAll);
     on(ui.btnPickFile, 'click', pickFile);
     /* 智能建议：按钮只负责「算」，建议条里的「应用」才改参数（事件委托，条是动态重建的） */
@@ -4246,6 +4593,9 @@
       app: byId('app'),
       fileInput: byId('fileInput'),
       btnPickFile: byId('btnPickFile'),
+      btnSaveProject: byId('btnSaveProject'),
+      btnOpenProject: byId('btnOpenProject'),
+      projectInput: byId('projectInput'),
       btnSmartSuggest: byId('btnSmartSuggest'),
       smartSuggestArea: byId('smartSuggestArea'),
       moduleNotice: byId('moduleNotice'),

@@ -2886,7 +2886,10 @@ ok('控件清单 | 上一轮新增、本轮仍在的 9 个 id 全在 ui.html 里
 ok('控件清单 | 且这 9 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 /* 本轮 UI 压缩版面：删掉 cellLabelHint / toolHint / preprocessHint / exportHint / inputHint / dropHint 等
    hint 元素（以及其它重排带来的增减），id 总数随之降到 95。 */
-eq('控件清单 | ui.html 的 id 总数 = 101（99 + 阴影滑杆 shadowsRange / 读数 shadowsVal）', htmlIds.length, 101);
+eq('控件清单 | ui.html 的 id 总数 = 104（101 + 暂存三件套 btnSaveProject / btnOpenProject / projectInput）', htmlIds.length, 104);
+const PROJECT_NEW_IDS = ['btnSaveProject', 'btnOpenProject', 'projectInput'];
+ok('控件清单 | 暂存的 3 个 id 全在 ui.html 里', PROJECT_NEW_IDS.every((id) => htmlIds.includes(id)), PROJECT_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 3 个 id 全部被 app.js 引用（没有一个是摆设）', PROJECT_NEW_IDS.every((id) => appRefs.includes(id)), PROJECT_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 const SHADOW_NEW_IDS = ['shadowsRange', 'shadowsVal'];
 ok('控件清单 | 阴影滑杆的 2 个 id 全在 ui.html 里', SHADOW_NEW_IDS.every((id) => htmlIds.includes(id)), SHADOW_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
 ok('控件清单 | 且这 2 个 id 全部被 app.js 引用（没有一个是摆设）', SHADOW_NEW_IDS.every((id) => appRefs.includes(id)), SHADOW_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
@@ -3607,9 +3610,12 @@ eq('色数上限 | 重新开启减色 → 一起恢复可用', [els.maxColors.di
 erFlushAll();
 
 /* ── 导出：格内色号永远画出（与预览开关解耦），导出组没有色号开关 ───── */
-eq('导出 | 「导出」组的控件恰好是这 4 个（无格内色号开关、无对照图按钮）',
+/* 本轮两个导出按钮搬到了「图片输入」组（与上传按钮同排），导出组只剩「倍数 + 用量清单」 */
+eq('导出 | 「导出」组的控件只剩 2 个（导出按钮已搬到上传按钮旁边）',
   ((sectionOf('导出') || '').match(/<(?:input|select|button)\b[^>]*>/g) || []).map((t) => (/\bid="([^"]+)"/.exec(t) || [null, '?' + t.slice(0, 18)])[1]),
-  ['exportScale', 'exportAnnotate', 'btnExportPng', 'btnExportCsv']);
+  ['exportScale', 'exportAnnotate']);
+ok('导出 | 且导出组里不再出现 #btnExportPng / #btnExportCsv',
+  !/id="btnExportPng"/.test(sectionOf('导出') || '') && !/id="btnExportCsv"/.test(sectionOf('导出') || ''));
 els.showCodes.checked = false;          // 预览侧关掉色号
 fire(els.showCodes, 'change');
 eq('导出 | 预览关掉「显示色号」→ 导出 opts 仍强制 cellLabel === "code"', ui.exportViewOpts(2).cellLabel, 'code');
@@ -5155,6 +5161,254 @@ fire(els.btnResetAdjust, 'click');
 erFlushAll();
 eq('★阴影滑杆 | 「重置微调」后滑杆 / 读数 / options 三处都回到 0',
   [String(els.shadowsRange.value), String(els.shadowsVal.textContent), ui.options().preprocess.shadows], ['0', '0', 0]);
+
+/* ⑦ 暂存（保存 / 打开工程文件）：按钮搬家 + 往返一致 + ★原子性 */
+/* ① 按钮搬家 */
+/* 容器切片：按 <div>/</div> 配平扫，比正则可靠（正则会被嵌套 div 骗） */
+const sliceDivByClass = (cls) => {
+  const openTag = '<div class="' + cls + '">';
+  const open = UI_HTML.indexOf(openTag);
+  if (open < 0) return '';
+  let i = open + openTag.length;
+  let depth = 1;
+  while (i < UI_HTML.length && depth > 0) {
+    if (UI_HTML.startsWith('<div', i)) { depth++; i += 4; }
+    else if (UI_HTML.startsWith('</div>', i)) { depth--; i += 6; }
+    else i++;
+  }
+  return UI_HTML.slice(open, i);
+};
+const headActionsHtml = sliceDivByClass('head-actions');
+const basicPanelHtml = (UI_HTML.match(/<div id="panelBasic"[\s\S]*?<div id="panelAdvanced"/) || [''])[0];
+const FOUR_BTNS = ['btnSaveProject', 'btnOpenProject', 'btnExportPng', 'btnExportCsv'];
+const inHead = (id) => headActionsHtml.indexOf('id="' + id + '"') >= 0;
+ok('暂存前置 | .head-actions 容器切得出来（下面的位置断言不是空转）', !!headActionsHtml && headActionsHtml.indexOf('btnPickFile') >= 0, headActionsHtml.replace(/\s+/g, ' ').slice(0, 120));
+/* 改写①：不再找 .btn-grid.four 包裹层（它已删除）——改成「与 #btnPickFile 同一个父容器」 */
+ok('★暂存 | 四个按钮 + #projectInput 与 #btnPickFile 同一个父容器（.head-actions）',
+  inHead('btnPickFile') && FOUR_BTNS.every(inHead) && inHead('projectInput'),
+  JSON.stringify({ pick: inHead('btnPickFile'), btns: FOUR_BTNS.map(inHead), input: inHead('projectInput') }));
+/* 改写②：不再要求「紧跟四按钮之后」，改成「与四个按钮同属 .head-actions」 */
+ok('暂存 | #projectInput 与四个按钮同属 .head-actions（不再要求紧邻，位置由容器保证）',
+  inHead('projectInput') && FOUR_BTNS.every(inHead), headActionsHtml.replace(/\s+/g, ' ').slice(0, 150));
+ok('★暂存 | 四个按钮都是普通 .btn，class 里不含 ghost（用户要求「明显一些」）',
+  FOUR_BTNS.every((id) => {
+    const tag = (UI_HTML.match(new RegExp('<button id="' + id + '"[^>]*>')) || [''])[0];
+    return /class="btn"/.test(tag) && !/ghost/.test(tag);
+  }), FOUR_BTNS.map((id) => ((UI_HTML.match(new RegExp('<button id="' + id + '"[^>]*>')) || [''])[0] || '').slice(0, 60)).join(' | '));
+/* 新补 3 条（搬家最容易出的三种「没搬干净」） */
+ok('★暂存 | 这 5 个 id 不再出现在 #panelBasic 里（搬走要搬干净，不能两处都有）',
+  basicPanelHtml.length > 0 && ['btnSaveProject', 'btnOpenProject', 'btnExportPng', 'btnExportCsv', 'projectInput'].every((id) => basicPanelHtml.indexOf('id="' + id + '"') < 0),
+  JSON.stringify(['btnSaveProject', 'btnOpenProject', 'btnExportPng', 'btnExportCsv', 'projectInput'].filter((id) => basicPanelHtml.indexOf('id="' + id + '"') >= 0)));
+eq('★暂存 | 这 5 个 id 在 ui.html 里各只出现 1 次（无重复 id —— 搬家最容易出这个）',
+  ['btnSaveProject', 'btnOpenProject', 'btnExportPng', 'btnExportCsv', 'projectInput'].map((id) => (UI_HTML.split('id="' + id + '"').length - 1)),
+  [1, 1, 1, 1, 1]);
+ok('★暂存 | #btnPickFile 仍是 btn-primary（主入口不被抢焦点），四个新按钮不含 ghost',
+  /<button id="btnPickFile"[^>]*class="btn btn-primary"/.test(UI_HTML)
+  && FOUR_BTNS.every((id) => {
+    const tag = (UI_HTML.match(new RegExp('<button id="' + id + '"[^>]*>')) || [''])[0];
+    return tag.indexOf('ghost') < 0;
+  }),
+  (UI_HTML.match(/<button id="btnPickFile"[^>]*>/) || [''])[0].slice(0, 110));
+
+/* 前置：造图 + 非默认参数（尺寸/取色/风格/减色/一个压缩滑杆/阴影）+ 改几格并锁定 */
+els.lockAspect.checked = false;
+els.gridW.value = '24';
+els.gridH.value = '20';
+fire(els.gridW, 'input');
+st.source = { data: synth(24, 20, (x, y) => [(x * 11) % 256, (y * 13) % 256, ((x + y) * 7) % 256]), width: 24, height: 20 };
+st.srcW = 24;
+st.srcH = 20;
+els.methodBayer.checked = true;
+fire(els.methodBayer, 'change');
+els.styleFaithful.checked = true;
+els.styleBead.checked = false;
+fire(els.styleFaithful, 'change');
+els.quantizeEnabled.checked = true;
+fire(els.quantizeEnabled, 'change');
+els.maxColorsNum.value = '12';
+fire(els.maxColorsNum, 'input');
+els.maxColorsNum.dispatchEvent && fire(els.maxColorsNum, 'change');
+els.brightness.value = '60';
+fire(els.brightness, 'input');
+els.shadowsRange.value = '35';
+fire(els.shadowsRange, 'input');
+els.chartTitle.value = '暂存往返测试图';
+ui.regenerate();
+erFlushAll();
+st.viewOpts = ui.viewOpts();
+/* 改几格颜色（走真实改色路径）+ 另锁几格 */
+const rtPat = st.pattern;
+const rtColor = rtPat.colors[rtPat.colors.length - 1];
+ui.setRecolor ? null : null;
+let rtChanged = 0;
+for (const k of [0, 5, 17]) { if (k < rtPat.cells.length) { rtPat.cells[k] = rtPat.colors.length - 1; rtPat.locked[k] = 1; rtChanged++; } }
+for (const k of [2, 9]) { if (k < rtPat.cells.length) rtPat.locked[k] = 1; }
+ok('暂存前置 | 确实改了几格颜色并锁定（否则往返比对是空转）', rtChanged > 0, String(rtChanged));
+const rtCells0 = Array.from(st.pattern.cells).join(',');
+const rtLocked0 = Array.from(st.pattern.locked).join(',');
+const rtColors0 = st.pattern.colors.map((c) => c.code + ':' + c.hex).join(',');
+/* counts 用**独立复算**取快照：我手改过 cells，app 里那份 counts 是旧的；
+   这样断言变成「导入后 app 复算的 counts === 从 cells 独立复算的 counts」，比比对旧快照更强 */
+const countMap = (arr) => JSON.stringify((arr || []).map((c) => [String(c.code), c.count]).sort());
+const rtCounts0 = countMap(st.pattern.colors.map((c) => ({
+  code: c.code,
+  count: Array.from(st.pattern.cells).filter((i) => String(st.pattern.colors[i] && st.pattern.colors[i].code) === String(c.code)).length
+})));
+const rtOpts0 = JSON.stringify(ui.options());
+
+/* 桩的 window 补上 btoa/atob：暂存的 cellsB64/lockedB64 就靠它们编解码（真实浏览器一定有） */
+sandboxWin.btoa = (str) => Buffer.from(String(str), 'binary').toString('base64');
+sandboxWin.atob = (b64) => Buffer.from(String(b64), 'base64').toString('binary');
+/* ② 保存：从按钮走真实路径，抓下载的 Blob 内容 */
+const savedTexts = [];
+const PrevBlobCtor = sandboxWin.Blob;
+sandboxWin.Blob = class CapBlob extends PrevBlobCtor { constructor(parts, o) { super(parts, o); savedTexts.push((parts || []).join('')); } };
+const srcCvEl = dom.map.sourceCanvas;
+srcCvEl.width = 24;
+srcCvEl.height = 20;
+fire(els.btnSaveProject, 'click');
+erFlushAll();
+sandboxWin.Blob = PrevBlobCtor;
+ok('★暂存 | 点「保存暂存」产出了一个 JSON（走真实按钮路径）', savedTexts.length === 1 && String(savedTexts[0]).slice(0, 1) === '{', String(savedTexts.length));
+const projText = savedTexts[0];
+const projObj = JSON.parse(projText);
+eq('暂存 | 顶层字段恰好是 app/version/title/source/options/pattern', Object.keys(projObj).sort(), ['app', 'options', 'pattern', 'source', 'title', 'version']);
+eq('暂存 | app === "pindou" 且 version === 1（冻结格式）', [projObj.app, projObj.version], ['pindou', 1]);
+ok('暂存 | source.dataUrl 是 PNG dataURL，且带 w/h',
+  typeof projObj.source.dataUrl === 'string' && projObj.source.dataUrl.indexOf('data:image/png;base64,') === 0 && projObj.source.w > 0 && projObj.source.h > 0,
+  JSON.stringify([String(projObj.source.dataUrl).slice(0, 30), projObj.source.w, projObj.source.h]));
+ok('暂存 | pattern 里 cellsB64 / lockedB64 是 base64，colors 带 code/hex/rgb',
+  typeof projObj.pattern.cellsB64 === 'string' && typeof projObj.pattern.lockedB64 === 'string'
+  && projObj.pattern.colors.every((c) => typeof c.code === 'string' && typeof c.hex === 'string' && Array.isArray(c.rgb)),
+  JSON.stringify([projObj.pattern.w, projObj.pattern.h, projObj.pattern.colors.length]));
+ok('暂存 | 保存状态行说明了「撤销历史不保存」', String(els.statusText.textContent).indexOf('撤销历史不保存') >= 0, String(els.statusText.textContent).slice(0, 90));
+
+/* ③ 破坏现场 → 打开 → 逐项比对 */
+els.gridW.value = '7';
+fire(els.gridW, 'input');
+els.gridH.value = '5';
+fire(els.gridH, 'input');
+els.styleBead.checked = true;
+els.styleFaithful.checked = false;
+fire(els.styleBead, 'change');
+els.brightness.value = '0';
+fire(els.brightness, 'input');
+els.shadowsRange.value = '0';
+fire(els.shadowsRange, 'input');
+els.chartTitle.value = '被破坏的标题';
+st.pattern = Pipeline.generateFromRGBA(synth(8, 8, (x, y) => [x * 30, y * 30, 60]), 8, 8, { gridW: 7, gridH: 5, style: 'bead' });
+st.history.push({});
+st.history.push({});
+ok('暂存前置 | 现场确实被破坏（参数/图纸/历史都变了）',
+  JSON.stringify(ui.options()) !== rtOpts0 && st.history.length === 2, JSON.stringify([ui.options().gridW, st.history.length]));
+/* dataURL 解码桩：真实环境有 Image，桩里补一个同步 onload 的类（尺寸取自文件声明的 source.w/h） */
+let rtImgDims = [0, 0];
+sandboxWin.Image = class StubImage {
+  constructor() { this.naturalWidth = 0; this.naturalHeight = 0; }
+  set src(v) {
+    if (typeof v !== 'string' || v.indexOf('data:image/png;base64,') !== 0) { if (this.onerror) this.onerror(); return; }
+    this.naturalWidth = rtImgDims[0];
+    this.naturalHeight = rtImgDims[1];
+    if (this.onload) this.onload();
+  }
+};
+rtImgDims = [projObj.source.w, projObj.source.h];
+const importOnce = async (text) => { els.projectInput.files = [{ text: () => Promise.resolve(text) }]; fire(els.projectInput, 'change'); await flushAsync(); await flushAsync(); };
+await importOnce(projText);
+eq('★往返 | pattern.w/h 恢复一致', [st.pattern.w, st.pattern.h], [projObj.pattern.w, projObj.pattern.h]);
+eq('★往返 | cells 逐格一致', Array.from(st.pattern.cells).join(','), rtCells0);
+eq('★往返 | locked 逐格一致', Array.from(st.pattern.locked).join(','), rtLocked0);
+eq('★往返 | colors（色号 + hex 序列）一致', st.pattern.colors.map((c) => c.code + ':' + c.hex).join(','), rtColors0);
+eq('★往返 | counts（色号→颗数 映射）与 cells 独立复算一致（按色号排序比，不受 app 内部排序影响）', countMap(st.pattern.counts), rtCounts0);
+eq('★往返 | 标题一致', String(els.chartTitle.value), '暂存往返测试图');
+eq('★往返 | options() 逐字段一致（含 preprocess 六项 / quantize / style / paletteId / method）', JSON.stringify(ui.options()), rtOpts0);
+ok('★往返 | 压缩滑杆反解：文件存的是生效值，恢复后 effCurve(滑杆raw) 仍等于它',
+  (function () {
+    const eff = Number(projObj.options.preprocess.brightness);
+    const raw = Number(els.brightness.value);
+    return ui.effCurve(raw) === eff && ui.options().preprocess.brightness === eff;
+  })(), JSON.stringify({ raw: Number(els.brightness.value), eff: ui.effCurve(Number(els.brightness.value)), file: projObj.options.preprocess.brightness }));
+eq('★往返 | 撤销历史不保存（导入后 history.length === 0）', st.history.length, 0);
+eq('★往返 | lastFitKey 设为该图纸尺寸（避免紧接着的重算又跳一次缩放）', String(st.lastFitKey), projObj.pattern.w + 'x' + projObj.pattern.h);
+
+/* ④ ★★原子性：6 个坏文件逐个导入 —— 每次都断言「导入前后状态完全一致 + 不抛 + 提示可定位」 */
+const b64OfBytes = (u8) => Buffer.from(u8).toString('base64');
+const bytesOfB64 = (b64) => new Uint8Array(Buffer.from(String(b64), 'base64'));
+const cloneProj = () => JSON.parse(projText);
+const projBad = [];
+projBad.push(['非 JSON', '{ 这不是 JSON']);
+const badNoApp = cloneProj();
+delete badNoApp.app;
+projBad.push(['缺 app', JSON.stringify(badNoApp)]);
+const badVer = cloneProj();
+badVer.version = 2;
+projBad.push(['version: 2', JSON.stringify(badVer)]);
+const badCellsLen = cloneProj();
+badCellsLen.pattern.cellsB64 = b64OfBytes(bytesOfB64(badCellsLen.pattern.cellsB64).slice(0, 4));
+projBad.push(['cells 字节数不对', JSON.stringify(badCellsLen)]);
+const badOob = cloneProj();
+const oobU8raw = bytesOfB64(badOob.pattern.cellsB64);
+const oobU16 = new Uint16Array(oobU8raw.length / 2);
+for (let k = 0; k < oobU16.length; k++) oobU16[k] = oobU8raw[k * 2] | (oobU8raw[k * 2 + 1] << 8);
+oobU16[0] = badOob.pattern.colors.length + 7;
+badOob.pattern.cellsB64 = b64OfBytes(new Uint8Array(oobU16.buffer));
+projBad.push(['cells 下标越界', JSON.stringify(badOob)]);
+const badNoColors = cloneProj();
+badNoColors.pattern.colors = [];
+projBad.push(['colors 为空', JSON.stringify(badNoColors)]);
+const badLocators = [/JSON/, /app|pindou/, /版本|不支持/, /字节数|cellsB64|缺/, /越界|下标/, /colors|至少/];
+let badStatusVer = '';
+eq('原子性前置 | 坏文件样本数 = 6', projBad.length, 6);
+for (let bi = 0; bi < projBad.length; bi++) {
+  const badLabel = projBad[bi][0];
+  const badText = projBad[bi][1];
+  const snapOpts = JSON.stringify(ui.options());
+  const snapCells = Array.from(st.pattern.cells).join(',');
+  const snapWH = st.pattern.w + 'x' + st.pattern.h;
+  let badThrew = null;
+  try { await importOnce(badText); } catch (e2) { badThrew = e2; }
+  const badStatus = String(els.statusText.textContent || '');
+  if (badLabel === 'version: 2') badStatusVer = badStatus;
+  ok('★★原子性 | ' + badLabel + '：options() 逐字段不变（坏文件不许改掉一半状态）',
+    JSON.stringify(ui.options()) === snapOpts, JSON.stringify([ui.options().gridW, ui.options().gridH, ui.options().style]));
+  ok('★★原子性 | ' + badLabel + '：pattern（w/h + cells 全串）不变',
+    Array.from(st.pattern.cells).join(',') === snapCells && (st.pattern.w + 'x' + st.pattern.h) === snapWH,
+    JSON.stringify([st.pattern.w, st.pattern.h, Array.from(st.pattern.cells).length]));
+  ok('★★原子性 | ' + badLabel + '：不抛异常 + 提示非空且含可定位信息',
+    badThrew === null && badStatus.length > 0 && badLocators[bi].test(badStatus),
+    (badThrew ? 'THREW ' + badThrew.message : 'ok') + ' | ' + JSON.stringify(badStatus.slice(0, 110)));
+}
+/* 版本必须硬拒（不许「尽力加载」） */
+ok('★暂存 | version: 2 的提示里明确写了版本不支持（不做尽力加载）',
+  /版本|不支持/.test(badStatusVer) && badStatusVer.indexOf('状态未改动') >= 0,
+  String(badStatusVer).slice(0, 130));
+/* 「打开暂存」→ 触发隐藏 #projectInput 的 click（真实入口不搬家就坏） */
+const prevClick = els.projectInput.click;
+let pickerClicks = 0;
+els.projectInput.click = function () { pickerClicks++; };
+fire(els.btnOpenProject, 'click');
+erFlushAll();
+els.projectInput.click = prevClick;
+eq('★暂存 | 点「打开暂存」→ 真的触发了 #projectInput.click()（隐藏 input 仍是唯一入口）', pickerClicks, 1);
+/* 导出按钮搬家后功能不许坏：两个都还能触发下载 */
+/* 两个导出按钮搬家后必须仍然「有反应」：
+   CSV 走同步下载（能数到 <a> 增加）；PNG 走 toBlob 异步，桩里数 <a> 不稳，改看「状态行变了 / 离屏画布多了」。 */
+const anchorsBeforeDl = dom.created.anchors.length;
+const canvasesBeforeDl = dom.created.canvases.length;
+const statusBeforePng = String(els.statusText.textContent);
+fire(els.btnExportPng, 'click');
+erFlushAll();
+await flushAsync();
+await flushAsync();
+ok('★暂存 | 搬位置后「导出图纸」仍被触发（状态行变化 或 新建离屏画布 或 新增下载）',
+  String(els.statusText.textContent) !== statusBeforePng || dom.created.canvases.length > canvasesBeforeDl || dom.created.anchors.length > anchorsBeforeDl,
+  JSON.stringify([statusBeforePng.slice(0, 40), String(els.statusText.textContent).slice(0, 40), dom.created.canvases.length - canvasesBeforeDl, dom.created.anchors.length - anchorsBeforeDl]));
+const anchorsBeforeCsv = dom.created.anchors.length;
+fire(els.btnExportCsv, 'click');
+erFlushAll();
+await flushAsync();
+ok('★暂存 | 搬位置后「导出 CSV」仍能触发下载（新增一个 <a>）', dom.created.anchors.length > anchorsBeforeCsv,
+  dom.created.anchors.length + ' vs ' + anchorsBeforeCsv);
 
 /* ══════════════════════════════════════════ 第 7 组 · 原图编辑（srcedit.js） */
 startGroup('第 7 组 · 原图编辑（SourceEdit）');

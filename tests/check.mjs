@@ -368,12 +368,14 @@ function checkInvariants(label, pat) {
 const srcBig = synth(1000, 500, (x, y) => [(x * 7) % 256, (y * 5) % 256, ((x + y) * 3) % 256]);
 const srcWide = synth(1000, 50, (x, y) => [(x * 3) % 256, (y * 17) % 256, 90]);
 /* 「29 格一块板」概念已彻底删除：`boards` 不再是参数；尺寸回落只有一条规则
-   —— 长边 = MAX_DIM = 100 格，短边按原图宽高比推导后夹到 [1,100]（极端比例不强行方形）。 */
+   —— 长边 = **DEFAULT_LONG_EDGE = 100**（默认尺寸，不是上限），短边按原图宽高比推导后
+   夹到 [1, MAX_DIM = 200]（极端比例不强行方形）。上限与默认是两个常量，别混。 */
 const DIM_CASES = [
   { label: '1000×500（2:1，未给尺寸）', img: srcBig, w: 1000, h: 500, opts: {}, ew: 100, eh: 50 },
   { label: '1000×50（20:1，未给尺寸）', img: srcWide, w: 1000, h: 50, opts: {}, ew: 100, eh: 5 },
   { label: '1000×1（1000:1，未给尺寸，短边夹到 1）', img: synth(1000, 1, () => [10, 20, 30]), w: 1000, h: 1, opts: {}, ew: 100, eh: 1 },
-  { label: '1000×500 + 显式 gridW:200（应夹到 100）', img: srcBig, w: 1000, h: 500, opts: { gridW: 200 }, ew: 100, eh: 50 },
+  { label: '1000×500 + 显式 gridW:200（合法，不再被夹）', img: srcBig, w: 1000, h: 500, opts: { gridW: 200 }, ew: 200, eh: 100 },
+  { label: '1000×500 + 显式 gridW:201（应夹到 200）', img: srcBig, w: 1000, h: 500, opts: { gridW: 201 }, ew: 200, eh: 100 },
   { label: '1000×500 + 显式 gridW:60 / gridH:40', img: srcBig, w: 1000, h: 500, opts: { gridW: 60, gridH: 40 }, ew: 60, eh: 40 },
   { label: '1000×500 + 只给 gridH:30（按原图比例推宽）', img: srcBig, w: 1000, h: 500, opts: { gridH: 30 }, ew: 60, eh: 30 },
 ];
@@ -397,10 +399,10 @@ eq('100×100 | stats.total === 100*100（源图无透明像素）', patMax.stats
 checkInvariants('100×100（上限）', patMax);
 
 /* 上限真的是 100：101 必须被夹回 100，且告警文案由 MAX_DIM 拼出 */
-const pat101 = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 101, gridH: 101 });
-eq('101 → 夹到 100（上限就是 100）', [pat101.w, pat101.h], [100, 100]);
-ok('101 夹取告警含 [1,100]（文案由 MAX_DIM 拼出，不硬编码）', pat101.warnings.some((w) => String(w).includes('[1,100]')), JSON.stringify(pat101.warnings));
-ok('101 夹取告警里不出现 116 / 87（旧上限文案已彻底清除）', !pat101.warnings.some((w) => /116|87/.test(String(w))), JSON.stringify(pat101.warnings));
+const pat101 = Pipeline.generateFromRGBA(srcMed, 240, 240, { gridW: 201, gridH: 201 });   /* 越界一档：上限 200 */
+eq('201 → 夹到 200（上限就是 200）', [pat101.w, pat101.h], [200, 200]);
+ok('201 夹取告警含 [1,200]（文案由 MAX_DIM 拼出，不硬编码）', pat101.warnings.some((w) => String(w).includes('[1,200]')), JSON.stringify(pat101.warnings));
+ok('201 夹取告警里不出现 116 / 87 / 100（旧上限文案已彻底清除）', !pat101.warnings.some((w) => /116|87/.test(String(w))) && !pat101.warnings.some((w) => /\[1,100\]/.test(String(w))), JSON.stringify(pat101.warnings));
 
 /* 未给任何尺寸 → 回落 100 长边（等价于「预设尺寸」）；方形源必须正好 100×100 */
 const patFallback = Pipeline.generateFromRGBA(srcMed, 240, 240, {});
@@ -730,8 +732,8 @@ for (const [nm, r] of anaSamples) {
   if (!Array.isArray(r.reasons) || r.reasons.length === 0) anaStructBad.push(nm + ':reasons 空');
   if (!r.reasons.every((x) => typeof x === 'string' && x.length > 0)) anaStructBad.push(nm + ':reasons 含非字符串/空串');
   const sg = r.suggested || {};
-  if (!(Number.isInteger(sg.gridW) && sg.gridW >= 1 && sg.gridW <= 100)) anaStructBad.push(nm + ':gridW ' + sg.gridW);
-  if (!(Number.isInteger(sg.gridH) && sg.gridH >= 1 && sg.gridH <= 100)) anaStructBad.push(nm + ':gridH ' + sg.gridH);
+  if (!(Number.isInteger(sg.gridW) && sg.gridW >= 1 && sg.gridW <= 200)) anaStructBad.push(nm + ':gridW ' + sg.gridW);
+  if (!(Number.isInteger(sg.gridH) && sg.gridH >= 1 && sg.gridH <= 200)) anaStructBad.push(nm + ':gridH ' + sg.gridH);
   if (!(Number.isInteger(sg.maxColors) && sg.maxColors >= 2 && sg.maxColors <= 221)) anaStructBad.push(nm + ':maxColors ' + sg.maxColors);
   if (['nearest', 'fs', 'bayer'].indexOf(sg.method) < 0) anaStructBad.push(nm + ':method ' + sg.method);
   if (['bead', 'faithful'].indexOf(sg.style) < 0) anaStructBad.push(nm + ':style ' + sg.style);
@@ -2060,7 +2062,7 @@ startGroup('第 5 组 · 产物（index.html）');
    只留一条红，极易被误读成「几乎全绿」。所以下面：① 显式 INFO 报出跳过条数；
    ② 用 EXPECTED_PRODUCT_ASSERTIONS 自校验（产物存在时必须恰好执行这么多条，
       数量变动而没同步这个常量就会红），③ 缺失时断言实际执行数为 0。 */
-const EXPECTED_PRODUCT_ASSERTIONS = 69;
+const EXPECTED_PRODUCT_ASSERTIONS = 74;      /* 69 + 本轮产物内 MAX_DIM 探针新增的 5 条（120 不夹 / 201 夹 / 告警 [1,200] / 无 [1,100] / 999 夹） */
 let productSkipNotice = '';
 let productAssertionsRan = 0;
 let productAssertionsBase = null;
@@ -2259,14 +2261,24 @@ if (!productExists) {
   ok('产物第 5 段（src/srcedit.js）重新 eval 无抛错', srceditErr === null, srceditErr ? srceditErr.message : '');
   ok('重新 eval 后 window.SourceEdit 挂上了', typeof globalThis.SourceEdit === 'object' && globalThis.SourceEdit !== null);
   ok('重新 eval 后 typeof window.SourceEdit.mount === "function"', typeof globalThis.window.SourceEdit.mount === 'function');
-  /* 行为证明（不是读常量）：产物里的 pipeline MAX_DIM 必须是 100 —— 让它真的把 120 夹到 100 */
-  const productSrc = synth(120, 120, (x, y) => [(x * 5) % 256, (y * 3) % 256, ((x + y) * 7) % 256]);
-  const patProduct100 = globalThis.Pipeline.generateFromRGBA(productSrc, 120, 120, { gridW: 120, gridH: 120 });
-  eq('产物内 pipeline MAX_DIM = 100（行为证明：120 被夹到 100，不再有 116 上限）', [patProduct100.w, patProduct100.h], [100, 100]);
-  ok('产物内 pipeline 夹取告警含 [1,100]（文案由 MAX_DIM 拼出）',
-    patProduct100.warnings.some((w) => String(w).includes('[1,100]')), JSON.stringify(patProduct100.warnings));
-  const patProductDefault = globalThis.Pipeline.generateFromRGBA(productSrc, 120, 120, {});
-  eq('产物内 pipeline 无尺寸参数时回落 100×100（方形源）', [patProductDefault.w, patProductDefault.h], [100, 100]);
+  /* 行为证明（不是读常量）：产物里的 pipeline MAX_DIM 必须是 200 —— 三个探针分别验「合法不夹 / 越界夹 / 极端夹」。
+     断言名随上限一起换代：116 时代写「不再有 116 上限」、100 时代写「120 被夹到 100」，现在是 200 时代。 */
+  const productSrc = synth(240, 240, (x, y) => [(x * 5) % 256, (y * 3) % 256, ((x + y) * 7) % 256]);
+  const patProduct120 = globalThis.Pipeline.generateFromRGBA(productSrc, 240, 240, { gridW: 120, gridH: 120 });
+  eq('产物内 pipeline MAX_DIM = 200（行为证明①：120 合法、不被夹）', [patProduct120.w, patProduct120.h], [120, 120]);
+  ok('产物内 pipeline：120 这一档没有触发任何夹取告警', patProduct120.warnings.filter((w) => String(w).indexOf('夹到') >= 0), []);
+  const patProduct201 = globalThis.Pipeline.generateFromRGBA(productSrc, 240, 240, { gridW: 201, gridH: 201 });
+  eq('产物内 pipeline MAX_DIM = 200（行为证明②：201 被夹到 200）', [patProduct201.w, patProduct201.h], [200, 200]);
+  ok('产物内 pipeline 夹取告警含 [1,200]（文案由 MAX_DIM 拼出）',
+    patProduct201.warnings.some((w) => String(w).includes('[1,200]')), JSON.stringify(patProduct201.warnings));
+  ok('产物内 pipeline 夹取告警**不含** [1,100]（旧上限文案已彻底清除）',
+    !patProduct201.warnings.some((w) => String(w).includes('[1,100]')), JSON.stringify(patProduct201.warnings));
+  ok('产物内 pipeline 夹取告警也不含 116 / 87（更早的上限文案已清除）',
+    !patProduct201.warnings.some((w) => /116|87/.test(String(w))), JSON.stringify(patProduct201.warnings));
+  const patProduct999 = globalThis.Pipeline.generateFromRGBA(productSrc, 240, 240, { gridW: 999, gridH: 999 });
+  eq('产物内 pipeline MAX_DIM = 200（行为证明③：999 被夹到 200）', [patProduct999.w, patProduct999.h], [200, 200]);
+  const patProductDefault = globalThis.Pipeline.generateFromRGBA(productSrc, 240, 240, {});
+  eq('产物内 pipeline 无尺寸参数时回落 100×100（**默认长边 100，不是上限**）', [patProductDefault.w, patProductDefault.h], [100, 100]);
 
   /* 第 6 段（app.js）只断言「能加载、不炸、不破坏上面 5 个全局」——
    * 它的全局名与函数名属实现细节，硬断言会误报。 */
@@ -2507,12 +2519,12 @@ ok('SourceEdit 未挂载时，启动状态行如实说明「原图调整不可�
 els.gridW.value = '200';
 els.gridH.value = '200';
 fire(els.gridW, 'input');
-eq('尺寸 | gridW 输入 200 → options().gridW 夹到 100', ui.options().gridW, 100);
-eq('尺寸 | 输入框里的值也被回写夹到 100', String(els.gridW.value), '100');
+eq('尺寸 | gridW 输入 999 → options().gridW 夹到 200', ui.options().gridW, 200);
+eq('尺寸 | 输入框里的值也被回写夹到 200', String(els.gridW.value), '200');
 const gridWTag = (UI_HTML.match(/<input\b[^>]*\bid="gridW"[^>]*>/) || [''])[0];
 const gridHTag = (UI_HTML.match(/<input\b[^>]*\bid="gridH"[^>]*>/) || [''])[0];
-ok('尺寸 | #gridW 的 max 属性 = 100（与 app.js / pipeline 的 MAX_DIM 一致）', /max="100"/.test(gridWTag), gridWTag);
-ok('尺寸 | #gridH 的 max 属性 = 100', /max="100"/.test(gridHTag), gridHTag);
+ok('尺寸 | #gridW 的 max 属性 = 200（与 app.js / pipeline 的 MAX_DIM 一致）', /max="200"/.test(gridWTag), gridWTag);
+ok('尺寸 | #gridH 的 max 属性 = 200', /max="200"/.test(gridHTag), gridHTag);
 ok('尺寸 | #gridW / #gridH 的默认 value 都是 100', /value="100"/.test(gridWTag) && /value="100"/.test(gridHTag), gridWTag + ' | ' + gridHTag);
 els.sizePreset.value = '100';
 fire(els.sizePreset, 'change');
@@ -2589,9 +2601,12 @@ const ratioCase = (label, sw, sh, gw, gh, expect) => {
   else { els.gridH.value = String(gh); fire(els.gridH, 'input'); }
   eq('★比例锁 | ' + label, [ui.options().gridW, ui.options().gridH], expect);
 };
-ratioCase('竖图 1208×1556 + gridW=100 → 78×100（以前会变 100×100，图被拉伸）', 1208, 1556, 100, null, [78, 100]);
+/* 语义裁决（本轮）：用户亲手输的那一侧必须被尊重，另一侧按比例；129 ≤ 200 合法 → 100×129。
+   旧期望 78×100 是被「上限 100」硬缩出来的，已过期。 */
+ratioCase('竖图 1208×1556 + 手动 gridW=100 → 100×129（用户输的那侧被尊重，另一侧按比例）', 1208, 1556, 100, null, [100, 129]);
 ratioCase('横图 1600×800 + gridW=100 → 100×50', 1600, 800, 100, null, [100, 50]);
-ratioCase('横图 1600×800 + 只给 gridH=100 → 仍是 100×50（从高边反推也一样）', 1600, 800, null, 100, [100, 50]);
+/* 语义裁决：2:1 的比例锁 → 高给 100，宽按比例 = 200（正好等于上限，合法） */
+ratioCase('横图 1600×800 + 只给 gridH=100 → 200×100（宽按 2:1 推满上限）', 1600, 800, null, 100, [200, 100]);
 ratioCase('方图 1000×1000 → 100×100', 1000, 1000, 100, null, [100, 100]);
 ratioCase('极窄竖图 100×2000 → 5×100（短边按比例缩到 5）', 100, 2000, null, 100, [5, 100]);
 ratioCase('极端 10000×10 + gridW=1 → 1×1（绝不出现 0 格）', 10000, 10, 1, null, [1, 1]);
@@ -2599,10 +2614,10 @@ ratioCase('极端 10000×10 + gridW=1 → 1×1（绝不出现 0 格）', 10000, 
 setSrcDims(1208, 1556);
 els.lockAspect.checked = false;
 const ghBeforeUnlocked = String(els.gridH.value);
-els.gridW.value = '200';
+els.gridW.value = '999';
 fire(els.gridW, 'input');
-eq('★比例锁 | 不勾锁定 → gridW 只夹自己（200 → 100），另一边不被联动',
-  [ui.options().gridW, String(els.gridH.value)], [100, ghBeforeUnlocked]);
+eq('★比例锁 | 不勾锁定 → gridW 只夹自己（999 → 200），另一边不被联动',
+  [ui.options().gridW, String(els.gridH.value)], [200, ghBeforeUnlocked]);
 /* 预设仍是固定正方形：applySizePreset 不经过 normalizeDims */
 setSrcDims(1208, 1556);
 els.lockAspect.checked = true;
@@ -2804,7 +2819,10 @@ ok('控件清单 | 上一轮新增、本轮仍在的 9 个 id 全在 ui.html 里
 ok('控件清单 | 且这 9 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 /* 本轮 UI 压缩版面：删掉 cellLabelHint / toolHint / preprocessHint / exportHint / inputHint / dropHint 等
    hint 元素（以及其它重排带来的增减），id 总数随之降到 95。 */
-eq('控件清单 | ui.html 的 id 总数 = 95（本轮删掉 10 个 hint/旧元素后的实际值）', htmlIds.length, 95);
+eq('控件清单 | ui.html 的 id 总数 = 99（右栏拆选项卡新增 tabSrc/tabLegend/panelSrc/panelLegend）', htmlIds.length, 99);
+const SIDE_TAB_NEW_IDS = ['tabSrc', 'tabLegend', 'panelSrc', 'panelLegend'];
+ok('控件清单 | 右栏选项卡新增的 4 个 id 全在 ui.html 里', SIDE_TAB_NEW_IDS.every((id) => htmlIds.includes(id)), SIDE_TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 4 个 id 全部被 app.js 引用（没有一个是摆设）', SIDE_TAB_NEW_IDS.every((id) => appRefs.includes(id)), SIDE_TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 const STYLE_NEW_IDS = ['styleBead', 'styleFaithful', 'btnSmartSuggest', 'smartSuggestArea'];
 ok('控件清单 | 风格两枚 + 智能建议两枚共 4 个 id 全在 ui.html 里', STYLE_NEW_IDS.every((id) => htmlIds.includes(id)), STYLE_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
 ok('控件清单 | 且这 4 个 id 全部被 app.js 引用（没有一个是摆设）', STYLE_NEW_IDS.every((id) => appRefs.includes(id)), STYLE_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
@@ -4626,6 +4644,411 @@ ok('手机必读 | 抠图撤销说明在基本页、另外两条在高级页（�
     return UI_HTML.indexOf(undoHint) < iAdv && UI_HTML.indexOf(altHint) > iAdv && UI_HTML.indexOf(cropHintTag) > iAdv;
   })(),
   JSON.stringify([UI_HTML.indexOf(undoHint), UI_HTML.indexOf(altHint), UI_HTML.indexOf(cropHintTag), UI_HTML.indexOf('<div id="panelAdvanced"')]));
+
+/* ═════════ 本轮：右栏拆选项卡 + 宽屏整页不滚（窄屏不许被锁死） ═════════ */
+
+/* ① 右栏选项卡：默认页 / 切换 / aria-selected / 未知值回落 / 左栏不受影响 */
+eq('右栏选项卡 | boot 默认 state.sideTab === "src"', String(st.sideTab), 'src');
+eq('右栏选项卡 | boot 默认 #panelSrc 可见、#panelLegend 隐藏', [String(els.panelSrc.hidden), String(els.panelLegend.hidden)], ['false', 'true']);
+eq('右栏选项卡 | boot 默认 #tabSrc 带 aria-selected="true"、#tabLegend 为 "false"',
+  [String(els.tabSrc.getAttribute('aria-selected')), String(els.tabLegend.getAttribute('aria-selected'))], ['true', 'false']);
+fire(els.tabLegend, 'click');
+erFlushAll();
+eq('★右栏选项卡 | 点 #tabLegend → 两页反转', [String(els.panelSrc.hidden), String(els.panelLegend.hidden)], ['true', 'false']);
+eq('★右栏选项卡 | 点 #tabLegend → aria-selected 同步为 true/false',
+  [String(els.tabLegend.getAttribute('aria-selected')), String(els.tabSrc.getAttribute('aria-selected'))], ['true', 'false']);
+eq('右栏选项卡 | 点 #tabLegend → state.sideTab === "legend"', String(st.sideTab), 'legend');
+fire(els.tabSrc, 'click');
+erFlushAll();
+eq('★右栏选项卡 | 点回 #tabSrc → 反向同步',
+  [String(els.panelSrc.hidden), String(els.panelLegend.hidden), String(els.tabSrc.getAttribute('aria-selected')), String(els.tabLegend.getAttribute('aria-selected'))],
+  ['false', 'true', 'true', 'false']);
+ui.setSideTab('nonsense');
+erFlushAll();
+eq('★右栏选项卡 | 未知值 setSideTab("nonsense") → 回落到第一页（#panelSrc 可见）', String(els.panelSrc.hidden), 'false');
+ok('★右栏选项卡 | 未知值回落时**不会两页都藏**', els.panelSrc.hidden !== true || els.panelLegend.hidden !== true,
+  JSON.stringify([els.panelSrc.hidden, els.panelLegend.hidden]));
+eq('右栏选项卡 | 未知值回落后的 state.sideTab 是合法的 "src"', String(st.sideTab), 'src');
+/* 左栏三连切换仍正常（右栏改动不许影响左栏） */
+ui.setTab('advanced');
+erFlushAll();
+const leftCycle = [[String(st.tab), String(els.panelAdvanced.hidden)]];
+ui.setTab('basic');
+erFlushAll();
+leftCycle.push([String(st.tab), String(els.panelAdvanced.hidden)]);
+ui.setTab('advanced');
+erFlushAll();
+leftCycle.push([String(st.tab), String(els.panelAdvanced.hidden)]);
+eq('左栏未受影响 | 基本/高级三连切换仍正常（state.tab 与 panelAdvanced.hidden 同步）',
+  leftCycle, [['advanced', 'false'], ['basic', 'true'], ['advanced', 'false']]);
+ui.setTab('basic');
+erFlushAll();
+
+/* ② ★ 图例高亮在「色号图例」页下仍生效（委托绑在 #legendBox，曾被 hidden 过一次） */
+els.lockAspect.checked = false;
+els.gridW.value = '12';
+els.gridH.value = '12';
+st.source = { data: synth(12, 12, (x, y) => [(x * 41) % 256, (y * 59) % 256, ((x + y) * 23) % 256]), width: 12, height: 12 };
+st.srcW = 12;
+st.srcH = 12;
+ui.regenerate();
+erFlushAll();
+st.viewOpts = ui.viewOpts();
+const legendPat = st.pattern;
+ok('图例页高亮 | 前置 | 图纸至少 2 个色号', !!(legendPat && legendPat.counts.length >= 2), legendPat ? String(legendPat.counts.length) : 'null');
+const legendCode2 = String(legendPat.counts.slice().sort((a, b) => b.count - a.count)[0].code);
+const legendRow2 = (code) => ({ className: 'legend-row', getAttribute: (n) => (n === 'data-code' ? code : null), parentNode: null });
+const strokeLayers = () => dom.map.patternCanvas._ctx._rec.strokes.slice(-2);
+fire(els.tabLegend, 'click');
+erFlushAll();
+els.legendBox.innerHTML = Render.legendHTML(legendPat);
+fire(els.legendBox, 'click', { target: legendRow2(legendCode2) });
+eq('★图例页高亮 | 在「色号图例」页点某行 → highlightCode 正确', String(ui.highlightCode()), legendCode2);
+/* 两层结构：实现是「beginPath+rect×N+fill()」压暗，再「beginPath+rect×M+stroke()」描边。
+   桩把 fill() 记成空路径（不记 rect），所以用「beginPath 次数增量 + 描边层的 rect 数」判两层。 */
+const pathsBeforeHl = dom.map.patternCanvas._ctx._rec.paths;
+fire(els.legendBox, 'click', { target: legendRow2(legendCode2) });   /* 先取消，确保下面这次是「新画的两层」 */
+erFlushAll();
+const pathsBeforeHl2 = dom.map.patternCanvas._ctx._rec.paths;
+fire(els.legendBox, 'click', { target: legendRow2(legendCode2) });
+const hlCount2 = Array.from(st.pattern.cells).filter((idx) => String(st.pattern.colors[idx] && st.pattern.colors[idx].code) === legendCode2).length;
+ok('★图例页高亮 | 压暗层 + 描边层都画了（beginPath 至少 2 次），且描边格数 === 该色号颗数',
+  (dom.map.patternCanvas._ctx._rec.paths - pathsBeforeHl2) >= 2
+  && (strokeLayers()[1] || []).filter((op) => op[0] === 'R').length === hlCount2,
+  JSON.stringify({ paths: dom.map.patternCanvas._ctx._rec.paths - pathsBeforeHl2, rects: (strokeLayers()[1] || []).filter((op) => op[0] === 'R').length, expect: hlCount2 }));
+/* 切到原图页再切回来：委托必须仍然生效 */
+fire(els.tabSrc, 'click');
+erFlushAll();
+fire(els.tabLegend, 'click');
+erFlushAll();
+fire(els.legendBox, 'click', { target: legendRow2(legendCode2) });
+eq('★图例页高亮 | 切到原图页再切回，点击委托仍生效（再点一次应清除）', String(ui.highlightCode()), '');
+fire(els.legendBox, 'click', { target: legendRow2(legendCode2) });
+eq('★图例页高亮 | 往返后再点仍能高亮（委托没被 hidden 打断）', String(ui.highlightCode()), legendCode2);
+
+/* ═════════ ★★ 宽屏整页不滚 / 窄屏不许被锁死（这是本轮最容易死人的地方） ═════════ */
+const styleText = (UI_HTML.match(/<style>([\s\S]*?)<\/style>/) || ['', ''])[1];
+const mediaBlocks = (function () {
+  const out = [];
+  const re = /@media([^{]+)\{/g;
+  let m;
+  while ((m = re.exec(styleText))) {
+    let d = 0, k = re.lastIndex - 1;
+    for (; k < styleText.length; k++) {
+      if (styleText[k] === '{') d++;
+      else if (styleText[k] === '}') { d--; if (!d) break; }
+    }
+    out.push({ cond: m[1].trim(), body: styleText.slice(re.lastIndex, k) });
+  }
+  return out;
+})();
+/* 同一断点在样式表里可能出现**多段**（如 1180 既有一条状态行规则、又有整块布局规则），
+   必须把它们合并起来判——只取第一段会漏掉真正管布局的那段。 */
+const mergeMedia = (re2) => {
+  const hit = mediaBlocks.filter((b2) => re2.test(b2.cond));
+  return { cond: hit.map((b2) => b2.cond).join(' | '), body: hit.map((b2) => b2.body).join('\n') };
+};
+const wideBlock = mergeMedia(/min-width\s*:\s*1181px/);
+const narrowBlock = mergeMedia(/max-width\s*:\s*1180px/);
+ok('★断点 | 两个断点在样式表里都能找到（合并后非空）', !!wideBlock.body && !!narrowBlock.body, JSON.stringify([wideBlock.cond, narrowBlock.cond]));
+/* 「给 html / body 设 overflow:hidden」的规则：全文恰好 1 处 */
+const bodyLockRe = /(^|[},])\s*(html\s*,\s*body|html|body)\s*\{[^}]*overflow\s*:\s*hidden/g;
+const bodyLocks = styleText.match(bodyLockRe) || [];
+eq('★宽屏不滚 | 给 html/body 设 overflow:hidden 的声明**恰好 1 处**（多一处就可能落到全局作用域）', bodyLocks.length, 1);
+ok('★宽屏不滚 | 那一处确实在 @media(min-width:1181px) 块内', /overflow\s*:\s*hidden/.test(wideBlock.body) && (wideBlock.body.match(/html\s*,\s*body/g) || []).length === 1,
+  JSON.stringify(wideBlock.cond) + ' body 片段=' + String(wideBlock.body).slice(0, 120));
+ok('★宽屏不滚 | 且它在 </style> 之前（不是被写到 style 外面）', (UI_HTML.indexOf('overflow:hidden') > 0) && UI_HTML.indexOf('</style>') > 0,
+  String(UI_HTML.indexOf('</style>')));
+ok('★宽屏不滚 | 全局作用域（剥掉所有 @media 块后）**不存在** html/body 的 overflow:hidden',
+  (function () {
+    let g = styleText;
+    for (const b of mediaBlocks) g = g.split(b.body).join('');
+    return !/(^|[},])\s*(html\s*,\s*body|html|body)\s*\{[^}]*overflow\s*:\s*hidden/.test(g);
+  })(), 'global 片段长度=' + String(styleText.length));
+ok('★窄屏不锁死 | 窄屏块（max-width:1180px）里也没有 html/body 的 overflow:hidden',
+  !/(^|[},])\s*(html\s*,\s*body|html|body)\s*\{[^}]*overflow\s*:\s*hidden/.test(narrowBlock.body),
+  String(narrowBlock.body).slice(0, 120));
+/* 断点互补：1180 / 1181，既不重叠也不留缝 */
+ok('★断点 | max-width:1180px 与 min-width:1181px 同时存在且相邻（无重叠、无缝隙）',
+  /max-width\s*:\s*1180px/.test(styleText) && /min-width\s*:\s*1181px/.test(styleText) && (1180 + 1 === 1181),
+  JSON.stringify([/max-width\s*:\s*1180px/.test(styleText), /min-width\s*:\s*1181px/.test(styleText)]));
+/* 三级下推链：.layout 吃掉剩余高度 → 两栏自己滚 → 画布栏 flex 列 + 滚动区吃满 */
+ok('★下推链 | .layout 在宽屏块里有 min-height:0 与 flex:1（否则内容会把整页撑开）',
+  /\.layout\{[^}]*min-height\s*:\s*0/.test(wideBlock.body) && /\.layout\{[^}]*flex\s*:\s*1/.test(wideBlock.body),
+  (wideBlock.body.match(/\.layout\{[^}]*\}/) || [''])[0].slice(0, 140));
+ok('★下推链 | 宽屏块里左/右两栏各自 overflow-y:auto（自己滚，不撑高整页）',
+  /\.controls\s*,\s*\.side\{[^}]*overflow-y\s*:\s*auto/.test(wideBlock.body),
+  (wideBlock.body.match(/\.controls\s*,\s*\.side\{[^}]*\}/) || [''])[0].slice(0, 160));
+ok('★下推链 | 宽屏块里 .canvas-panel 是 flex 列且 height:100%',
+  /\.canvas-panel\{[^}]*display\s*:\s*flex/.test(wideBlock.body) && /\.canvas-panel\{[^}]*flex-direction\s*:\s*column/.test(wideBlock.body) && /\.canvas-panel\{[^}]*height\s*:\s*100%/.test(wideBlock.body),
+  (wideBlock.body.match(/\.canvas-panel\{[^}]*\}/) || [''])[0].slice(0, 160));
+ok('★下推链 | 宽屏块里 .canvas-scroll 的 max-height:none（画布吃掉剩余高度）',
+  /\.canvas-scroll\{[^}]*max-height\s*:\s*none/.test(wideBlock.body),
+  (wideBlock.body.match(/\.canvas-scroll\{[^}]*\}/) || [''])[0].slice(0, 120));
+ok('下推链 | 基础层 .canvas-scroll 仍是 72vh（宽屏以外的兜底），窄屏是 60vh',
+  /max-height\s*:\s*72vh/.test(styleText) && /max-height\s*:\s*60vh/.test(narrowBlock.body),
+  JSON.stringify([/max-height\s*:\s*72vh/.test(styleText), /max-height\s*:\s*60vh/.test(narrowBlock.body)]));
+/* 窄屏原有堆叠规则不许被这轮改动冲掉 */
+ok('★窄屏堆叠 | .layout 仍 grid-template-columns:1fr', /\.layout\{[^}]*grid-template-columns\s*:\s*1fr/.test(narrowBlock.body),
+  (narrowBlock.body.match(/\.layout\{[^}]*\}/) || [''])[0].slice(0, 100));
+ok('★窄屏堆叠 | .canvas-panel{order:-1}（画布在上）仍在', /\.canvas-panel\{[^}]*order\s*:\s*-1/.test(narrowBlock.body),
+  (narrowBlock.body.match(/\.canvas-panel\{[^}]*\}/) || [''])[0].slice(0, 100));
+ok('★窄屏堆叠 | .controls{overflow:visible}（窄屏整页滚动，内部不锁）仍在',
+  /\.controls\{[^}]*overflow\s*:\s*visible/.test(narrowBlock.body),
+  (narrowBlock.body.match(/\.controls\{[^}]*\}/) || [''])[0].slice(0, 100));
+
+/* ═════════ 本轮：上限 200 / 换图默认长边 100 / 右键平移 / 生成后自动 fit ═════════ */
+
+/* ① ★三处副本一致：MAX_DIM 在 pipeline.js、app.js、ui.html 各有一份，少改一处就会「输入框允许 200 → 管线夹回 100」 */
+const srcTextOf = (f) => readFileSync(path.join(SRC_DIR, f), 'utf8');
+const maxDimOf = (t) => { const m = /\bMAX_DIM\s*=\s*(\d+)/.exec(t); return m ? Number(m[1]) : null; };
+const pipSrc2 = srcTextOf('pipeline.js');
+const appSrc2 = srcTextOf('app.js');
+eq('★上限 | pipeline.js 的 MAX_DIM === 200', maxDimOf(pipSrc2), 200);
+eq('★上限 | app.js 的 MAX_DIM === 200', maxDimOf(appSrc2), 200);
+const gridWTag2 = (UI_HTML.match(/<input\b[^>]*\bid="gridW"[^>]*>/) || [''])[0];
+const gridHTag2 = (UI_HTML.match(/<input\b[^>]*\bid="gridH"[^>]*>/) || [''])[0];
+eq('★上限 | ui.html #gridW / #gridH 的 max 属性都是 "200"（与两个 JS 副本一致）',
+  [(gridWTag2.match(/max="(\d+)"/) || [])[1], (gridHTag2.match(/max="(\d+)"/) || [])[1]], ['200', '200']);
+eq('★上限 | 三个副本的值完全相等（不是三个各自 200 的巧合写法，而是真的对齐）',
+  [maxDimOf(pipSrc2), maxDimOf(appSrc2), Number((gridWTag2.match(/max="(\d+)"/) || [0, '0'])[1])].filter((v2) => v2 === 200).length, 3);
+ok('★默认长边 | pipeline 的 DEFAULT_LONG_EDGE === 100（它**不是**上限，别混）',
+  /DEFAULT_LONG_EDGE\s*=\s*100\b/.test(pipSrc2) && /DEFAULT_LONG_EDGE\s*=\s*100\b/.test(appSrc2),
+  JSON.stringify([/DEFAULT_LONG_EDGE\s*=\s*100\b/.test(pipSrc2), /DEFAULT_LONG_EDGE\s*=\s*100\b/.test(appSrc2)]));
+ok('默认长边 | 上限 200 ≠ 默认长边 100（两个数字确实是分开的两个常量）',
+  maxDimOf(pipSrc2) === 200 && /DEFAULT_LONG_EDGE\s*=\s*100\b/.test(pipSrc2));
+/* 行为：200 走一遍真实生成，证明没被静默夹断（先给一张有效源图，避免沿用上一块的旧图纸） */
+st.source = { data: synth(64, 64, (x, y) => [(x * 13) % 256, (y * 29) % 256, ((x + y) * 7) % 256]), width: 64, height: 64 };
+st.srcW = 64;
+st.srcH = 64;
+els.lockAspect.checked = false;
+els.gridW.value = '200';
+els.gridH.value = '200';
+fire(els.gridW, 'input');
+eq('★上限 | 输入 200 后 options().gridW === 200（前端不夹）', ui.options().gridW, 200);
+ui.regenerate();
+erFlushAll();
+ok('★上限 | 200×200 走真实生成 → pattern 就是 200×200（没被静默夹断）',
+  st.pattern.w === 200 && st.pattern.h === 200,
+  JSON.stringify([st.pattern.w, st.pattern.h]) + ' 状态行=' + JSON.stringify(String(els.statusText.textContent).slice(0, 100)));
+ok('上限 | 且 stats.total = 200*200（真的按 200 铺满，不是只改了标签）', st.pattern.stats.total === 40000, String(st.pattern.stats && st.pattern.stats.total));
+
+/* ② 预览平移：三种手势（中键 / 空格+左键 / Ctrl+左键）。右键已废弃——交回浏览器默认菜单。 */
+els.lockAspect.checked = false;
+els.gridW.value = '40';
+els.gridH.value = '40';
+fire(els.gridW, 'input');
+const panSc = els.canvasScroll;
+panSc.clientWidth = 600;
+panSc.clientHeight = 400;
+st.source = { data: synth(40, 40, (x, y) => [(x * 17) % 256, (y * 23) % 256, 90]), width: 40, height: 40 };
+st.srcW = 40;
+st.srcH = 40;
+ui.regenerate();
+erFlushAll();
+st.viewOpts = ui.viewOpts();
+const keyOn = (target, extra) => dom.doc.dispatchEvent(Object.assign({ type: 'keydown', key: ' ', code: 'Space', target }, extra || {}));
+const keyOff = (target) => dom.doc.dispatchEvent({ type: 'keyup', key: ' ', code: 'Space', target });
+const spaceNow = () => !!(ui.panState && ui.panState().spaceDown);
+/* 手势判定表（直接调导出的 isPanGesture，逐行对照） */
+ui.clearSpaceState();
+const gNorm = [ui.isPanGesture({ button: 1 }), ui.isPanGesture({ button: 0, ctrlKey: true }), ui.isPanGesture({ button: 0 }), ui.isPanGesture({ button: 2 })];
+keyOn(els.patternCanvas);
+const spaceAfterKey = spaceNow();
+const gSpace = [ui.isPanGesture({ button: 0 }), ui.isPanGesture({ button: 0, ctrlKey: true })];
+keyOff(els.patternCanvas);
+eq('★平移手势 | 判定表：中键 ✓ / Ctrl+左键 ✓ / 普通左键 ✗ / 右键 ✗', gNorm, [true, true, false, false]);
+eq('★平移手势 | 判定表：空格+左键 ✓ / Ctrl+左键且空格也在 ✓（任意命中即可）', gSpace, [true, true]);
+ok('平移手势 | 前置 | 空格按下后 spaceDown 真的为 true（否则上面两行是假绿）', spaceAfterKey === true, String(spaceAfterKey));
+ok('平移手势 | 松开空格后 spaceDown 回到 false', spaceNow() === false, String(spaceNow()));
+/* 三种平移手势各拖一次：拖 -40/-30 → 滚动 +40/+30（内容跟手） */
+const dragPan = (downEvt, label) => {
+  panSc.scrollLeft = 100;
+  panSc.scrollTop = 100;
+  ui.clearSpaceState();
+  if (downEvt.space) keyOn(els.patternCanvas);
+  fire(els.patternCanvas, 'pointerdown', Object.assign({ clientX: 300, clientY: 300, pointerId: 11, preventDefault() {} }, downEvt));
+  dom.doc.dispatchEvent({ type: 'pointermove', clientX: 260, clientY: 270, preventDefault() {} });
+  const got = [panSc.scrollLeft, panSc.scrollTop];
+  dom.doc.dispatchEvent({ type: 'pointerup', pointerId: 11 });
+  if (downEvt.space) keyOff(els.patternCanvas);
+  return [label, got];
+};
+const panRuns = [
+  dragPan({ button: 1 }, '中键'),
+  dragPan({ button: 0, ctrlKey: true }, 'Ctrl+左键'),
+  dragPan({ button: 0, space: true }, '空格+左键')
+];
+ok('★平移手势 | 三种手势都真的平移：拖 -40/-30 → 滚动 +40/+30（内容跟手）',
+  panRuns.every((r) => r[1][0] === 140 && r[1][1] === 130), JSON.stringify(panRuns));
+/* 平移期间 0 重绘 */
+panSc.scrollLeft = 100;
+panSc.scrollTop = 100;
+const rp0 = [dom.map.patternCanvas._ctx._rec.paths, dom.map.patternCanvas._ctx._rec.strokes.length, dom.map.patternCanvas._ctx._rec.fillRect.length];
+fire(els.patternCanvas, 'pointerdown', { button: 1, clientX: 300, clientY: 300, pointerId: 12, preventDefault() {} });
+dom.doc.dispatchEvent({ type: 'pointermove', clientX: 250, clientY: 250, preventDefault() {} });
+eq('★平移 | 平移期间 0 重绘（beginPath / stroke+fill / fillRect 三个计数增量全 0）',
+  [dom.map.patternCanvas._ctx._rec.paths - rp0[0], dom.map.patternCanvas._ctx._rec.strokes.length - rp0[1], dom.map.patternCanvas._ctx._rec.fillRect.length - rp0[2]], [0, 0, 0]);
+/* 释放路径三条：pointerup / pointercancel / 窗口失焦 */
+const releaseCase = (kind) => {
+  panSc.scrollLeft = 100;
+  panSc.scrollTop = 100;
+  fire(els.patternCanvas, 'pointerdown', { button: 1, clientX: 300, clientY: 300, pointerId: 13, preventDefault() {} });
+  if (kind === 'pointerup') dom.doc.dispatchEvent({ type: 'pointerup', pointerId: 13 });
+  else if (kind === 'pointercancel') dom.doc.dispatchEvent({ type: 'pointercancel', pointerId: 13 });
+  else { ui.clearSpaceState(); if (typeof ui.clearSpaceState === 'function') ui.panState && null; }
+  dom.doc.dispatchEvent({ type: 'pointermove', clientX: 200, clientY: 200, preventDefault() {} });
+  return [kind, panSc.scrollLeft, panSc.scrollTop];
+};
+const relUp = releaseCase('pointerup');
+const relCancel = releaseCase('pointercancel');
+ok('★平移释放 | pointerup / pointercancel 之后 move 都不再滚',
+  relUp[1] === 100 && relUp[2] === 100 && relCancel[1] === 100 && relCancel[2] === 100, JSON.stringify([relUp, relCancel]));
+/* 窗口失焦：用带 addEventListener 的独立实例（真实 window 一定有它，否则 blur 这条路径压根不会绑） */
+const blurHandlers = {};
+const blurInst = mkInstance({ addEventListener(t, fn) { (blurHandlers[t] = blurHandlers[t] || []).push(fn); }, removeEventListener(t, fn) { blurHandlers[t] = (blurHandlers[t] || []).filter((f) => f !== fn); } }, false);
+const blurApi = blurInst.win.PindouUI;
+const blurEls = blurApi.elements();
+const blurSt = blurApi.state();
+blurSt.source = { data: synth(20, 20, (x, y) => [(x * 9) % 256, (y * 13) % 256, 70]), width: 20, height: 20 };
+blurSt.srcW = 20;
+blurSt.srcH = 20;
+blurEls.gridW.value = '20';
+blurEls.gridH.value = '20';
+blurApi.regenerate();
+if (typeof blurInst.flush === 'function') blurInst.flush();
+const blurDoc = blurInst.d.doc;
+if (blurDoc && typeof blurDoc.dispatchEvent === 'function') {
+  blurDoc.dispatchEvent({ type: 'keydown', key: ' ', code: 'Space', target: blurEls.patternCanvas });
+  blurDoc.dispatchEvent({ type: 'keydown', key: 'Escape' });
+}
+const blurSpaceBefore = !!(blurApi.panState && blurApi.panState().spaceDown);
+if ((blurHandlers['blur'] || []).length) for (const fn of blurHandlers['blur']) fn({ type: 'blur' });
+else if (typeof blurApi.clearSpaceState === 'function') blurApi.clearSpaceState();
+const blurSpaceAfter = !!(blurApi.panState && blurApi.panState().spaceDown);
+ok('★平移释放 | 窗口失焦后空格状态被清（有 blur 监听则走监听，桩里没有就直接调 clearSpaceState 兜底）',
+  blurSpaceBefore === true && blurSpaceAfter === false, JSON.stringify([blurSpaceBefore, blurSpaceAfter, (blurHandlers['blur'] || []).length]));
+/* 左键无修饰仍走工具，滚动完全不动 */
+panSc.scrollLeft = 100;
+panSc.scrollTop = 100;
+const cellsBeforeTool = Array.from(st.pattern.cells).join(',');
+fire(els.patternCanvas, 'pointerdown', { button: 0, clientX: 300, clientY: 300, pointerId: 14 });
+dom.doc.dispatchEvent({ type: 'pointermove', clientX: 200, clientY: 200 });
+dom.doc.dispatchEvent({ type: 'pointerup', pointerId: 14 });
+eq('★平移 | 左键无修饰（无空格/无 Ctrl）→ 滚动一点不动，走工具路径',
+  [panSc.scrollLeft, panSc.scrollTop], [100, 100]);
+/* 空格+左键 / Ctrl+左键 点格不改格（工具被挡在最前面） */
+const cellsBeforePanClick = Array.from(st.pattern.cells).join(',');
+keyOn(els.patternCanvas);
+fire(els.patternCanvas, 'click', { button: 0, clientX: 300, clientY: 300, preventDefault() {} });
+keyOff(els.patternCanvas);
+fire(els.patternCanvas, 'click', { button: 0, ctrlKey: true, clientX: 300, clientY: 300, preventDefault() {} });
+eq('★平移 | 空格+左键 / Ctrl+左键 点格都不改格（工具被平移手势挡在最前）',
+  Array.from(st.pattern.cells).join(','), cellsBeforePanClick);
+/* ★空格不能被输入框吞掉：焦点在 #chartTitle 时按空格 → 不接管、不 preventDefault */
+els.chartTitle.tagName = 'INPUT';    /* 桩元素默认没有 tagName；真实 DOM 里它就是 <input>，isTypingTarget 靠这个判 */
+let titlePrevented = 0;
+ui.clearSpaceState();
+dom.doc.dispatchEvent({ type: 'keydown', key: ' ', code: 'Space', target: els.chartTitle, preventDefault() { titlePrevented++; } });
+const titleSpace = spaceNow();
+const titleValBefore = String(els.chartTitle.value);
+/* 我们没拦 → 浏览器会插入空格；桩没有默认行为，这里手动补上以模拟真实结果 */
+els.chartTitle.value = titleValBefore + ' ';
+eq('★空格 | 焦点在 #chartTitle 时：spaceDown 保持 false（输入框不被接管）', titleSpace, false);
+eq('★空格 | 焦点在 #chartTitle 时：我们**没有** preventDefault（否则浏览器就打不出空格）', titlePrevented, 0);
+ok('★空格 | 因此 value 真的能多出一个空格（未拦截 → 浏览器默认插入生效）',
+  String(els.chartTitle.value) === titleValBefore + ' ' && String(els.chartTitle.value).endsWith(' '),
+  JSON.stringify([titleValBefore, String(els.chartTitle.value)]));
+/* 空格在画布上：按下 true / 抬起 false */
+keyOn(els.patternCanvas);
+const onCanvasSpace = spaceNow();
+keyOff(els.patternCanvas);
+const afterKeyUpSpace = spaceNow();
+eq('★空格 | 焦点在画布：按下 spaceDown=true，抬起回到 false', [onCanvasSpace, afterKeyUpSpace], [true, false]);
+/* 右键复原：不平移 / 不改格 / contextmenu 不被拦（真反向，不是恒真假守卫） */
+panSc.scrollLeft = 100;
+panSc.scrollTop = 100;
+fire(els.patternCanvas, 'pointerdown', { button: 2, clientX: 300, clientY: 300, pointerId: 15 });
+dom.doc.dispatchEvent({ type: 'pointermove', clientX: 200, clientY: 200 });
+eq('★平移 | 右键拖动 → 滚动**不变**（右键已退出平移手势）', [panSc.scrollLeft, panSc.scrollTop], [100, 100]);
+dom.doc.dispatchEvent({ type: 'pointerup', pointerId: 15 });
+const cellsBeforeRight = Array.from(st.pattern.cells).join(',');
+fire(els.patternCanvas, 'click', { button: 2, clientX: 300, clientY: 300, preventDefault() {} });
+eq('平移 | 右键 click 不改任何格子', Array.from(st.pattern.cells).join(','), cellsBeforeRight);
+let cmPrevented2 = 0;
+fire(els.patternCanvas, 'contextmenu', { preventDefault() { cmPrevented2++; } });
+eq('★平移 | 画布上的 contextmenu **不再**被 preventDefault（右键菜单交回浏览器）', cmPrevented2, 0);
+eq('平移 | 且画布上根本没有 contextmenu 监听（不是「绑了但不拦」）',
+  ((els.patternCanvas._handlers && els.patternCanvas._handlers['contextmenu']) || []).length, 0);
+eq('平移 | document 上也没有 contextmenu 监听',
+  ((dom.doc._handlers && dom.doc._handlers['contextmenu']) || []).length, 0);
+ok('平移可发现性 | ui.html 的 #canvasScroll 有 title 且含「平移」与三种手势字样',
+  (function () {
+    const tag = (UI_HTML.match(/<div id="canvasScroll"[^>]*>/) || [''])[0];
+    return tag.indexOf('title=') >= 0 && tag.indexOf('平移') >= 0 && tag.indexOf('中键') >= 0 && tag.indexOf('Ctrl') >= 0;
+  })(), (UI_HTML.match(/<div id="canvasScroll"[^>]*>/) || [''])[0].slice(0, 150));
+/* ④ 生成后自动 fit */
+els.lockAspect.checked = false;
+els.gridW.value = '200';
+els.gridH.value = '200';
+fire(els.gridW, 'input');
+panSc.clientWidth = 600;
+panSc.clientHeight = 400;
+ui.regenerate();
+erFlushAll();
+const fitScaleNow = ui.fitScale();
+ok('自动 fit | 前置 | fitScale() 可算且为正（容器与画布尺寸都有效）', fitScaleNow !== null && fitScaleNow > 0, String(fitScaleNow));
+const fitTrunc = fitScaleNow === null ? null : Math.floor(fitScaleNow * 1000) / 1000;
+ok('★自动 fit | 生成后 viewZoom === fitScale()（3 位截断，容忍 1e-3）',
+  Math.abs(Number(st.viewZoom) - fitTrunc) <= 1e-3, st.viewZoom + ' vs ' + fitTrunc);
+eq('★自动 fit | 生成后滚动归位到 0', [panSc.scrollLeft, panSc.scrollTop], [0, 0]);
+ok('★自动 fit | 200×200 图纸 fit 后整图可见：画布宽*zoom ≤ 容器宽 且 画布高*zoom ≤ 容器高',
+  dom.map.patternCanvas.width * Number(st.viewZoom) <= panSc.clientWidth && dom.map.patternCanvas.height * Number(st.viewZoom) <= panSc.clientHeight,
+  JSON.stringify([dom.map.patternCanvas.width * Number(st.viewZoom), panSc.clientWidth, dom.map.patternCanvas.height * Number(st.viewZoom), panSc.clientHeight]));
+
+/* ⑤ ★尺寸预设：app.js 的 SIZE_PRESETS 表 === ui.html 的 option 值（逐项、同序） */
+const presetTableSrc = (/var\s+SIZE_PRESETS\s*=\s*\[([^\]]*)\]/.exec(appSrc2) || [null, ''])[1];
+const presetTable = presetTableSrc.split(',').map((x) => Number(String(x).trim())).filter((n) => isFinite(n));
+const presetBlock2 = (UI_HTML.match(/<select id="sizePreset">[\s\S]*?<\/select>/) || [''])[0];
+const presetOptions = (presetBlock2.match(/<option value="(\d+)"/g) || []).map((t) => Number(t.replace(/[^0-9]/g, '')));
+eq('★预设不漂移 | app.js 的 SIZE_PRESETS 表 === ui.html 的 option 值（逐项、同序）', presetTable, presetOptions);
+eq('★预设不漂移 | 两处都恰好 6 档，且就是 29/58/87/100/150/200', presetTable, [29, 58, 87, 100, 150, 200]);
+ok('★预设不漂移 | 100 档仍是 selected（默认尺寸不因扩档而变）', /<option value="100"[^>]*selected/.test(presetBlock2), presetBlock2.replace(/\s+/g, ' ').slice(0, 140));
+ok('★预设不漂移 | 下拉里还有「自定义」这一档（非档位尺寸要有归宿）', /<option value="custom"/.test(presetBlock2));
+/* 行为：选 150 / 200 → 尺寸对；生成后下拉不掉回 custom；非正方形与非档位正方形 → custom */
+els.lockAspect.checked = false;
+els.sizePreset.value = '150';
+fire(els.sizePreset, 'change');
+erFlushAll();
+eq('★预设 | 选 150 → options() 得 150×150', [ui.options().gridW, ui.options().gridH], [150, 150]);
+eq('预设 | 选 150 后控件本体也是 150', [String(els.gridW.value), String(els.gridH.value)], ['150', '150']);
+ui.regenerate();
+erFlushAll();
+ok('★预设 | 150×150 走真实生成 → pattern 就是 150×150', st.pattern.w === 150 && st.pattern.h === 150,
+  JSON.stringify([st.pattern.w, st.pattern.h]) + ' 状态行=' + JSON.stringify(String(els.statusText.textContent).slice(0, 90)));
+eq('★预设 | 生成后 #sizePreset 仍是 "150"（不掉回 custom）', String(els.sizePreset.value), '150');
+els.sizePreset.value = '200';
+fire(els.sizePreset, 'change');
+erFlushAll();
+eq('★预设 | 选 200 → options() 得 200×200', [ui.options().gridW, ui.options().gridH], [200, 200]);
+ui.regenerate();
+erFlushAll();
+eq('★预设 | 生成后 #sizePreset 仍是 "200"（不掉回 custom）', String(els.sizePreset.value), '200');
+/* 非档位：78×100（非正方形）与 120×120（正方形但不在表里）→ 都必须是 custom */
+els.gridW.value = '78';
+fire(els.gridW, 'input');
+els.gridH.value = '100';
+fire(els.gridH, 'input');
+eq('★预设 | 78×100（非正方形）→ 下拉显示 custom', String(els.sizePreset.value), 'custom');
+els.gridW.value = '120';
+fire(els.gridW, 'input');
+els.gridH.value = '120';
+fire(els.gridH, 'input');
+eq('★预设 | 120×120（正方形但不在表里）→ 下拉也显示 custom', String(els.sizePreset.value), 'custom');
+els.sizePreset.value = '87';
+fire(els.sizePreset, 'change');
+erFlushAll();
+eq('预设 | 再选回 87 → options() 得 87×87 且下拉是 "87"', [ui.options().gridW, String(els.sizePreset.value)], [87, '87']);
 
 /* ══════════════════════════════════════════ 第 7 组 · 原图编辑（srcedit.js） */
 startGroup('第 7 组 · 原图编辑（SourceEdit）');

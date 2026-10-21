@@ -12,12 +12,16 @@
     : ((typeof globalThis !== 'undefined') ? globalThis : {});
   var doc = (typeof document !== 'undefined') ? document : null;
 
-  var MAX_DIM = 100;         /* 单边硬上限 100 格（与 pipeline 的 MAX_DIM、ui.html 的 max="100" 一致）。
+  var MAX_DIM = 200;         /* 单边硬上限 200 格（与 pipeline 的 MAX_DIM、ui.html 的 #gridW/#gridH max="200" 三处一致）。
                                 「29 格一块拼板」那套概念已整体移除：不再有板数 / 板边界 / 板材规格下拉。 */
+  /* 载入新图时的默认长边格数（用户原话：「预设的默认尺寸是原图最长边为 100 格，短边自适应」）。
+     注意它**不是**上限：上限是 MAX_DIM=200，手动输入可以一路到 200；
+     这个 100 只在「换图」时用来定初始尺寸（见 applyDefaultLongEdge）。 */
+  var DEFAULT_LONG_EDGE = 100;
   var EMPTY_CELL = 65535;    /* Pattern.cells 里的空格标记，与 pipeline.js / render.js 保持一致 */
   var DEBOUNCE_MS = 200;
   var RULER_PAD = 16;        /* 内置降级渲染器的四周对称留白 */
-  var SRC_MAX_EDGE = 1600;   /* 像素源长边上限：≥100 格图纸完全够用，且 getImageData 更快 */
+  var SRC_MAX_EDGE = 1600;   /* 像素源长边上限：上限 200 格时仍有 8px/格，够用且 getImageData 更快 */
 
   var MIN_CELL_PX = 8;       /* 格子像素滑杆下限 */
   var MAX_CELL_PX = 48;      /* 格子像素滑杆上限（render.js 已放宽到 256，48 是「看一眼」的舒适上限） */
@@ -84,6 +88,9 @@
   var TOOL_ERASER = 'eraser';
   var TAB_BASIC = 'basic';
   var TAB_ADVANCED = 'advanced';
+  /* 右栏两页：原图调整 / 色号图例（与左栏同一套 .tab 机制） */
+  var SIDE_SRC = 'src';
+  var SIDE_LEGEND = 'legend';
   var PICKER_SCOPE_USED = 'used';
   var PICKER_SCOPE_ALL = 'all';
 
@@ -150,8 +157,12 @@
     batch: { region: [], code: '', origin: -1, truncated: false, recs: null },
     status: { text: '', kind: 'info' },
     lastMs: 0,
+    /* 上一次「真正生成」用的尺寸键 `w x h`：只用来判断「这次生成要不要自动 fit」。
+       同尺寸重算不 fit（保留用户当前缩放与滚动）；换图时被清空，强制 fit 一次。 */
+    lastFitKey: '',
     lockCount: 0,
-    tab: TAB_BASIC,      /* 当前标签页：basic / advanced（只切显隐，不重建 DOM，不需要持久化） */
+    tab: TAB_BASIC,      /* 左栏当前标签页：basic / advanced（只切显隐，不重建 DOM，不需要持久化） */
+    sideTab: SIDE_SRC,   /* 右栏当前标签页：src（原图调整）/ legend（色号图例），默认原图调整 */
     /* 图纸工具互斥状态：none / recolor（画笔模式）/ batch（批量修改）/ wand / eraser。
        #recolorMode 与 #batchMode 两个复选框都和它双向同步，点击图纸的行为完全由它决定。 */
     tool: TOOL_NONE,
@@ -765,9 +776,16 @@
     return 1;
   }
 
+  /* 尺寸预设档位（正方形）。必须与 ui.html 的 #sizePreset 选项**逐一对应**：
+     少写一档 → 用户选了它、生成完下拉却掉回「自定义」= 显示与实际不符。
+     六档：29 / 58 / 87 / 100 / 150 / 200（后两档是智能建议阶梯会推到的值）。 */
+  var SIZE_PRESETS = [29, 58, 87, 100, 150, 200];
+
   function presetValueFor(w, h) {
     if (w !== h) return 'custom';
-    if (w === 29 || w === 58 || w === 87 || w === 100) return String(w);
+    for (var i = 0; i < SIZE_PRESETS.length; i++) {
+      if (w === SIZE_PRESETS[i]) return String(w);
+    }
     return 'custom';
   }
 
@@ -1048,6 +1066,10 @@
     syncUndoButton();
     /* 重新生成：上一张图纸的图例高亮不能再留着（色表顺序与色号都会变） */
     clearLegendHighlight();
+    /* 每次生成完都自动「看得见全图」一次（用户要求：200×200 在 24px/格下宽 ~4800px，不 fit 看不到全图）。
+       ⚠️ 副作用如实记录：用户放大看细节之后，只要改任意参数触发重算，就会跳回全图。
+       若嫌跳，可改成「只在尺寸变化 / 换图时才 fit」—— 当前是按用户字面要求「每次生成都 fit」。 */
+    autoFitAfterGenerate();
     setElapsed(now() - t0);
 
     var stats = pattern.stats || {};
@@ -1352,17 +1374,38 @@
     return { x: originX + col * cell, y: originY + row * cell, w: cell, h: cell, cell: cell, col: col, row: row };
   }
 
-  /* --------------------------------------------------- 标签页（基本 / 高级） */
+  /* --------------------------------------------------- 标签页（左栏 基本/高级 · 右栏 原图调整/色号图例） */
 
-  /* 只切 hidden：不重建 DOM、不写 innerHTML ⇒ 任何控件状态（滑杆值、勾选、标题文本）都不会丢。 */
+  /* 两组标签页共用同一套机制与样式（.tabs / .tab / .tab.on）：
+     只切 hidden：不重建 DOM、不写 innerHTML ⇒ 任何控件状态（滑杆值、勾选、标题文本）都不会丢，
+     图例面板切过去时 #legendBox 里的内容也原样还在（点击委托绑在容器上，切显隐不影响）。
+     group = { keys:[...], panels:[...], buttons:[...] }，三者按同一顺序对齐。 */
+  function switchTabGroup(group, wanted) {
+    var idx = -1;
+    for (var k = 0; k < group.keys.length; k++) { if (group.keys[k] === wanted) { idx = k; break; } }
+    if (idx < 0) idx = 0;                       /* 未知值一律回落到第一页，不出现「两页都藏起来」 */
+    for (var i = 0; i < group.panels.length; i++) {
+      if (group.panels[i]) group.panels[i].hidden = (i !== idx);
+    }
+    for (var j = 0; j < group.buttons.length; j++) markTabButton(group.buttons[j], j === idx);
+    return group.keys[idx];
+  }
+
+  function leftTabGroup() {
+    return { keys: [TAB_BASIC, TAB_ADVANCED], panels: [ui.panelBasic, ui.panelAdvanced], buttons: [ui.tabBasic, ui.tabAdvanced] };
+  }
+
+  function sideTabGroup() {
+    return { keys: [SIDE_SRC, SIDE_LEGEND], panels: [ui.panelSrc, ui.panelLegend], buttons: [ui.tabSrc, ui.tabLegend] };
+  }
+
   function setTab(name) {
-    var v = (name === TAB_ADVANCED) ? TAB_ADVANCED : TAB_BASIC;
-    var basic = (v === TAB_BASIC);
-    state.tab = v;
-    if (ui.panelBasic) ui.panelBasic.hidden = !basic;
-    if (ui.panelAdvanced) ui.panelAdvanced.hidden = basic;
-    markTabButton(ui.tabBasic, basic);
-    markTabButton(ui.tabAdvanced, !basic);
+    state.tab = switchTabGroup(leftTabGroup(), name);
+  }
+
+  /* 右栏：默认停在「原图调整」 */
+  function setSideTab(name) {
+    state.sideTab = switchTabGroup(sideTabGroup(), name);
   }
 
   function markTabButton(btn, on2) {
@@ -1545,7 +1588,11 @@
   /* 橡皮刷：pointerdown 起手 → pointermove 连续擦除 → pointerup 统一收尾。
      整段拖动只在 pointerdown 快照一次；move 期间只重绘（不写历史、不 recount），让用户即时看到效果。 */
   function onEraseDown(evt) {
+    /* 平移手势（中键 / 空格+左键 / Ctrl+左键）优先：这一下不擦除，交给 onCanvasPanDown */
+    if (isPanGesture(evt)) return;
     if (toolOf() !== TOOL_ERASER) return;
+    /* 只认左键：右键不平移也不再被拦，但也绝不能顺手擦掉一片 */
+    if (evt && evt.button !== undefined && evt.button !== 0) return;
     /* 双指在画布上 == 用户在捏合缩放：这一下不是擦除 */
     if (pinch.active) return;
     /* 一次拖动还没收尾又来一个 pointerdown == 第二根手指落下。
@@ -1596,6 +1643,10 @@
     /* 捏合过程中、以及捏合刚结束的那一小段时间：不认这一下
        （两指抬起后浏览器仍可能补一个 click，魔术棒 / 画笔模式 / 批量修改都不该被它触发） */
     if (pinch.active || intNow() < pinch.blockedUntil) return;
+    /* 平移手势（中键 / 空格+左键 / Ctrl+左键）：这次点击不算改格 */
+    if (isPanGesture(evt)) return;
+    /* 只认左键：右键不该改任何格子（也不再被我们拦，交给浏览器默认行为） */
+    if (evt && evt.button !== undefined && evt.button !== 0) return;
     var p = state.pattern;
     if (!p) { setStatus('尚未生成图纸', 'warn'); return; }
     var tool = toolOf();
@@ -2823,6 +2874,112 @@
   /* anchor 必须一路透传：滚轮缩放要停在光标下的那个内容点上（按钮缩放不需要锚点） */
   function zoomBy(factor, anchor) { setViewZoom(state.viewZoom * factor, anchor); }
 
+  /* ---------------------------------------------------------- 右键拖动平移 */
+
+  /* 平移预览：三种手势任一命中即可（只在 #patternCanvas 上）
+       · 中键按住拖（button === 1）—— 行业标准平移手势
+       · 空格按住 + 左键拖 —— 设计软件通用手势
+       · Ctrl + 左键拖 —— 用户点名要的入口
+     ⚠️ Ctrl+点击在 **macOS 上等于右键**，所以它只作为其中一个入口，不单独承担（被系统菜单抢走时
+        仍能用中键或空格拖）。这三条命中时**工具一律不接**：onEraseDown / onPatternClick 都会先问
+        isPanGesture()，是平移就直接 return（见两处的最前面那行）。
+     平移本身只改 #canvasScroll 的 scrollLeft/scrollTop，**全程不重绘**
+     （200×200 重绘一次要几万格，跟着手走必卡）；指针捕获 + document 级 move/up，
+     拖出画布范围也跟手，不会「移出即断」。 */
+  var pan = { active: false, x: 0, y: 0, left: 0, top: 0 };
+  var spaceDown = false;                 /* 空格是否正按着（焦点在输入框/文本域时不接管） */
+
+  function isPanGesture(e) {
+    if (!e) return false;
+    var btn = e.button;
+    if (btn === 1) return true;                                   /* 中键 */
+    if (btn !== 0) return false;                                  /* 其它键（含右键）既不平移也不拦 */
+    return !!(e.ctrlKey || spaceDown);                            /* Ctrl+左键 / 空格+左键 */
+  }
+
+  /* 空格键状态：只跟踪、不 preventDefault（别把页面的空格滚动 / 按钮激活抢掉）。
+     焦点在输入框 / 文本域 / 可编辑区里时**完全不接管** —— #chartTitle 里必须能打空格。 */
+  function onPanKeyDown(e) {
+    if (!e || (e.key !== ' ' && e.code !== 'Space')) return;
+    if (isTypingTarget(e.target)) return;                         /* 正在打字：空格归输入框 */
+    spaceDown = true;
+  }
+  function onPanKeyUp(e) {
+    if (!e || (e.key !== ' ' && e.code !== 'Space')) return;
+    spaceDown = false;
+  }
+  function clearSpaceState() { spaceDown = false; }
+
+  function onCanvasPanDown(e) {
+    if (!isPanGesture(e)) return;                                 /* 右键 / 普通左键都不进这里 */
+    var sc = ui.canvasScroll;
+    if (!sc) return;
+    pan.active = true;
+    pan.x = Number(e.clientX) || 0;
+    pan.y = Number(e.clientY) || 0;
+    pan.left = Number(sc.scrollLeft) || 0;
+    pan.top = Number(sc.scrollTop) || 0;
+    /* 中键必须 preventDefault：否则 Windows 上会弹出「自动滚动」四向光标 */
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    /* 捕获指针：不捕获的话，指针移出画布就收不到 move，拖动会「断」在半路 */
+    if (ui.patternCanvas && typeof ui.patternCanvas.setPointerCapture === 'function' && e.pointerId !== undefined) {
+      try { ui.patternCanvas.setPointerCapture(e.pointerId); } catch (err) { /* 忽略：document 兜底 */ }
+    }
+    if (doc && typeof doc.addEventListener === 'function') {
+      doc.addEventListener('pointermove', onCanvasPanMove);
+      doc.addEventListener('pointerup', onCanvasPanUp);
+      doc.addEventListener('pointercancel', onCanvasPanUp);
+    }
+  }
+
+  function onCanvasPanMove(e) {
+    if (!pan.active) return;
+    var sc = ui.canvasScroll;
+    if (!sc) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    var dx = (Number(e.clientX) || 0) - pan.x;
+    var dy = (Number(e.clientY) || 0) - pan.y;
+    sc.scrollLeft = pan.left - dx;                    /* 向右拖 = 内容跟着手走 = 滚动位置反向 */
+    sc.scrollTop = pan.top - dy;
+  }
+
+  function onCanvasPanUp(e) {
+    if (!pan.active) return;
+    pan.active = false;
+    if (ui.patternCanvas && typeof ui.patternCanvas.releasePointerCapture === 'function'
+      && e && e.pointerId !== undefined) {
+      try { ui.patternCanvas.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+    }
+    if (doc && typeof doc.removeEventListener === 'function') {
+      doc.removeEventListener('pointermove', onCanvasPanMove);
+      doc.removeEventListener('pointerup', onCanvasPanUp);
+      doc.removeEventListener('pointercancel', onCanvasPanUp);
+    }
+  }
+
+  /* 中键的 auxclick（部分浏览器在 pointerup 后补发）：一并吞掉，别触发「新标签打开链接」这类默认行为 */
+  function onCanvasAuxClick(e) {
+    if (!e || e.button !== 1) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+  }
+
+  /* 只在「**尺寸变了**」时自动 fit 一次（用户原话：「只在尺寸变化/换图时才 fit」）。
+     判定依据只有一个：上一次真正生成用的 w×h（state.lastFitKey）。同尺寸重算
+     （改抖动强度 / 减色 / 预处理 / 风格 / 点重算）→ 保持用户当前的缩放与滚动位置，不跳。
+     「换图」不靠尺寸间接判断：useImageSource 会把 lastFitKey 清空，所以换图后必然 fit 一次
+     —— 即使两张图恰好算出同样的 w×h。
+     与 #viewZoomFit 按钮同口径（fitScale 的 avail-20px + 3 位截断 + 滚动归位），但不写状态行。 */
+  function autoFitAfterGenerate() {
+    if (!state.pattern) return false;
+    var key = state.pattern.w + 'x' + state.pattern.h;
+    if (state.lastFitKey === key) return false;          /* 同尺寸：不动缩放、不动滚动 */
+    var s = fitScale();
+    if (s === null) return false;
+    setViewZoom(s, null, { truncate: true, resetScroll: true });
+    state.lastFitKey = key;
+    return true;
+  }
+
   function fitViewZoom() {
     var cv = ui.patternCanvas, scroll = ui.canvasScroll;
     if (!cv || !cv.width || !cv.height) { setStatus('尚未生成图纸，无法适应窗口', 'warn'); return; }
@@ -3596,6 +3753,28 @@
       : (!state.source ? '先载入一张图片' : '按这张图给出一组参数建议（点「应用」才生效）');
   }
 
+  /* 换图后的默认尺寸：**长边 = DEFAULT_LONG_EDGE(100)，短边按原图比例**。
+     为什么不能只调 normalizeDims('gridW')：那条是「保宽度、推高度」，上一张图留下的
+     200×100 会顺着带过来，竖图就变成「长边 200」而不是 100。这里显式以长边为准重新推导。
+     不锁定宽高比时不做这件事（用户要的是各边独立，硬推另一边等于覆盖他的设置）。 */
+  function applyDefaultLongEdge() {
+    if (!(ui.lockAspect && ui.lockAspect.checked) || !(state.srcW > 0) || !(state.srcH > 0)) {
+      return normalizeDims('gridW');
+    }
+    var aspect = sourceAspect();
+    if (!(aspect > 0)) aspect = 1;
+    var w, h;
+    if (aspect >= 1) { w = DEFAULT_LONG_EDGE; h = Math.round(DEFAULT_LONG_EDGE / aspect); }   /* 横图：宽是长边 */
+    else { h = DEFAULT_LONG_EDGE; w = Math.round(DEFAULT_LONG_EDGE * aspect); }               /* 竖图：高是长边 */
+    w = clamp(w, 1, MAX_DIM);
+    h = clamp(h, 1, MAX_DIM);
+    if (String(w) !== String(ui.gridW ? ui.gridW.value : w)) setVal(ui.gridW, w);
+    if (String(h) !== String(ui.gridH ? ui.gridH.value : h)) setVal(ui.gridH, h);
+    syncLabels();
+    syncSizePresetValue();                 /* 78×100 不匹配任何正方形档 ⇒ 如实显示「自定义」 */
+    return { w: w, h: h };
+  }
+
   function useImageSource(src, w, h) {
     if (!src || !w || !h) { setStatus('图片尺寸无效，无法处理', 'err'); return; }
     state.source = src;
@@ -3605,6 +3784,9 @@
     state.patternQuantize = null;     /* 图纸没了，减色上限的记录也一起清掉 */
     state.history.length = 0;         /* 换图 = 新图纸生命周期 */
     state.recolor.selected = '';
+    /* 换图 = 新图纸生命周期：清掉「上次生成尺寸」标记，下一次生成必然 fit 一次
+       （不靠 w×h 间接判断，两张图恰好同尺寸时也要 fit） */
+    state.lastFitKey = '';
     state.highlightCode = '';         /* 换了图：上一张图的图例高亮作废（下面的 renderPattern 会重画） */
     if (state.srcEdit && typeof state.srcEdit.setSource === 'function') {
       try { state.srcEdit.setSource(src); } catch (e) {
@@ -3613,8 +3795,9 @@
     }
     drawSourceCanvas();
     syncSrcEditHint();
-    /* 换了图：按当前宽度（保持原图宽高比则一起推高度）重新对齐格数 */
-    normalizeDims('gridW');
+    /* 换了图：**长边重置为 100、短边按这张图的真实比例推导**
+       （不是「保宽度推高度」—— 否则上一张图留下的 200 会被沿用到新图，见 applyDefaultLongEdge 注释） */
+    applyDefaultLongEdge();
     setCanvasPlaceholders();
     renderPattern();
     renderLegend();
@@ -3937,6 +4120,9 @@
     /* 标签页：只切显隐，切换不重建 DOM ⇒ 控件状态不会丢 */
     on(ui.tabBasic, 'click', function () { setTab(TAB_BASIC); });
     on(ui.tabAdvanced, 'click', function () { setTab(TAB_ADVANCED); });
+    /* 右栏：和左栏同一套（switchTabGroup），默认「原图调整」 */
+    on(ui.tabSrc, 'click', function () { setSideTab(SIDE_SRC); });
+    on(ui.tabLegend, 'click', function () { setSideTab(SIDE_LEGEND); });
 
     /* 标题只影响角标：input 走 scheduleRender，不触发重算 */
     on(ui.chartTitle, 'input', onChartTitleChange);
@@ -3951,6 +4137,18 @@
        捏合要先把「用户其实是在缩放」这件事记下来，橡皮刷才来得及拒绝起手。 */
     bindPinch();
     on(ui.patternCanvas, 'pointerdown', onEraseDown);
+    /* 平移预览三种手势（中键 / 空格+左键 / Ctrl+左键）：只改滚动位置、不重绘。
+       右键**不再**被我们拦：contextmenu 完全交回浏览器默认行为。 */
+    on(ui.patternCanvas, 'pointerdown', onCanvasPanDown);
+    on(ui.patternCanvas, 'auxclick', onCanvasAuxClick);      /* 中键的默认行为（自动滚动/新标签）一并吞掉 */
+    /* 空格状态：keydown/keyup 在 document 上（焦点在画布或 body 都能收到），失焦一律清空 */
+    if (doc && typeof doc.addEventListener === 'function') {
+      doc.addEventListener('keydown', onPanKeyDown);
+      doc.addEventListener('keyup', onPanKeyUp);
+    }
+    if (win && typeof win.addEventListener === 'function') {
+      win.addEventListener('blur', function () { clearSpaceState(); onCanvasPanUp(null); });
+    }
     /* move/up 绑在 document 上：拖到画布外面松手也能正确收尾（画布只负责起手） */
     if (doc && typeof doc.addEventListener === 'function') {
       doc.addEventListener('pointermove', onEraseMove);
@@ -4039,8 +4237,12 @@
       moduleNotice: byId('moduleNotice'),
       tabBasic: byId('tabBasic'),
       tabAdvanced: byId('tabAdvanced'),
+      tabSrc: byId('tabSrc'),
+      tabLegend: byId('tabLegend'),
       panelBasic: byId('panelBasic'),
       panelAdvanced: byId('panelAdvanced'),
+      panelSrc: byId('panelSrc'),
+      panelLegend: byId('panelLegend'),
       brightness: byId('brightness'),
       brightnessVal: byId('brightnessVal'),
       contrast: byId('contrast'),
@@ -4144,6 +4346,7 @@
     syncRecolorPicker(null);
     applyDefaults(false);
     setTab(state.tab);               /* 默认停在「基本」页，并让 DOM 与 state.tab 一致 */
+    setSideTab(state.sideTab);       /* 右栏默认停在「原图调整」 */
     mountSourceEdit();
     bindEvents();
     var mods = describeModules();
@@ -4174,6 +4377,13 @@
     applyRecolor: applyRecolor,
     effCurve: effCurve,
     setTab: setTab,
+    setSideTab: setSideTab,                /* 右栏：原图调整 / 色号图例（与 setTab 同一套 switchTabGroup） */
+    /* 平移手势：自测 / 脚本入口（与画布上真实事件走同一批函数） */
+    isPanGesture: isPanGesture,
+    panState: function () { return { active: pan.active, spaceDown: spaceDown }; },
+    clearSpaceState: clearSpaceState,
+    onPanKeyDown: onPanKeyDown,
+    onPanKeyUp: onPanKeyUp,
     setTool: setTool,
     tool: toolOf,
     eraserSize: brushSizeValue,

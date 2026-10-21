@@ -104,7 +104,9 @@
   'use strict';
 
   var BEAD_MM = 2.6;            // 单颗拼豆外径（毫米）
-  var MAX_DIM = 100;            // 单边格数硬上限（与 ui.html 的 max="100" 一致）
+  var MAX_DIM = 200;            // 单边格数硬上限（只用于夹取/校验；app/ui 侧应保持一致）
+  var DEFAULT_LONG_EDGE = 100;   // 未给 gridW/gridH 时的默认长边（短边按原图宽高比自适应）
+                                 // 与 MAX_DIM 刻意分成两个常量：默认 ≠ 上限，上限一改默认不该跟着变。
   var EMPTY = 65535;            // cells 里的空格标记
   var ALPHA_MIN = 128;          // alpha < 128 视为透明
   var MAX_SRC_PIXELS = 1200 * 1200;  // generate() 读取源图的像素上限（防止把 4000×3000 全量读进来）
@@ -121,13 +123,13 @@
    *   quantize.enabled true 默认必须「拼得完」：随机噪声图用最近邻实测会命中 208/221 个色号，
    *                         真实照片也常上百色，而没有人手上有两百种拼豆。默认开减色。
    *   quantize.maxColors 24 常用拼豆作品通常 10–25 色，24 落在「表现力够 + 买得到豆」的
-   *                         甜点上：100×100 满配时每色平均仍有 ~417 颗，足以表现渐变；
+   *                         甜点上：200×200 满配时每色平均仍有 ~1667 颗，足以表现渐变；
    *                         同时与 UI 的 maxColors 默认值一致。
    *   paletteId             默认主谱系 mard-221-getcolors（palette.js 的第一个 key）。
    *   style 'bead'          默认「像拼豆图纸」档：②③ 强度拉满（阈值依据见文件头「style 两档」）。
    *                         'faithful' 档是「接近上一版观感」的退路，强度只有 0.25 / 2 / 4。
-   *   gridW/gridH null      未给时按原图宽高比铺满长边 MAX_DIM = 100 格（也就是预设尺寸）；
-   *                         给出则优先并夹到 [1,100]。
+   *   gridW/gridH null      未给时按原图宽高比铺满长边 DEFAULT_LONG_EDGE = 100 格（默认尺寸，
+   *                         刻意不等于上限）；给出则优先并夹到 [1, MAX_DIM = 200]。
    * 说明：opts 里出现约定外的附加字段（如 app.js 的 keepLocks / locks）一律忽略，不报错。
    *      唯一例外是 opts.steps（内部/测试开关，缺省全开，不进 DEFAULT_OPTS）：
    *      { chroma:false } 只关 ②，{ merge:false } 只关 ③，{ gate:false } 只关 ③ 的 ΔE 门控。
@@ -314,18 +316,20 @@
   }
 
   /**
-   * 尺寸推导。单边硬上限 MAX_DIM = 100，没有「板」的概念。
-   * - gridW/gridH 都未给：长边取 MAX_DIM = 100（＝预设尺寸），短边按原图宽高比推导后夹到 [1,100]
-   *   （极端比例不强行方形，短边可以小到 1）。这是唯一的回落值，永远不会推出 0 / NaN。
+   * 尺寸推导。单边硬上限 MAX_DIM = 200，默认长边 DEFAULT_LONG_EDGE = 100 —— **两个数不是一回事**。
+   * - gridW/gridH 都未给：长边取 DEFAULT_LONG_EDGE = 100（默认尺寸），短边按原图宽高比推导后
+   *   夹到 [1, MAX_DIM]（极端比例不强行方形，短边可以小到 1）。这是唯一的回落值，永远不会推出 0 / NaN。
+   *   ⚠️ 这里必须用 DEFAULT_LONG_EDGE 而不是 MAX_DIM：否则上限从 100 提到 200 时，默认尺寸会
+   *   被顺手放大到 200，与「默认原图最长边 100 格」的产品要求冲突。
    * - 只给一边：另一边按 lockAspect 推导（true = 按原图比例；false = 取与已给一边相同的格数）。
-   * - 两边都给：优先采用，各自夹到 [1,100]（是否等比拉伸由调用方决定，管线不擅自改用户输入）。
+   * - 两边都给：优先采用，各自夹到 [1, MAX_DIM]（是否等比拉伸由调用方决定，管线不擅自改用户输入）。
    */
   function deriveDims(sw, sh, o, warnings) {
     var w = o.gridW, h = o.gridH;
     var aspect = sw / sh;                    // 宽/高，恒 > 0
     if (w === null && h === null) {
-      if (aspect >= 1) { w = MAX_DIM; h = clampInt(Math.round(MAX_DIM / aspect), 1, MAX_DIM); }
-      else { h = MAX_DIM; w = clampInt(Math.round(MAX_DIM * aspect), 1, MAX_DIM); }
+      if (aspect >= 1) { w = DEFAULT_LONG_EDGE; h = clampInt(Math.round(DEFAULT_LONG_EDGE / aspect), 1, MAX_DIM); }
+      else { h = DEFAULT_LONG_EDGE; w = clampInt(Math.round(DEFAULT_LONG_EDGE * aspect), 1, MAX_DIM); }
     } else if (w === null) {
       h = clampInt(h, 1, MAX_DIM);
       w = o.lockAspect ? clampInt(Math.round(h * aspect), 1, MAX_DIM) : h;
@@ -1345,7 +1349,12 @@
 
   /* ------------------------------- analyzeSource：源图分析与参数建议 */
 
-  var WORK_GRID = 128;          // 分析用工作栅格长边（> MAX_DIM，保证「100 格」这档也有可比较的分辨率）
+  var WORK_GRID = 200;          // 分析用工作栅格长边 = MAX_DIM。为什么正好等于上限：
+                                // 结构量测是「把工作栅格重采样到各候选档」，工作栅格必须**不细于**
+                                // 最大候选，否则 200 档会变成「放大采样」、边界对数失真。
+                                // 取 200（而不是 256）的理由：最大候选恰好 1:1、无重采样，且实测六档
+                                // 边界对数严格单调（256 时 200 档要从 256 缩下来，实测会在 87→100
+                                // 处出现非单调 874→770，把量测分辨率对齐后消失）。耗时两者相同。
   var EDGE_DE = 6;              // 判「边界格」的 ΔE（与「可区分色数」同阈值，口径统一）
   var DISTINCT_DE = 6;          // 判「可区分颜色」的 ΔE
   var DISTINCT_CAP = 256;       // 可区分色数上限（超过按 ≥256 记，反正早已超过任何 maxColors）
@@ -1354,8 +1363,10 @@
   var FLAT_COLORS = 20;         // flatArt 判据（组合型）：可区分色数 ≤ 20
   var FLAT_SHARE = 0.70;        // flatArt 判据（组合型）：相邻格「几乎同色」占比 ≥ 70%
   var FLAT_STRONG_COLORS = 8;   // flatArt 判据（单独成立）：可区分色数 ≤ 8 —— 这么少颜色的图不可能是照片
-  var KEEP_RATIO = 0.5;         // 尺寸门槛：以最大档（100 格）的**绝对边界对数**为 100%，取保留 ≥ 50% 的最小档
-  var SIZE_PRESETS = [29, 58, 87, 100];   // 只在这几个「界面真的有的」尺寸里选，保证建议可一键应用
+  var KEEP_RATIO = 0.5;         // 尺寸门槛：以**最大候选**（SIZE_PRESETS 末档 = 200）的绝对边界对数为
+                                // 100%，取保留 ≥ 50% 的最小档
+  var SIZE_PRESETS = [29, 58, 87, 100, 150, 200];   // 候选阶梯：界面预设的 4 档 + 100→200 的中间档 150
+                                                    // + 上限档 200（六个候选）。都是数字输入框可直接键入的值。
 
   /** 按长边 L 推 (w,h)：与 deriveDims 同一套宽高比规则；cap 是对短边/自身的上限。 */
   function analyzeDims(sw, sh, L, cap) {

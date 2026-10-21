@@ -202,7 +202,10 @@
   .summary-row{display:flex;justify-content:space-between;gap:10px;font-size:12.6px;border-bottom:1px dotted var(--line);padding-bottom:4px}
   .summary-k{color:var(--muted)}
   .summary-v{color:var(--text);font-variant-numeric:tabular-nums;text-align:right}
-  .legend{max-height:340px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+  /* 图例块：**不设固定高度**（旧写法 max-height:340px 会让「窗口还有空间却先滚」）。
+     宽屏由下面的媒体查询让它吃满右栏剩余高度；窄屏给一个随视口变化的上限。
+     基础规则只留滚动与排列，高度全交给断点。 */
+  .legend{overflow:auto;display:flex;flex-direction:column;gap:6px;min-height:0}
   /* 内置降级图例（app.js 的 builtinLegendHTML）用的行与外框。render.js 的行自带内联样式。 */
   .legend-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
   .legend-row{display:flex;align-items:center;gap:7px;font-size:12.2px;background:var(--panel2);border:1px solid var(--line);padding:5px 7px}
@@ -260,6 +263,9 @@
     .controls{max-height:none;overflow:visible}
     .tabs{position:static}
     .canvas-scroll{max-height:60vh;max-height:60dvh}
+    /* 窄屏整页是滚的：图例给一个**随视口变化**的上限（不是固定 px），
+       免得一长串色号把下面的卡片全顶没。min() 不被支持时退回上一行 60vh。 */
+    .legend{max-height:60vh;max-height:min(60vh,60dvh)}
     /* 单列时把预览区提到最前：手机上打开页面先看到图纸，而不是先滚过 12 张参数卡片。
        只用 CSS order 重排视觉顺序，DOM 顺序原样不动
        —— #dropZone 仍是 .layout 的第 2 个子节点，#chartTitle 仍在 #canvasScroll 之前。 */
@@ -287,6 +293,34 @@
     #app{padding:10px 10px 18px}
     .legend-grid{grid-template-columns:1fr}
     .sw-grid{grid-template-columns:repeat(auto-fill,minmax(32px,1fr))}
+  }
+
+  /* ── 宽屏：整页不出现滚动条 ────────────────────────────────────────────────
+     保证「没有全页滚动条」的是这一条：html,body 的 height:100% + overflow:hidden。
+     （只有 height:100% 不够 —— 内容超出时 body 仍会滚；只有 overflow:hidden 也不够 ——
+       没有确定高度时 flex 子项不会收缩，内部滚动条也就无从出现。）
+     然后让三栏各自吃掉剩余高度：#app 是 flex 列 → .layout 拿 flex:1 + min-height:0，
+     .layout 内两栏 overflow-y:auto 自己滚，中间画布栏 flex 列 + #canvasScroll 吃掉剩余高度。
+     整套只在 min-width:1181px 里生效 —— 窄屏维持原来的「堆叠 + 整页滚动」，
+     绝不把手机上唯一的内容通路锁死（窄屏的 html/body 仍是默认 overflow:visible）。 */
+  @media (min-width:1181px){
+    html,body{height:100%;overflow:hidden}
+    #app{height:100%;min-height:0;padding-bottom:10px}
+    /* .layout 是 #app 的 flex 子项：吃掉剩余高度，且允许被压缩到比内容更矮 */
+    .layout{flex:1 1 auto;min-height:0;align-items:stretch}
+    /* 左 / 右栏各自滚，不再撑高整页（窄屏那条 .controls{max-height:none;overflow:visible} 不在此断点） */
+    .controls,.side{max-height:100%;height:100%;min-height:0;overflow-y:auto;overflow-x:hidden}
+    /* 中间画布栏撑满：可用预览高度 = 剩余高度 − 标题/状态条，比原来的 72vh 更大 */
+    .canvas-panel{height:100%;min-height:0;display:flex;flex-direction:column}
+    .canvas-panel>.panel-head,.canvas-panel>.preview-title,.canvas-panel>.progress{flex:none}
+    .canvas-scroll{flex:1 1 auto;min-height:0;max-height:none}
+    /* 图例吃满右栏剩余高度：整条 flex 链都给了「确定高度 + min-height:0」，
+       于是 #legendBox 的可用高度 = 右栏高度 − 选项卡 − 标题 ── 内容不超过它时**不会**出现滚动条
+       （旧写死 340px 的问题就是「窗口还有空间却先滚」）。
+       注意用 :not([hidden])：直接给 #panelLegend 写 display:flex 会盖掉 [hidden]{display:none}。 */
+    #panelLegend:not([hidden]){display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+    #panelLegend>.block{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+    #legendBox{flex:1 1 auto;min-height:0;max-height:none}
   }
 </style>
 
@@ -353,10 +387,12 @@
             <option value="58">58 × 58</option>
             <option value="87">87 × 87</option>
             <option value="100" selected>100 × 100</option>
+            <option value="150">150 × 150</option>
+            <option value="200">200 × 200</option>
           </select>
           <div class="grid2">
-            <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="100" step="1" value="100" /></label>
-            <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="100" step="1" value="100" /></label>
+            <label class="field"><span>宽（格）</span><input id="gridW" type="number" min="1" max="200" step="1" value="100" /></label>
+            <label class="field"><span>高（格）</span><input id="gridH" type="number" min="1" max="200" step="1" value="100" /></label>
           </div>
           <label class="check"><input id="lockAspect" type="checkbox" checked /> 保持原图宽高比</label>
         </section>
@@ -501,7 +537,8 @@
         <label class="preview-title-label" for="chartTitle">图纸标题</label>
         <input id="chartTitle" class="preview-title-input" type="text" value="未命名图纸" placeholder="图纸标题（写进图纸左下角角标；留空则不显示标题段）" autocomplete="off" spellcheck="false" />
       </div>
-      <div id="canvasScroll" class="canvas-scroll">
+      <!-- 平移手势写进 title（不占版面）：中键拖 / 空格+左键拖 / Ctrl+左键拖；滚轮仍是缩放 -->
+      <div id="canvasScroll" class="canvas-scroll" title="平移：中键拖动 · 空格 + 左键拖动 · Ctrl + 左键拖动；滚轮 = 缩放">
         <canvas id="patternCanvas" class="pattern-canvas" width="640" height="420"></canvas>
         <div class="canvas-overlay">
           <button id="emptyState" class="btn btn-primary empty-cta" type="button" title="也可以把图片文件直接拖进窗口，或按 Ctrl+V 粘贴">选择本地图片…</button>
@@ -510,30 +547,39 @@
     </main>
 
     <aside class="panel side">
-      <section class="block">
-        <h2>原图调整</h2>
-        <div class="source-wrap">
-          <canvas id="sourceCanvas" class="source-canvas" width="240" height="180"></canvas>
-        </div>
-        <div class="src-tools">
-          <label class="check"><input id="srcCropMode" type="checkbox" /> 裁剪模式（打开后在原图上拖拽框选要保留的区域）</label>
-          <label class="check"><input id="srcAspectSquare" type="checkbox" /> 正方形裁剪框</label>
-          <div class="btn-grid">
-            <button id="srcRotateL" class="btn" type="button">↺ 左转 90°</button>
-            <button id="srcRotateR" class="btn" type="button">↻ 右转 90°</button>
-            <button id="srcFlipH" class="btn" type="button">水平翻转</button>
-            <button id="srcFlipV" class="btn" type="button">垂直翻转</button>
+      <!-- 右栏和左栏是同一套选项卡机制与样式（.tabs / .tab / .tab.on + app.js 的 switchTabGroup） -->
+      <div class="tabs" role="tablist" aria-label="右栏分页">
+        <button id="tabSrc" class="tab on" type="button" role="tab" aria-selected="true" aria-controls="panelSrc">原图调整</button>
+        <button id="tabLegend" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panelLegend">色号图例</button>
+      </div>
+      <div id="panelSrc" class="tabpanel" role="tabpanel" aria-labelledby="tabSrc">
+        <section class="block">
+          <h2>原图调整</h2>
+          <div class="source-wrap">
+            <canvas id="sourceCanvas" class="source-canvas" width="240" height="180"></canvas>
           </div>
-          <button id="srcReset" class="btn btn-ghost src-reset" type="button">重置原图调整</button>
-          <!-- 手机没有 hover、也没法「拖一下试试」：这条必须**可见**，否则手机用户会以为裁剪坏了 -->
-          <p id="srcCropHint" class="hint">手机上：先打开「裁剪模式」，再用一根手指在原图上拖出裁剪框（不打开时拖动是滚页面）。</p>
-          <p id="srceditHint" class="hint" hidden></p>
-        </div>
-      </section>
-      <section class="block">
-        <h2>色号图例</h2>
-        <div id="legendBox" class="legend" title="点任意色号可在预览里高亮该色号，再点一次取消"></div>
-      </section>
+          <div class="src-tools">
+            <label class="check"><input id="srcCropMode" type="checkbox" /> 裁剪模式（打开后在原图上拖拽框选要保留的区域）</label>
+            <label class="check"><input id="srcAspectSquare" type="checkbox" /> 正方形裁剪框</label>
+            <div class="btn-grid">
+              <button id="srcRotateL" class="btn" type="button">↺ 左转 90°</button>
+              <button id="srcRotateR" class="btn" type="button">↻ 右转 90°</button>
+              <button id="srcFlipH" class="btn" type="button">水平翻转</button>
+              <button id="srcFlipV" class="btn" type="button">垂直翻转</button>
+            </div>
+            <button id="srcReset" class="btn btn-ghost src-reset" type="button">重置原图调整</button>
+            <!-- 手机没有 hover、也没法「拖一下试试」：这条必须**可见**，否则手机用户会以为裁剪坏了 -->
+            <p id="srcCropHint" class="hint">手机上：先打开「裁剪模式」，再用一根手指在原图上拖出裁剪框（不打开时拖动是滚页面）。</p>
+            <p id="srceditHint" class="hint" hidden></p>
+          </div>
+        </section>
+      </div>
+      <div id="panelLegend" class="tabpanel" role="tabpanel" aria-labelledby="tabLegend" hidden>
+        <section class="block">
+          <h2>色号图例</h2>
+          <div id="legendBox" class="legend" title="点任意色号可在预览里高亮该色号，再点一次取消"></div>
+        </section>
+      </div>
     </aside>
   </div>
 

@@ -74,7 +74,7 @@ src/render.js     图纸渲染、原图对照、PNG/CSV 导出、用量清单入
 src/srcedit.js    原图裁剪、旋转、翻转
 src/app.js        界面交互
 build.mjs         把上面 6 个文件内联拼成单文件 HTML
-tests/check.mjs   验收脚本（1428 条断言 / 8 组）
+tests/check.mjs   验收脚本（1523 条断言 / 8 组）
 ```
 
 零依赖，只用 Node 内置模块。

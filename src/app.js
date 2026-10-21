@@ -100,7 +100,7 @@
      （默认减色开启、24 色）——同一语义只能有这一份 UI 默认值，pipeline 那边另有默认值，
      两边是刻意对齐的；boot / 重置时还会用 syncQuantizeFromPipeline() 再从 pipeline 拉一次。 */
   var DEFAULTS = {
-    brightness: 0, contrast: 0, saturation: 0, autoWB: false, autoLevels: false,
+    brightness: 0, contrast: 0, saturation: 0, shadows: 0, autoWB: false, autoLevels: false,
     method: 'nearest', bayerN: '4', ditherStrength: 30,
     /* 图纸风格：'bead' = 更像拼豆图纸（默认；「图纸发虚、颜色被滥用」那个问题的解法），
        'faithful' = 更还原原图。冻结接口：options().style 只能是这两个值。 */
@@ -596,6 +596,9 @@
     setText(ui.brightnessVal, signed(effSlider(ui.brightness, 0)));
     setText(ui.contrastVal, signed(effSlider(ui.contrast, 0)));
     setText(ui.saturationVal, signed(effSlider(ui.saturation, 0)));
+    /* 阴影/中间调：**线性如实**（滑杆原值 = 生效值），不走 effCurve —— 它最终是 gamma 指数，
+       读数必须与真正传给管线的数一模一样，否则「拖到 60 实际 33」就是撒谎。 */
+    setText(ui.shadowsVal, signed(shadowsValue()));
     setText(ui.ditherStrengthVal, Math.round(clamp(num(ui.ditherStrength, 30), 0, 100)) + '%');
     /* 色数上限的「读数」就是那个数字框本身（没有第三个数字）：这里顺手把它对齐到滑杆值 */
     if (ui.maxColorsNum) setVal(ui.maxColorsNum, String(maxColorsSliderValue()));
@@ -620,6 +623,14 @@
   /* 滑杆 → 生效值的唯一入口：buildOpts 与读数都走它，避免「读数 50 实际 33」这种撒谎的界面 */
   function effSlider(el, fallback) {
     return effCurve(num(el, (fallback === undefined) ? 0 : fallback));
+  }
+
+  /* 「阴影 / 中间调」的生效值：**滑杆原值 = 生效值**（线性、不做 effCurve 压缩）。
+     冻结接口：opts.preprocess.shadows ∈ [-100, 100]，管线那边 gamma = 2^(-shadows/100)
+     （+100 提亮暗部、0 中性、-100 压暗）。读数与实际传值必须完全一致，否则就是撒谎。 */
+  function shadowsValue() {
+    var v = Math.round(num(ui.shadowsRange, DEFAULTS.shadows));
+    return clamp(v, -100, 100);
   }
 
   function signed(v) { return (v > 0 ? '+' : '') + v; }
@@ -877,10 +888,12 @@
          与尺寸、色卡、渲染互不影响。 */
       style: styleOf(),
       preprocess: {
-        /* 送进 pipeline 的必须是生效值（effCurve 压缩后的），不是滑杆原值 */
+        /* 这三个送进 pipeline 的必须是生效值（effCurve 压缩后的），不是滑杆原值 */
         brightness: effSlider(ui.brightness, 0),
         contrast: effSlider(ui.contrast, 0),
         saturation: effSlider(ui.saturation, 0),
+        /* 阴影/中间调是**线性如实**：滑杆值直接就是生效值（它是 gamma 指数，压缩会语义错位） */
+        shadows: shadowsValue(),
         autoWB: !!(ui.autoWB && ui.autoWB.checked),
         autoLevels: !!(ui.autoLevels && ui.autoLevels.checked)
       },
@@ -4008,6 +4021,7 @@
     setVal(ui.brightness, DEFAULTS.brightness);
     setVal(ui.contrast, DEFAULTS.contrast);
     setVal(ui.saturation, DEFAULTS.saturation);
+    setVal(ui.shadowsRange, DEFAULTS.shadows);      /* 阴影/中间调：复位到 0（中性） */
     setVal(ui.ditherStrength, DEFAULTS.ditherStrength);
     setMaxColors(DEFAULTS.maxColors);
     setVal(ui.cellSize, DEFAULTS.cellSize);
@@ -4064,7 +4078,7 @@
 
   function bindEvents() {
     /* 连续输入：input 边走「实时」、change 边走「提交」（目前只有 maxColorsNum 需要区分） */
-    var continuous = ['brightness', 'contrast', 'saturation', 'ditherStrength', 'cellSize', 'viewZoom', 'maxColors',
+    var continuous = ['brightness', 'contrast', 'saturation', 'shadowsRange', 'ditherStrength', 'cellSize', 'viewZoom', 'maxColors',
       'maxColorsNum', 'gridW', 'gridH'];
     var toggles = ['autoWB', 'autoLevels', 'quantizeEnabled', 'lockAspect', 'showCodes', 'showRuler', 'lockToggle',
       'recolorMode', 'batchMode', 'srcCropMode', 'srcAspectSquare', 'exportAnnotate'];
@@ -4249,6 +4263,8 @@
       contrastVal: byId('contrastVal'),
       saturation: byId('saturation'),
       saturationVal: byId('saturationVal'),
+      shadowsRange: byId('shadowsRange'),
+      shadowsVal: byId('shadowsVal'),
       autoWB: byId('autoWB'),
       autoLevels: byId('autoLevels'),
       methodNearest: byId('methodNearest'),

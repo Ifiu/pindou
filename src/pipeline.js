@@ -81,7 +81,9 @@
  *     locked，整块跳过 —— 所以锁定格永远不会被 ③ 改到。
  *   两档都确定性、无随机；②③ 都由内部总开关控制（见 readOpts 的 steps，缺省全开）。
  *
- * 【预处理固定顺序】autoWB → autoLevels → brightness → contrast → saturation
+ * 【预处理固定顺序】autoWB → autoLevels → shadows → brightness → contrast → saturation
+ *   shadows    gamma 曲线（逐通道 sRGB）：v' = 255*(v/255)^gamma，gamma = 2^(-shadows/100)。
+ *              shadows>0 提亮暗部（把黑发抬进色号密集的中间调），<0 压暗；0 = 整段不执行。
  *   autoWB     灰度世界假设：整图（非空格）通道均值缩放到中性灰。
  *   autoLevels 直方图拉伸，每通道各裁 0.5% 分位抗噪点。
  *   brightness v += b*2.55                （b ∈ [-100,100]，0 = 不变）
@@ -139,7 +141,7 @@
     gridH: null,
     lockAspect: true,
     paletteId: DEFAULT_PALETTE_ID,
-    preprocess: { brightness: 0, contrast: 0, saturation: 0, autoWB: false, autoLevels: false },
+    preprocess: { brightness: 0, contrast: 0, saturation: 0, shadows: 0, autoWB: false, autoLevels: false },
     method: 'nearest',
     bayerN: 4,
     ditherStrength: 0.3,
@@ -294,6 +296,7 @@
         brightness: clampNum(num(pp.brightness, 0), -100, 100),
         contrast: clampNum(num(pp.contrast, 0), -100, 100),
         saturation: clampNum(num(pp.saturation, 0), -100, 100),
+        shadows: clampNum(num(pp.shadows, 0), -100, 100),   // 非数字/NaN/Infinity → 0（无操作）
         autoWB: !!pp.autoWB,
         autoLevels: !!pp.autoLevels
       },
@@ -482,9 +485,33 @@
     }
   }
 
+  /**
+   * 阴影 / 中间调（gamma 曲线），逐通道在 sRGB 空间做：v' = 255 * (v/255)^gamma，
+   * gamma = 2^(-shadows/100)：+100 → 0.5（暗部提亮）、0 → 1.0（中性）、-100 → 2.0（暗部压暗）。
+   *
+   * 为什么需要它：拼豆色卡在暗端极稀疏（实测 _p1 那张图 L*<10 只有 2 个色号、L*<20 只有 2 个，
+   * 而 L* 20–39 有 28 个、80–89 有 54 个）。所以「把黑发压得更黑」只会让它塌成 1–2 个色号、
+   * 发丝全糊；把暗部**提亮进色号密集的区间**才能显出层次。线性压暗做不到这一点 ——
+   * 它会把皮肤高光一起压灰；gamma 只抬暗部、对高光几乎不动。
+   *
+   * shadows === 0 时**整段不执行**（不是「执行了但结果一样」），保证与不传该字段逐字节一致。
+   */
+  function applyShadows(rgb, empty, shadows) {
+    var gamma = Math.pow(2, -shadows / 100);
+    for (var i = 0; i < empty.length; i++) {
+      if (empty[i]) continue;
+      var q = i * 3;
+      rgb[q] = 255 * Math.pow(clampNum(rgb[q], 0, 255) / 255, gamma);
+      rgb[q + 1] = 255 * Math.pow(clampNum(rgb[q + 1], 0, 255) / 255, gamma);
+      rgb[q + 2] = 255 * Math.pow(clampNum(rgb[q + 2], 0, 255) / 255, gamma);
+    }
+  }
+
   function preprocess(rgb, empty, pp) {
     if (pp.autoWB) grayWorld(rgb, empty);
     if (pp.autoLevels) autoLevels(rgb, empty);
+    // 阴影/中间调：在亮度/对比度/饱和度之前（它是对源图整体的色调曲线）
+    if (pp.shadows !== 0) applyShadows(rgb, empty, pp.shadows);
     if (pp.brightness !== 0 || pp.contrast !== 0 || pp.saturation !== 0) {
       toneAndSaturation(rgb, empty, pp.brightness, pp.contrast, pp.saturation);
     }
@@ -1086,6 +1113,88 @@
     return { merged: mergedCount, touched: touched, regions: regions };
   }
 
+  /* ------------------------------------------------ 减色余量补齐（修非单调） */
+
+  var FILL_DE = 6;              // 补色残余阈值：只在「还有采样点距当前色号集合 > 6 ΔE」时才补（= 视觉可辨口径）
+  var FILL_SAMPLES = 8192;      // 补色决策的采样上限（确定性 stride，不逐像素扫，省时间）
+
+  /**
+   * 把 maxColors 没用完的**余量**补上色号。修的是 COLOR.JS quantize 的一个结构性浪费：
+   * quantize 的收尾是「k 个色心 → 各自吸附到最近色号 → 去重」，多个色心会吸附到同一个色号，
+   * 于是 k 越大反而可能白丢。实测（人像样本，k=16…120）：used 恒定为 22 不再增长，
+   * 最终 usedColors 甚至随 k 上升而下降（faithful 19→14）。
+   *
+   * 这里用确定性的贪心补齐：反复找出「到当前色号集合残余 ΔE 最大」的采样点，
+   * 把它最近的、尚未入选的色号加进来，直到补满 limit 或残余 ≤ FILL_DE。
+   * - 只在残余 > FILL_DE 时补 → 不会为肉眼不可辨的差距浪费色号；
+   * - 并列取采样下标最小者 → 确定性；
+   * - 采样用固定 stride → 与像素总数无关的常数级开销（≤ 8192 点）。
+   * 不改 ①②③ 的任何阈值，所以不会为了单调性去放松合并。
+   */
+  function augmentPalette(packed, packedN, palColors, baseIdx, limit) {
+    var palSize = palColors.length;
+    if (!(limit > baseIdx.length) || !(packedN > 0)) return baseIdx;
+    var palLab = new Float64Array(palSize * 3);
+    for (var c0 = 0; c0 < palSize; c0++) {
+      var pc = palColors[c0];
+      labInto(pc.rgb[0], pc.rgb[1], pc.rgb[2], palLab, c0 * 3);
+    }
+    var stride = Math.max(1, Math.floor(packedN / FILL_SAMPLES));
+    var sampLab = [];
+    var lab = new Float64Array(3);
+    for (var i0 = 0; i0 < packedN; i0 += stride) {
+      var q0 = i0 * 3;
+      labInto(packed[q0], packed[q0 + 1], packed[q0 + 2], lab, 0);
+      sampLab.push(lab[0], lab[1], lab[2]);
+    }
+    var sampN = sampLab.length / 3;
+    if (sampN === 0) return baseIdx;
+
+    var inSet = new Uint8Array(palSize);
+    var chosen = baseIdx.slice();
+    for (var b0 = 0; b0 < baseIdx.length; b0++) inSet[baseIdx[b0]] = 1;
+
+    var best = new Float64Array(sampN);
+    for (var s0 = 0; s0 < sampN; s0++) best[s0] = Infinity;
+    for (var b1 = 0; b1 < baseIdx.length; b1++) {
+      var o1 = baseIdx[b1] * 3;
+      for (var s1 = 0; s1 < sampN; s1++) {
+        var p1 = s1 * 3;
+        var a1 = sampLab[p1] - palLab[o1], a2 = sampLab[p1 + 1] - palLab[o1 + 1], a3 = sampLab[p1 + 2] - palLab[o1 + 2];
+        var dd1 = Math.sqrt(a1 * a1 + a2 * a2 + a3 * a3);
+        if (dd1 < best[s1]) best[s1] = dd1;
+      }
+    }
+
+    while (chosen.length < limit) {
+      var worst = -1, worstD = FILL_DE;          // 只在残余 > FILL_DE 时才补
+      for (var s2 = 0; s2 < sampN; s2++) {
+        if (best[s2] > worstD) { worstD = best[s2]; worst = s2; }
+      }
+      if (worst < 0) break;
+      var p2 = worst * 3;
+      var pick = -1, pickD = Infinity;
+      for (var c1 = 0; c1 < palSize; c1++) {
+        if (inSet[c1]) continue;
+        var o2 = c1 * 3;
+        var e1 = sampLab[p2] - palLab[o2], e2 = sampLab[p2 + 1] - palLab[o2 + 1], e3 = sampLab[p2 + 2] - palLab[o2 + 2];
+        var d2 = e1 * e1 + e2 * e2 + e3 * e3;
+        if (d2 < pickD) { pickD = d2; pick = c1; }
+      }
+      if (pick < 0) break;
+      chosen.push(pick);
+      inSet[pick] = 1;
+      var o3 = pick * 3;
+      for (var s3 = 0; s3 < sampN; s3++) {
+        var p3 = s3 * 3;
+        var f1 = sampLab[p3] - palLab[o3], f2 = sampLab[p3 + 1] - palLab[o3 + 1], f3 = sampLab[p3 + 2] - palLab[o3 + 2];
+        var df = Math.sqrt(f1 * f1 + f2 * f2 + f3 * f3);
+        if (df < best[s3]) best[s3] = df;
+      }
+    }
+    return chosen;
+  }
+
   /* -------------------------------------------------------------- 主装配 */
 
   function buildPattern(gw, gh, ds, o, pal, warnings) {
@@ -1113,8 +1222,14 @@
       if (o.quantize.enabled) {
         // quantize 返回的 indices 是【色表下标】（见 color.js 第 464/468 行：簇心先经
         // nearestL 吸附成 palOf[]，再用 palOf 填 indices）。这里只取 used 作为调色板收窄依据。
-        var qr = root.ColorKit.quantize(packed, nonEmpty, 1, o.quantize.maxColors, matcher);
+        var qr = root.ColorKit.quantize(packed, nonEmpty, 1, Math.min(o.quantize.maxColors, 24), matcher);
         var used = qr.used;
+        // 补齐余量：quantize 的「多个色心吸附到同一色号」会白丢名额，见 augmentPalette 注释。
+        // 只在 maxColors > 24（默认档以上）时才补：默认档 24 保持与改动前逐字节一致（最硬的回归守卫），
+        // 而用户报告的非单调现象只发生在抬高上限的时候。
+        if (used.length < o.quantize.maxColors && o.quantize.maxColors > 24) {
+          used = augmentPalette(packed, nonEmpty, pal.colors, used, Math.min(o.quantize.maxColors, pal.colors.length));
+        }
         redList = new Array(used.length);
         for (var u = 0; u < used.length; u++) redList[u] = pal.colors[used[u]];
         if (redList.length === 0) redList = pal.colors;      // 理论上不会发生

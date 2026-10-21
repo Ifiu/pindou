@@ -773,6 +773,73 @@ const anaBad = Pipeline.analyzeSource(null, 0, 0, {});
 ok('analyzeSource | 非法入参：ok:false、reasons 非空、suggested 仍是合法兜底（不抛）',
   anaBad.ok === false && anaBad.reasons.length > 0 && anaBad.suggested.gridW >= 1 && anaBad.suggested.method === 'nearest',
   JSON.stringify(anaBad.suggested));
+/* ⑧ 阴影 / 中间调（gamma 曲线）：冻结接口 preprocess.shadows ∈ [-100,100]，默认 0 = 整段不执行 */
+/* 左半 = 暗部**有层次**的渐变（纯一块死黑在 gamma 下仍是同一色，验不出「提亮有效」）；
+   右半 = 接近白的高光。这样 shadows>0 才会把暗部铺进更多色号，而高光基本不动。 */
+const shSrc = synth(120, 120, (x, y) => {
+  if (x < 60) {
+    /* 暗部做成 16 档**带彩**的小块：灰度单一渐变在深色区只能落到 1 个色号，验不出「提亮有效」 */
+    const k = (Math.floor(x / 5) + Math.floor(y / 5)) % 16;
+    const v = 5 + k * 4;
+    return [Math.min(255, v + (k % 5) * 3), v, Math.max(0, 30 - v)];
+  }
+  return [250, 248, 240];
+});
+const shRun = (extra) => Pipeline.generateFromRGBA(shSrc, 120, 120, Object.assign({ gridW: 30, gridH: 30 }, extra || {}));
+const shSig = (p) => JSON.stringify([Array.from(p.cells), p.colors.map((c) => c.code), p.counts.map((c) => [String(c.code), c.count]), p.stats]);
+const shAbsent = shRun({});
+const shZero = shRun({ preprocess: { shadows: 0 } });
+ok('★阴影 | 默认零影响：shadows:0 与不传该字段 → cells/colors/counts/stats 逐字节相同', shSig(shZero) === shSig(shAbsent));
+ok('★阴影 | 且实现是「shadows === 0 时整段不执行」（源码级断言，不是只看输出相等）',
+  /if\s*\(\s*pp\.shadows\s*!==\s*0\s*\)\s*applyShadows\s*\(/.test(readFileSync(path.join(SRC_DIR, 'pipeline.js'), 'utf8')),
+  '在 pipeline.js 里找 if (pp.shadows !== 0) applyShadows(...)');
+/* 夹取：越界/非数字都用「与合法上界逐字节相同」来证明，而不是读内部值 */
+ok('★阴影 | 夹取 200 → 100（与显式 100 逐字节相同）', shSig(shRun({ preprocess: { shadows: 200 } })) === shSig(shRun({ preprocess: { shadows: 100 } })));
+ok('★阴影 | 夹取 -999 → -100（与显式 -100 逐字节相同）', shSig(shRun({ preprocess: { shadows: -999 } })) === shSig(shRun({ preprocess: { shadows: -100 } })));
+ok('★阴影 | 非数字 "abc" / NaN → 0（与不传该字段逐字节相同）',
+  shSig(shRun({ preprocess: { shadows: 'abc' } })) === shSig(shAbsent) && shSig(shRun({ preprocess: { shadows: NaN } })) === shSig(shAbsent));
+/* ★双向效果：提亮有效（暗部色号变多）+ 高光不被毁（近白格子占比几乎不变） */
+const sh0 = shRun({ preprocess: { shadows: 0 } });
+const sh60 = shRun({ preprocess: { shadows: 60 } });
+const lOf = (p, i) => ColorKit.srgbToLab(p.colors[p.cells[i]].rgb)[0];
+const darkIdx = [];
+const brightIdx = [];
+for (let i = 0; i < sh0.cells.length; i++) {
+  const col = Math.floor((i % sh0.w) / 1);
+  const isDarkHalf = (i % sh0.w) < sh0.w / 2;
+  const L0 = lOf(sh0, i);
+  if (isDarkHalf) darkIdx.push(i);
+  if (L0 > 90) brightIdx.push(i);
+}
+const uniqCodes = (p, idxs) => new Set(idxs.map((i) => String(p.colors[p.cells[i]].code))).size;
+const meanL = (p, idxs) => (idxs.length ? idxs.reduce((a, i) => a + lOf(p, i), 0) / idxs.length : 0);
+const dark0 = uniqCodes(sh0, darkIdx);
+const dark60 = uniqCodes(sh60, darkIdx);
+const brightShare0 = brightIdx.length / sh0.cells.length;
+const brightIdx60 = [];
+for (let i = 0; i < sh60.cells.length; i++) if (lOf(sh60, i) > 90) brightIdx60.push(i);
+const brightShare60 = brightIdx60.length / sh60.cells.length;
+ok('阴影前置 | 合成样本左半确实很暗（平均 L* ' + meanL(sh0, darkIdx).toFixed(1) + ' < 22）', meanL(sh0, darkIdx) < 22, meanL(sh0, darkIdx).toFixed(2));
+ok('★阴影双向① | 提亮有效：暗部用到的色号数 shadows60(' + dark60 + ') 明显多于 shadows0(' + dark0 + ')（至少 +2 个色号）',
+  dark60 >= dark0 + 2, JSON.stringify({ L0: Number(meanL(sh0, darkIdx).toFixed(1)), L60: Number(meanL(sh60, darkIdx).toFixed(1)), dark0: dark0, dark60: dark60 }));
+ok('★阴影双向① | 且暗部平均 L* 确实被抬起来（' + meanL(sh0, darkIdx).toFixed(1) + ' → ' + meanL(sh60, darkIdx).toFixed(1) + '，至少 +8）',
+  meanL(sh60, darkIdx) >= meanL(sh0, darkIdx) + 8, String(meanL(sh60, darkIdx) - meanL(sh0, darkIdx)));
+ok('★阴影双向② | 高光不被毁：近白（L*>90）格子占比变化很小（' + (brightShare0 * 100).toFixed(1) + '% → ' + (brightShare60 * 100).toFixed(1) + '%，增量 ≤ 5 个百分点）',
+  brightShare60 - brightShare0 <= 0.05, JSON.stringify({ share0: brightShare0, share60: brightShare60 }));
+ok('★阴影双向② | 且高光区的平均 L* 几乎不动（|Δ| ≤ 3；线性提亮会把这里推爆）',
+  Math.abs(meanL(sh60, brightIdx.length ? brightIdx : brightIdx60) - meanL(sh0, brightIdx.length ? brightIdx : brightIdx60)) <= 3,
+  JSON.stringify([Number(meanL(sh0, brightIdx).toFixed(2)), Number(meanL(sh60, brightIdx).toFixed(2))]));
+
+/* ⑨ maxColors 单调性（管线正在改，可能先红——属预期，断言不许放松） */
+const mcPhoto = synth(200, 200, (x, y) => [(x * 7 + y * 3) % 256, (y * 5 + x * 11) % 256, (x * y) % 256]);
+const mcKs = [16, 24, 30, 40, 50, 63, 80, 120];
+const mcUsed = mcKs.map((k) => Pipeline.generateFromRGBA(mcPhoto, 200, 200, { gridW: 60, gridH: 60, quantize: { enabled: true, maxColors: k } }).stats.usedColors);
+info('maxColors 实测 | k = ' + mcKs.join('/') + ' → usedColors = ' + mcUsed.join('/'));
+ok('★maxColors 单调性 | k 从 16 到 120，usedColors 单调不减（抬高上限不该让色号变少）',
+  mcUsed.every((v, i) => i === 0 || v >= mcUsed[i - 1]), JSON.stringify(mcUsed));
+ok('★maxColors | k=63 时 usedColors ≥ 40（原图在 ΔE>6 下有 63 个可区分色，一半余量应当用得上）',
+  mcUsed[5] >= 40, 'k=63 → ' + mcUsed[5]);
+
 /* ═════════════════════════════════════════════════════════ 第 4 组 · 渲染 */
 startGroup('第 4 组 · 渲染（Render）');
 
@@ -2819,7 +2886,10 @@ ok('控件清单 | 上一轮新增、本轮仍在的 9 个 id 全在 ui.html 里
 ok('控件清单 | 且这 9 个 id 全部被 app.js 引用（没有一个是摆设）', TAB_NEW_IDS.every((id) => appRefs.includes(id)), TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 /* 本轮 UI 压缩版面：删掉 cellLabelHint / toolHint / preprocessHint / exportHint / inputHint / dropHint 等
    hint 元素（以及其它重排带来的增减），id 总数随之降到 95。 */
-eq('控件清单 | ui.html 的 id 总数 = 99（右栏拆选项卡新增 tabSrc/tabLegend/panelSrc/panelLegend）', htmlIds.length, 99);
+eq('控件清单 | ui.html 的 id 总数 = 101（99 + 阴影滑杆 shadowsRange / 读数 shadowsVal）', htmlIds.length, 101);
+const SHADOW_NEW_IDS = ['shadowsRange', 'shadowsVal'];
+ok('控件清单 | 阴影滑杆的 2 个 id 全在 ui.html 里', SHADOW_NEW_IDS.every((id) => htmlIds.includes(id)), SHADOW_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
+ok('控件清单 | 且这 2 个 id 全部被 app.js 引用（没有一个是摆设）', SHADOW_NEW_IDS.every((id) => appRefs.includes(id)), SHADOW_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
 const SIDE_TAB_NEW_IDS = ['tabSrc', 'tabLegend', 'panelSrc', 'panelLegend'];
 ok('控件清单 | 右栏选项卡新增的 4 个 id 全在 ui.html 里', SIDE_TAB_NEW_IDS.every((id) => htmlIds.includes(id)), SIDE_TAB_NEW_IDS.filter((id) => !htmlIds.includes(id)).join(','));
 ok('控件清单 | 且这 4 个 id 全部被 app.js 引用（没有一个是摆设）', SIDE_TAB_NEW_IDS.every((id) => appRefs.includes(id)), SIDE_TAB_NEW_IDS.filter((id) => !appRefs.includes(id)).join(','));
@@ -5049,6 +5119,42 @@ els.sizePreset.value = '87';
 fire(els.sizePreset, 'change');
 erFlushAll();
 eq('预设 | 再选回 87 → options() 得 87×87 且下拉是 "87"', [ui.options().gridW, String(els.sizePreset.value)], [87, '87']);
+
+/* ⑥ 阴影 / 中间调滑杆（app 侧）：线性如实、与亮度的非线性压缩并排对照、重置回 0 */
+const shSlider0 = String(els.shadowsRange.value);
+eq('阴影滑杆 | 默认滑杆值 0 / 读数 0 / options 0（三处一致）',
+  [shSlider0, String(els.shadowsVal.textContent), ui.options().preprocess.shadows], ['0', '0', 0]);
+els.shadowsRange.value = '60';
+fire(els.shadowsRange, 'input');
+els.brightness.value = '60';
+fire(els.brightness, 'input');
+erFlushAll();
+eq('★阴影滑杆 | 线性如实：滑杆 60 → options().preprocess.shadows === 60（不做非线性压缩）', ui.options().preprocess.shadows, 60);
+ok('★阴影滑杆 | 并排对照：同是滑杆 60，亮度走压缩 → 44（' + ui.options().preprocess.brightness + '），阴影不压缩 → 60',
+  ui.options().preprocess.brightness === 44 && ui.options().preprocess.shadows === 60,
+  JSON.stringify({ brightness: ui.options().preprocess.brightness, shadows: ui.options().preprocess.shadows }));
+eq('阴影滑杆 | 读数也跟着显示 60（滑杆 ↔ 读数同步）', String(els.shadowsVal.textContent).replace('+', ''), '60');
+/* 送进 pipeline 的也是 60（不是只在 UI 里对） */
+st.source = { data: synth(24, 24, (x, y) => [(x * 9) % 256, (y * 11) % 256, 80]), width: 24, height: 24 };
+st.srcW = 24;
+st.srcH = 24;
+const shSeen = [];
+const prevPipeSh = sandboxWin.Pipeline;
+/* 两条入口都要挂：有 canvas 走 generate、有 ctx 走 generateFromRGBA —— 只盯一条会漏 */
+sandboxWin.Pipeline = Object.assign({}, globalThis.Pipeline, {
+  generate(imageLike, o) { shSeen.push(o && o.preprocess && o.preprocess.shadows); return globalThis.Pipeline.generate(imageLike, o); },
+  generateFromRGBA(rgba, w, h, o) { shSeen.push(o && o.preprocess && o.preprocess.shadows); return globalThis.Pipeline.generateFromRGBA(rgba, w, h, o); }
+});
+ui.regenerate();
+erFlushAll();
+ok('★阴影滑杆 | spy：generateFromRGBA 收到的 preprocess.shadows === 60（真的进了管线）',
+  shSeen.length > 0 && shSeen[shSeen.length - 1] === 60, JSON.stringify(shSeen.slice(-3)));
+sandboxWin.Pipeline = prevPipeSh;
+/* 重置微调 → 回到 0（滑杆 / 读数 / options 三处） */
+fire(els.btnResetAdjust, 'click');
+erFlushAll();
+eq('★阴影滑杆 | 「重置微调」后滑杆 / 读数 / options 三处都回到 0',
+  [String(els.shadowsRange.value), String(els.shadowsVal.textContent), ui.options().preprocess.shadows], ['0', '0', 0]);
 
 /* ══════════════════════════════════════════ 第 7 组 · 原图编辑（srcedit.js） */
 startGroup('第 7 组 · 原图编辑（SourceEdit）');

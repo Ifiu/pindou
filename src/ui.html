@@ -451,6 +451,8 @@
           <input id="contrast" type="range" min="-100" max="100" step="1" value="0" title="滑杆经过非线性压缩，小幅拖动更精细" />
           <label class="row" for="saturation"><span>饱和度</span><output id="saturationVal">0</output></label>
           <input id="saturation" type="range" min="-100" max="100" step="1" value="0" title="滑杆经过非线性压缩，小幅拖动更精细" />
+          <label class="row" for="shadowsRange"><span>阴影 / 中间调</span><output id="shadowsVal">0</output></label>
+          <input id="shadowsRange" type="range" min="-100" max="100" step="1" value="0" title="提亮暗部而不烧高光：正数抬暗部、负数压暗；0 为中性。这一项线性如实（滑杆值 = 生效值），不做非线性压缩" />
           <label class="check"><input id="autoWB" type="checkbox" /> 自动白平衡</label>
           <label class="check"><input id="autoLevels" type="checkbox" /> 自动色阶</label>
         </section>
